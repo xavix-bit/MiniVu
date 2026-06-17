@@ -1,0 +1,392 @@
+import { useEffect, useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { loadSettings, saveSettings } from "../settings/settingsStore";
+import {
+  PHASE_ORDER,
+  computeOverallPercent,
+  createInitialDownloadBytes,
+  createInitialProgress,
+  mergeDownloadBytes,
+  mergeProgress,
+  type DownloadBytes,
+  type SetupProgress,
+} from "./onboardingProgress";
+
+type SetupResult = {
+  runtimeReady: boolean;
+  modelReady: boolean;
+  shortcut: string;
+};
+
+type ModelStatus = {
+  modelReady: boolean;
+  modelDownloaded: boolean;
+  mmprojDownloaded: boolean;
+  llamaServerAvailable: boolean;
+  inferenceBackend?: "llama" | "mlx";
+  activeBackend?: string;
+  mlxRuntimeAvailable?: boolean;
+  mlxModelReady?: boolean;
+};
+
+type EnvironmentSetupPanelProps = {
+  showWelcome?: boolean;
+  onComplete?: () => void;
+};
+
+const PHASE_LABELS: Record<string, string> = {
+  device: "检测设备",
+  runtime: "安装推理引擎",
+  model: "下载主模型",
+  mmproj: "下载视觉投影器",
+  shortcut: "配置快捷键",
+  done: "完成配置",
+};
+
+export function EnvironmentSetupPanel({ showWelcome = false, onComplete }: EnvironmentSetupPanelProps) {
+  const [phase, setPhase] = useState<"idle" | "running" | "success" | "error">("idle");
+  const [installError, setInstallError] = useState("");
+  const [progress, setProgress] = useState<Record<string, SetupProgress>>(createInitialProgress);
+  const [downloadBytes, setDownloadBytes] = useState<DownloadBytes>(createInitialDownloadBytes);
+  const [result, setResult] = useState<SetupResult | null>(null);
+  const [status, setStatus] = useState<ModelStatus | null>(null);
+  const [activeSpeedMbps, setActiveSpeedMbps] = useState<number | null>(null);
+
+  const overallPercent = useMemo(
+    () => computeOverallPercent(progress, downloadBytes),
+    [progress, downloadBytes],
+  );
+
+  async function refreshStatus(markReady = false) {
+    const next = await invoke<ModelStatus>("get_model_status");
+    setStatus(next);
+    if (markReady && next.modelReady) {
+      const settings = await loadSettings();
+      setPhase("success");
+      setResult({
+        runtimeReady:
+          next.inferenceBackend === "mlx" ? !!next.mlxRuntimeAvailable : next.llamaServerAvailable,
+        modelReady: next.modelReady,
+        shortcut: settings.shortcut,
+      });
+    }
+  }
+
+  useEffect(() => {
+    void refreshStatus(true);
+  }, []);
+
+  useEffect(() => {
+    const unlisteners: Array<() => void> = [];
+
+    void listen<SetupProgress>("setup-progress", (event) => {
+      const payload = event.payload;
+      const status =
+        payload.status === "error"
+          ? "error"
+          : payload.status === "done"
+            ? "done"
+            : payload.status === "waiting"
+              ? "waiting"
+              : payload.status === "switching"
+                ? "switching"
+                : "running";
+      setProgress((current) =>
+        mergeProgress(current, {
+          phase: payload.phase,
+          status,
+          message: payload.message,
+          percent: payload.percent,
+          speedMbps: status === "running" ? undefined : null,
+        }),
+      );
+    }).then((cleanup) => unlisteners.push(cleanup));
+
+    void listen<{
+      file: string;
+      status?: string;
+      message?: string;
+      downloaded: number;
+      total: number | null;
+      percent?: number;
+      source?: string;
+      speedMbps?: number;
+    }>("model-download-progress", (event) => {
+      const { file, status: downloadStatus, message, downloaded, total, source, speedMbps } =
+        event.payload;
+      const phaseKey = file === "mmproj" ? "mmproj" : "model";
+      const label = file === "mmproj" ? "视觉投影器" : "主模型";
+
+      if (downloadStatus === "waiting") {
+        setProgress((current) =>
+          mergeProgress(current, {
+            phase: phaseKey,
+            status: "waiting",
+            message: message ?? "等待中…",
+            speedMbps: null,
+          }),
+        );
+        if (phaseKey === "mmproj") {
+          setActiveSpeedMbps(null);
+        }
+        return;
+      }
+
+      if (downloadStatus === "switching") {
+        setProgress((current) =>
+          mergeProgress(current, {
+            phase: phaseKey,
+            status: "switching",
+            message: message ?? "正在切换下载源…",
+          }),
+        );
+        return;
+      }
+
+      if (downloadStatus === "done") {
+        setDownloadBytes((current) => mergeDownloadBytes(current, phaseKey, downloaded, total));
+        setProgress((current) =>
+          mergeProgress(current, {
+            phase: phaseKey,
+            status: "done",
+            message: message ?? "下载完成",
+            percent: 100,
+            speedMbps: null,
+          }),
+        );
+        setActiveSpeedMbps(null);
+        return;
+      }
+
+      const sourceHint = source ? `（${source}）` : "";
+      const speed = speedMbps && speedMbps > 0 ? speedMbps : null;
+
+      if (speed) {
+        setActiveSpeedMbps(speed);
+      }
+
+      setDownloadBytes((current) => mergeDownloadBytes(current, phaseKey, downloaded, total));
+      setProgress((current) => {
+        const expectedBytes = phaseKey === "mmproj" ? 1_095_113_184 : 5_026_714_304;
+        const basis = total && total > 0 ? total : expectedBytes;
+        const fromBytes = basis > 0 ? Math.round((downloaded / basis) * 100) : 0;
+        const resolvedPercent = Math.max(current[phaseKey]?.percent ?? 0, fromBytes);
+        return mergeProgress(current, {
+          phase: phaseKey,
+          status: "running",
+          message: `正在下载${label} ${resolvedPercent}%${sourceHint}`,
+          percent: resolvedPercent,
+          speedMbps: speed,
+        });
+      });
+    }).then((cleanup) => unlisteners.push(cleanup));
+
+    return () => {
+      for (const cleanup of unlisteners) {
+        cleanup();
+      }
+    };
+  }, []);
+
+  async function runSetup() {
+    setPhase("running");
+    setInstallError("");
+    setProgress(createInitialProgress());
+    setDownloadBytes(createInitialDownloadBytes());
+    setActiveSpeedMbps(null);
+
+    try {
+      const setupResult = await invoke<SetupResult>("setup_environment");
+      setResult(setupResult);
+      setProgress((current) =>
+        mergeProgress(current, {
+          phase: "done",
+          status: "done",
+          message: "环境配置完成",
+          percent: 100,
+        }),
+      );
+      setPhase("success");
+      await refreshStatus(true);
+      if (!showWelcome) {
+        onComplete?.();
+      }
+    } catch (error) {
+      setInstallError(String(error));
+      setPhase("error");
+    }
+  }
+
+  async function finishAndContinue(openPanel: boolean) {
+    const latest = await loadSettings();
+    await saveSettings({ ...latest, onboardingComplete: true });
+    onComplete?.();
+    if (openPanel) {
+      await invoke("show_entry");
+    }
+  }
+
+  function renderProgressList() {
+    return (
+      <>
+        <div className="onboarding-overall-progress" aria-label="总体进度">
+          <div className="onboarding-overall-progress__bar">
+            <span style={{ width: `${overallPercent}%` }} />
+          </div>
+          <span className="onboarding-overall-progress__label">
+            总体进度 {overallPercent}%
+            {activeSpeedMbps ? (
+              <span className="onboarding-overall-progress__speed">{activeSpeedMbps.toFixed(1)} MB/s</span>
+            ) : null}
+          </span>
+        </div>
+        <ul className="onboarding-progress-list">
+          {PHASE_ORDER.map((step) => {
+            const item = progress[step];
+            const label = PHASE_LABELS[step] ?? step;
+            const itemStatus = item?.status ?? "waiting";
+            return (
+              <li key={step} className={`onboarding-progress-item is-${itemStatus}`}>
+                <span className="onboarding-progress-item__icon" aria-hidden="true">
+                  {itemStatus === "done" ? "✓" : itemStatus === "running" || itemStatus === "switching" ? "…" : "○"}
+                </span>
+                <div>
+                  <strong>{label}</strong>
+                  <p>{item?.message ?? "等待中"}</p>
+                </div>
+                {itemStatus === "running" && item?.speedMbps ? (
+                  <span className="onboarding-progress-item__speed">{item.speedMbps.toFixed(1)} MB/s</span>
+                ) : null}
+                {item && item.percent > 0 && itemStatus !== "done" && itemStatus !== "waiting" ? (
+                  <span className="onboarding-progress-item__percent">{item.percent}%</span>
+                ) : null}
+                {itemStatus === "waiting" ? (
+                  <span className="onboarding-progress-item__percent">等待</span>
+                ) : null}
+                {itemStatus === "done" ? <span className="onboarding-progress-item__percent">完成</span> : null}
+              </li>
+            );
+          })}
+        </ul>
+      </>
+    );
+  }
+
+  const statusItems = [
+    {
+      label: "推理引擎",
+      value:
+        status?.inferenceBackend === "mlx"
+          ? status?.mlxRuntimeAvailable
+            ? "MLX 已安装"
+            : "MLX 未安装"
+          : status?.llamaServerAvailable
+            ? "llama.cpp 已安装"
+            : "未安装",
+      ok:
+        status?.inferenceBackend === "mlx"
+          ? status?.mlxRuntimeAvailable
+          : status?.llamaServerAvailable,
+    },
+    ...(status?.inferenceBackend === "mlx"
+      ? [
+          {
+            label: "MLX 模型",
+            value: status?.mlxModelReady ? "已就绪" : "首次识图时下载",
+            ok: status?.mlxModelReady,
+          },
+        ]
+      : [
+          {
+            label: "主模型",
+            value: status?.modelDownloaded ? "已下载" : "未下载",
+            ok: status?.modelDownloaded,
+          },
+          {
+            label: "视觉投影",
+            value: status?.mmprojDownloaded ? "已下载" : "未下载",
+            ok: status?.mmprojDownloaded,
+          },
+        ]),
+    { label: "整体就绪", value: status?.modelReady ? "可用" : "未完成", ok: status?.modelReady },
+  ];
+
+  return (
+    <section className="surface setup-panel">
+      {showWelcome && phase === "idle" ? (
+        <div className="callout callout--info">
+          <p>首次使用会自动安装推理引擎、下载视觉模型并配置快捷键，全程在本机完成。</p>
+        </div>
+      ) : null}
+
+      {phase === "idle" || phase === "error" ? (
+        <>
+          <ul className="setup-panel__metrics" aria-label="当前环境状态">
+            {statusItems.map((item) => (
+              <li key={item.label}>
+                <span>{item.label}</span>
+                <strong className={item.ok ? "is-positive" : undefined}>{item.value}</strong>
+              </li>
+            ))}
+          </ul>
+          <p className="setup-panel__lead">
+            一键完成推理引擎安装、模型下载与快捷键配置。模型文件详情可在「模型文件」中查看。
+          </p>
+        </>
+      ) : null}
+
+      {phase === "running" ? <div className="setup-panel__progress">{renderProgressList()}</div> : null}
+
+      {phase === "success" ? (
+        <div className="setup-panel__success">
+          <p className="setup-panel__success-lead">环境已就绪，可以开始识图问答。</p>
+          <ul className="onboarding-checklist">
+            <li className={result?.runtimeReady ? "is-done" : ""}>
+              推理引擎 {result?.runtimeReady ? "已安装" : "未完成"}
+            </li>
+            <li className={result?.modelReady ? "is-done" : ""}>
+              视觉模型 {result?.modelReady ? "已下载" : "未完成"}
+            </li>
+            <li className="is-done">快捷键：{result?.shortcut ?? "Control+Option+Space"}</li>
+          </ul>
+        </div>
+      ) : null}
+
+      {installError ? <p className="onboarding-error">{installError}</p> : null}
+
+      <div className="setup-panel__actions">
+        {phase === "idle" || phase === "error" ? (
+          <button type="button" className="settings-btn settings-btn--primary" onClick={() => void runSetup()}>
+            一键安装并配置
+          </button>
+        ) : null}
+
+        {phase === "running" ? <p className="setup-panel__running-hint">正在配置，请保持窗口打开…</p> : null}
+
+        {phase === "error" ? (
+          <button type="button" className="settings-btn settings-btn--secondary" onClick={() => setPhase("idle")}>
+            返回
+          </button>
+        ) : null}
+
+        {phase === "success" && showWelcome ? (
+          <>
+            <button type="button" className="settings-btn settings-btn--primary" onClick={() => void finishAndContinue(true)}>
+              打开识图面板
+            </button>
+            <button type="button" className="settings-btn settings-btn--secondary" onClick={() => void finishAndContinue(false)}>
+              进入首页
+            </button>
+          </>
+        ) : null}
+
+        {phase === "success" && !showWelcome ? (
+          <button type="button" className="settings-btn settings-btn--secondary" onClick={() => void runSetup()}>
+            重新配置
+          </button>
+        ) : null}
+      </div>
+    </section>
+  );
+}
