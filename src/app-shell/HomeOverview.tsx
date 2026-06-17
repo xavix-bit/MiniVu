@@ -48,8 +48,11 @@ const STATUS_ITEMS = [
     label: "推理后端",
     pick: (s: ModelStatus | null) => s?.activeBackend ?? (s?.inferenceBackend === "mlx" ? "MLX" : "llama.cpp"),
   },
-  { key: "sidecar", label: "推理进程", pick: (s: ModelStatus | null) => (s?.sidecarRunning ? "运行中" : "空闲") },
+  { key: "sidecar", label: "推理进程", pick: (s: ModelStatus | null) => (s?.sidecarRunning ? "运行中" : "待唤起") },
 ] as const;
+
+/** 仅统计「能否开始识图」的硬性条件，不含运行态指标 */
+const READINESS_KEYS = new Set(["server", "model"]);
 
 type DeviceInfo = {
   platform: string;
@@ -78,6 +81,16 @@ function isPositive(value: string) {
   );
 }
 
+function isStatHighlight(key: string, value: string, environmentReady: boolean) {
+  if (key === "backend") {
+    return Boolean(value);
+  }
+  if (key === "sidecar") {
+    return value === "运行中" || (environmentReady && value === "待唤起");
+  }
+  return isPositive(value);
+}
+
 export function HomeOverview({
   modelReady,
   onOpenSetup,
@@ -101,7 +114,11 @@ export function HomeOverview({
     await invoke("show_quick_panel");
   }
 
-  const readyCount = STATUS_ITEMS.filter((item) => isPositive(item.pick(status))).length;
+  const readinessItems = STATUS_ITEMS.filter((item) => READINESS_KEYS.has(item.key));
+  const readinessDone = readinessItems.filter((item) => isPositive(item.pick(status))).length;
+  const readinessTotal = readinessItems.length;
+  const ringFull = modelReady || readinessDone === readinessTotal;
+  const ringProgress = ringFull ? 1 : readinessDone / readinessTotal;
 
   return (
     <div className="settings-page settings-page--home">
@@ -154,27 +171,46 @@ export function HomeOverview({
             </span>
           </div>
 
-          <div className="home-hero-ring" aria-hidden="true">
+          <div
+            className="home-hero-ring"
+            role="img"
+            aria-label={
+              ringFull
+                ? "环境已就绪"
+                : `环境配置进度 ${readinessDone} / ${readinessTotal}`
+            }
+          >
             <svg viewBox="0 0 120 120">
               <circle cx="60" cy="60" r="52" className="home-hero-ring__track" />
               <circle
                 cx="60"
                 cy="60"
                 r="52"
-                className="home-hero-ring__progress"
-                style={{ strokeDashoffset: `${327 - (327 * readyCount) / STATUS_ITEMS.length}` }}
+                className={`home-hero-ring__progress${ringFull ? " is-complete" : ""}`}
+                style={{ strokeDashoffset: `${327 - 327 * ringProgress}` }}
               />
             </svg>
             <div className="home-hero-ring__label">
-              <strong>{readyCount}</strong>
-              <span>/ {STATUS_ITEMS.length}</span>
+              {ringFull ? (
+                <>
+                  <strong className="home-hero-ring__check" aria-hidden="true">
+                    ✓
+                  </strong>
+                  <span>环境就绪</span>
+                </>
+              ) : (
+                <>
+                  <strong>{readinessDone}</strong>
+                  <span>/ {readinessTotal}</span>
+                </>
+              )}
             </div>
           </div>
 
           <p className="ui-card__desc">
             {modelReady
-              ? "图片与对话仅保留在本机，仅在下载模型时使用网络。"
-              : "配置完成后，识图与推理都在本地完成。"}
+              ? "推理引擎与模型已就绪。首次提问时会载入模型，进程显示「待唤起」属正常。"
+              : "完成推理引擎安装与模型下载后即可开始识图。"}
           </p>
 
           {modelReady ? (
@@ -190,7 +226,9 @@ export function HomeOverview({
             return (
               <article key={item.key} className="ui-card ui-card--stat">
                 <span className="ui-card__stat-label">{item.label}</span>
-                <strong className={isPositive(value) ? "is-positive" : undefined}>{value}</strong>
+                <strong className={isStatHighlight(item.key, value, modelReady) ? "is-positive" : undefined}>
+                  {value}
+                </strong>
               </article>
             );
           })}

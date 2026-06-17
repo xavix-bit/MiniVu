@@ -3099,6 +3099,16 @@ input:focus-visible,
   transition: stroke-dashoffset 0.4s ease;
 }
 
+.home-hero-ring__progress.is-complete {
+  stroke: #34c759;
+}
+
+.home-hero-ring__check {
+  font-size: 1.75rem;
+  line-height: 1;
+  color: #34c759;
+}
+
 .home-hero-ring__label {
   position: absolute;
   inset: 0;
