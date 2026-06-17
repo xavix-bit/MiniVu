@@ -16,6 +16,7 @@ export function useImageSession() {
   const [inferPhase, setInferPhase] = useState<"loading" | "thinking">("loading");
   const [ocrLoading, setOcrLoading] = useState(false);
   const [error, setError] = useState("");
+  const [pendingReplaceImage, setPendingReplaceImage] = useState<ImageAttachment | null>(null);
 
   const clearError = useCallback(() => setError(""), []);
 
@@ -26,14 +27,11 @@ export function useImageSession() {
     setModelLoading(false);
     setOcrLoading(false);
     setError("");
+    setPendingReplaceImage(null);
   }, []);
 
-  const setImage = useCallback(async (image: ImageAttachment) => {
-    if (shouldConfirmImageReplacement(state)) {
-      const confirmed = window.confirm("替换图片将清空当前对话，是否继续？");
-      if (!confirmed) {
-        return false;
-      }
+  const applyImage = useCallback(async (image: ImageAttachment, replaceConversation: boolean) => {
+    if (replaceConversation) {
       setState({ ...createImageSessionState(), image, ocrText: "" });
       setStreamingText("");
       setIsAnswering(false);
@@ -55,7 +53,31 @@ export function useImageSession() {
       setOcrLoading(false);
     }
     return true;
-  }, [state]);
+  }, []);
+
+  const setImage = useCallback(
+    async (image: ImageAttachment) => {
+      if (shouldConfirmImageReplacement(state)) {
+        setPendingReplaceImage(image);
+        return false;
+      }
+      return applyImage(image, false);
+    },
+    [applyImage, state],
+  );
+
+  const confirmReplaceImage = useCallback(async () => {
+    if (!pendingReplaceImage) {
+      return false;
+    }
+    const image = pendingReplaceImage;
+    setPendingReplaceImage(null);
+    return applyImage(image, true);
+  }, [applyImage, pendingReplaceImage]);
+
+  const cancelReplaceImage = useCallback(() => {
+    setPendingReplaceImage(null);
+  }, []);
 
   const clearConversation = useCallback(() => {
     setState((current) => ({ ...current, messages: [] }));
@@ -167,6 +189,9 @@ export function useImageSession() {
     error,
     clearError,
     setImage,
+    pendingReplaceImage,
+    confirmReplaceImage,
+    cancelReplaceImage,
     ask,
     stopGeneration,
     clearConversation,

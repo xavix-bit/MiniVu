@@ -74,7 +74,10 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete }: Envir
   }
 
   useEffect(() => {
-    void refreshStatus(true);
+    const timer = window.setTimeout(() => {
+      void refreshStatus(true);
+    }, 100);
+    return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {
@@ -219,6 +222,13 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete }: Envir
   }
 
   async function finishAndContinue(openPanel: boolean) {
+    const next = await invoke<ModelStatus>("get_model_status");
+    setStatus(next);
+    if (!next.modelReady) {
+      setInstallError("模型尚未就绪，请先完成环境配置中的下载步骤。");
+      setPhase("error");
+      return;
+    }
     const latest = await loadSettings();
     await saveSettings({ ...latest, onboardingComplete: true });
     onComplete?.();
@@ -293,7 +303,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete }: Envir
       ? [
           {
             label: "MLX 模型",
-            value: status?.mlxModelReady ? "已就绪" : "首次识图时下载",
+            value: status?.mlxModelReady ? "已就绪" : "未下载",
             ok: status?.mlxModelReady,
           },
         ]

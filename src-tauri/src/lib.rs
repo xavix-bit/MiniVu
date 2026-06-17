@@ -22,6 +22,8 @@ mod tray;
 mod window;
 
 use model_sidecar::{init_generation_flag, init_sidecar_state, spawn_idle_unloader, spawn_model_warmup};
+use sidecar::lock_sidecar;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -36,14 +38,18 @@ pub fn run() {
         .manage(init_generation_flag())
         .setup(|app| {
             tray::create_tray(app.handle())?;
-            spawn_idle_unloader(app.handle().clone());
-
-            if let Err(error) = shortcut::register_default_shortcut(app.handle()) {
-                eprintln!("快捷键注册失败（可在设置中修改）: {error}");
-            }
-
             window::show_entry_window(app.handle())?;
-            spawn_model_warmup(app.handle().clone());
+
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                // 先让主窗口渲染，再注册快捷键与可选预热，避免启动时 IPC 拥塞。
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                if let Err(error) = shortcut::register_default_shortcut(&handle) {
+                    eprintln!("快捷键注册失败（可在设置中修改）: {error}");
+                }
+                spawn_idle_unloader(handle.clone());
+                spawn_model_warmup(handle);
+            });
 
             Ok(())
         })
@@ -76,6 +82,9 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while running MiniVu")
         .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                lock_sidecar(app_handle.state::<crate::sidecar::SidecarState>().inner()).stop();
+            }
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = event {
                 let _ = window::reopen_from_dock(app_handle);

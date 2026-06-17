@@ -3,6 +3,8 @@ use crate::settings::{load_settings, save_settings, AppSettings};
 use serde::Serialize;
 use tauri::Manager;
 
+use crate::sidecar::lock_sidecar;
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceInfo {
@@ -22,9 +24,7 @@ pub fn load_app_settings(app: tauri::AppHandle) -> Result<AppSettings, String> {
 pub fn save_app_settings(app: tauri::AppHandle, settings: AppSettings) -> Result<(), String> {
     save_settings(&app, &settings)?;
     crate::shortcut::register_shortcut(&app, &settings.shortcut)?;
-    if let Ok(mut guard) = app.state::<crate::sidecar::SidecarState>().lock() {
-        guard.stop();
-    }
+    lock_sidecar(app.state::<crate::sidecar::SidecarState>().inner()).stop();
     Ok(())
 }
 

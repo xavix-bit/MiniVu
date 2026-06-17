@@ -49,7 +49,7 @@ export function createDefaultSettings(): AppSettings {
     preferredMirror: null,
     lastSpeedTestAt: null,
     theme: "system",
-    preloadModel: true,
+    preloadModel: false,
     inferenceBackend: "mlx",
     mlxModelId: "mlx-community/MiniCPM-V-4.6-4bit",
     mlxModelPath: null,

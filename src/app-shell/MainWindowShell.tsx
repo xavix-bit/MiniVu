@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { HomeOverview } from "./HomeOverview";
 import { EnvironmentSetupPanel } from "./EnvironmentSetupPanel";
 import { SettingsSidebar, type SettingsSection } from "./SettingsSidebar";
@@ -28,15 +29,25 @@ const PAGE_META: Record<SettingsSection, { title: string; subtitle: string }> = 
   },
 };
 
+type EnvironmentStatus = {
+  environmentReady: boolean;
+  modelReady: boolean;
+};
+
 export function MainWindowShell() {
-  const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
-  const [section, setSection] = useState<SettingsSection>("home");
+  const [onboardingDone, setOnboardingDone] = useState(false);
+  const [section, setSection] = useState<SettingsSection>("setup");
   const [shortcut, setShortcut] = useState("Control+Option+Space");
   const [modelReady, setModelReady] = useState(false);
+  const [warmupNotice, setWarmupNotice] = useState("");
 
-  async function refreshModelStatus() {
-    const status = await invoke<{ modelReady: boolean }>("get_model_status");
-    setModelReady(status.modelReady);
+  async function refreshEnvironmentStatus() {
+    try {
+      const status = await invoke<EnvironmentStatus>("get_environment_status");
+      setModelReady(status.environmentReady);
+    } catch {
+      setModelReady(false);
+    }
   }
 
   useEffect(() => {
@@ -45,33 +56,48 @@ export function MainWindowShell() {
   }, []);
 
   useEffect(() => {
-    void loadSettings().then((settings) => {
-      setOnboardingDone(settings.onboardingComplete);
-      setShortcut(settings.shortcut);
+    void loadSettings()
+      .then((settings) => {
+        setOnboardingDone(settings.onboardingComplete);
+        setShortcut(settings.shortcut);
 
-      if (!settings.onboardingComplete) {
+        if (!settings.onboardingComplete) {
+          setSection("setup");
+          return;
+        }
+
+        setSection("home");
+        void refreshEnvironmentStatus();
+      })
+      .catch(() => {
+        setOnboardingDone(false);
         setSection("setup");
-        return;
-      }
-
-      void refreshModelStatus();
-    });
+      });
   }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<{ message: string }>("warmup-failed", (event) => {
+      setWarmupNotice(event.payload.message);
+    }).then((cleanup) => {
+      unlisten = cleanup;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (onboardingDone && section !== "setup") {
+      void refreshEnvironmentStatus();
+    }
+  }, [onboardingDone, section]);
 
   function handleSetupComplete() {
     setOnboardingDone(true);
     setSection("home");
     void loadSettings().then((settings) => setShortcut(settings.shortcut));
-    void refreshModelStatus();
-  }
-
-  if (onboardingDone === null) {
-    return (
-      <div className="settings-app settings-app--loading">
-        <div className="ambient-glow" aria-hidden="true" />
-        <p className="placeholder-copy reveal">正在加载…</p>
-      </div>
-    );
+    void refreshEnvironmentStatus();
   }
 
   const activeSection = onboardingDone ? section : "setup";
@@ -87,8 +113,6 @@ export function MainWindowShell() {
 
   return (
     <div className="settings-app">
-      <div className="ambient-glow" aria-hidden="true" />
-      <div className="ambient-glow ambient-glow--secondary" aria-hidden="true" />
       <SettingsSidebar
         active={activeSection}
         shortcut={shortcut}
@@ -100,7 +124,22 @@ export function MainWindowShell() {
 
       <main className="settings-main">
         {activeSection === "home" ? (
-          <HomeOverview modelReady={modelReady} onOpenSetup={() => handleNavigate("setup")} />
+          <>
+            {warmupNotice ? (
+              <div className="callout callout--attention reveal" role="status">
+                <p>模型预热未完成：{warmupNotice}</p>
+                <button type="button" className="callout__action" onClick={() => setWarmupNotice("")}>
+                  知道了
+                </button>
+              </div>
+            ) : null}
+            <HomeOverview
+              modelReady={modelReady}
+              onOpenSetup={() => handleNavigate("setup")}
+              onOpenModel={() => handleNavigate("model")}
+              onOpenSettings={() => handleNavigate("settings")}
+            />
+          </>
         ) : (
           <div className="settings-page">
             <header className="settings-page-header reveal reveal--1">
@@ -118,12 +157,16 @@ export function MainWindowShell() {
                 <EnvironmentSetupPanel showWelcome={!onboardingDone} onComplete={handleSetupComplete} />
               ) : null}
               {activeSection === "model" ? (
-                <ModelPanel onOpenSetup={() => handleNavigate("setup")} />
+                <ModelPanel
+                  onOpenSetup={() => handleNavigate("setup")}
+                  onStatusChange={() => void refreshEnvironmentStatus()}
+                />
               ) : null}
               {activeSection === "settings" ? (
                 <SettingsPanel
                   onSaved={() => {
                     void loadSettings().then((settings) => setShortcut(settings.shortcut));
+                    void refreshEnvironmentStatus();
                   }}
                 />
               ) : null}

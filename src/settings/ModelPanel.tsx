@@ -23,6 +23,7 @@ type ModelStatus = {
 
 type ModelPanelProps = {
   onOpenSetup?: () => void;
+  onStatusChange?: () => void;
 };
 
 type FileKey = "model" | "mmproj";
@@ -60,9 +61,10 @@ function shortenPath(path: string) {
   return `…${path.slice(-52)}`;
 }
 
-export function ModelPanel({ onOpenSetup }: ModelPanelProps) {
+export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
   const [status, setStatus] = useState<ModelStatus | null>(null);
   const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState("");
   const [fileProgress, setFileProgress] = useState<Record<FileKey, FileProgressState>>(createIdleProgress);
   const [mlxProgress, setMlxProgress] = useState<MlxProgressState>({
     status: "idle",
@@ -173,13 +175,15 @@ export function ModelPanel({ onOpenSetup }: ModelPanelProps) {
     }
     if (status?.inferenceBackend === "mlx") {
       setDownloading(true);
+      setDownloadError("");
       setMlxProgress({ status: "running", percent: 0, detail: "准备下载…" });
       try {
         await invoke<string>("download_mlx_model", { force: true });
         setMlxProgress({ status: "done", percent: 100, detail: "下载完成" });
         await refresh();
+        onStatusChange?.();
       } catch (error) {
-        window.alert(String(error));
+        setDownloadError(String(error));
         setMlxProgress({ status: "idle", percent: 0, detail: "" });
       } finally {
         setDownloading(false);
@@ -188,6 +192,7 @@ export function ModelPanel({ onOpenSetup }: ModelPanelProps) {
     }
 
     setDownloading(true);
+    setDownloadError("");
     setFileProgress({
       model: { status: "running", percent: 0, downloaded: 0, speedMbps: null, detail: "等待开始…" },
       mmproj: { status: "waiting", percent: 0, downloaded: 0, speedMbps: null, detail: "等待主模型完成…" },
@@ -199,8 +204,9 @@ export function ModelPanel({ onOpenSetup }: ModelPanelProps) {
         mmproj: { status: "done", percent: 100, downloaded: EXPECTED_GGUF_BYTES.mmproj, speedMbps: null, detail: "下载完成" },
       });
       await refresh();
+      onStatusChange?.();
     } catch (error) {
-      window.alert(String(error));
+      setDownloadError(String(error));
       setFileProgress(createIdleProgress());
     } finally {
       setDownloading(false);
@@ -304,6 +310,7 @@ export function ModelPanel({ onOpenSetup }: ModelPanelProps) {
             刷新状态
           </button>
         </div>
+        {downloadError ? <p className="onboarding-error">{downloadError}</p> : null}
         {isMlx && mlxProgress.status !== "idle" ? (
           <div className="model-download-progress" aria-label="MLX 下载进度">
             <div className={`model-download-progress__item is-${mlxProgress.status}`}>

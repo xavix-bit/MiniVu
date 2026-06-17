@@ -1,5 +1,4 @@
-use crate::settings::load_settings;
-use crate::window::show_entry_window;
+use crate::window::show_quick_panel_via_shortcut;
 use tauri::AppHandle;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
@@ -20,7 +19,7 @@ pub fn register_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), String> 
     app.global_shortcut()
         .on_shortcut(parsed, |app, _shortcut, event| {
             if event.state == ShortcutState::Pressed {
-                let _ = show_entry_window(app);
+                let _ = show_quick_panel_via_shortcut(app);
             }
         })
         .map_err(|e| e.to_string())?;
@@ -29,6 +28,6 @@ pub fn register_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), String> 
 }
 
 pub fn register_default_shortcut(app: &AppHandle) -> Result<(), String> {
-    let settings = load_settings(app)?;
+    let settings = crate::settings::load_settings(app)?;
     register_shortcut(app, &settings.shortcut)
 }

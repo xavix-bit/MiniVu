@@ -147,24 +147,26 @@ export function SettingsSidebar({
       </nav>
 
       <div className="settings-sidebar__footer">
-        <div className="settings-sidebar__hint">
+        <div className="settings-sidebar__card">
           {modelReady ? (
             <>
-              <p className="settings-sidebar__hint-label">快捷唤起</p>
-              <p className="settings-sidebar__hint-kbd">
+              <p className="settings-sidebar__card-label">快捷唤起识图</p>
+              <p className="settings-sidebar__card-kbd">
                 <kbd>{formatShortcut(shortcut)}</kbd>
               </p>
+              <p className="settings-sidebar__card-note">任意应用中按下即可打开面板</p>
             </>
           ) : (
             <>
-              <p className="settings-sidebar__hint-label">当前不可用</p>
-              <button type="button" className="settings-sidebar__hint-link" onClick={onOpenSetup}>
-                先完成环境配置
+              <p className="settings-sidebar__card-label">尚未就绪</p>
+              <p className="settings-sidebar__card-note">完成环境配置后即可使用识图功能</p>
+              <button type="button" className="settings-sidebar__card-btn" onClick={onOpenSetup}>
+                去配置
               </button>
             </>
           )}
         </div>
-        <p className="settings-sidebar__version">v0.1.0</p>
+        <p className="settings-sidebar__version">MiniVu v0.1.0</p>
       </div>
     </aside>
   );

@@ -1,14 +1,14 @@
-use crate::window::{show_entry_window, show_main_window};
+use crate::window::show_main_window;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::AppHandle;
 
 pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
-    let show_panel = MenuItem::with_id(app, "show_panel", "打开识图面板", true, None::<&str>)?;
+    let open_main = MenuItem::with_id(app, "open_main", "打开主窗口", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "退出 MiniVu", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show_panel, &settings, &separator, &quit])?;
+    let menu = Menu::with_items(app, &[&open_main, &settings, &separator, &quit])?;
 
     let mut builder = TrayIconBuilder::with_id("minivu-tray").tooltip("MiniVu");
     if let Some(icon) = app.default_window_icon().cloned() {
@@ -25,14 +25,11 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 ..
             } = event
             {
-                let _ = show_entry_window(tray.app_handle());
+                let _ = show_main_window(tray.app_handle());
             }
         })
         .on_menu_event(|app, event| match event.id().as_ref() {
-            "show_panel" => {
-                let _ = show_entry_window(app);
-            }
-            "settings" => {
+            "open_main" | "settings" => {
                 let _ = show_main_window(app);
             }
             "quit" => {

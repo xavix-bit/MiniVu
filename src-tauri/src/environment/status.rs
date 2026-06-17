@@ -93,13 +93,21 @@ pub fn is_environment_ready(app: &AppHandle) -> Result<bool, String> {
 impl EnvironmentSnapshot {
     pub fn to_status(&self, app: &AppHandle) -> Result<EnvironmentStatus, String> {
         let settings = load_settings(app)?;
+        let mlx_ready = mlx_runtime_ready(app);
+        let llama_ready = resolve_llama_server(app).is_some();
         let runtime_ready = self
             .backend
-            .map(|backend| runtime_ready_for_backend(backend, app))
+            .map(|backend| match backend {
+                InferenceBackend::Llama => llama_ready,
+                InferenceBackend::Mlx => mlx_ready,
+            })
             .unwrap_or(false);
         let model_ready = self
             .backend
-            .map(|backend| model_ready_for_backend(backend, app, &self.gguf, &self.mlx))
+            .map(|backend| match backend {
+                InferenceBackend::Mlx => mlx_ready && self.mlx.is_ready(),
+                InferenceBackend::Llama => models_ready_for_backend(backend, &self.gguf, &self.mlx),
+            })
             .unwrap_or(false);
 
         Ok(EnvironmentStatus {

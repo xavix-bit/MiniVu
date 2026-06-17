@@ -23,15 +23,27 @@ pub fn emit_chunk(app: &AppHandle, text: &str, done: bool) -> Result<(), String>
     .map_err(|e| e.to_string())
 }
 
+use crate::model_cache::MlxModelRef;
+use crate::settings::InferenceBackend;
+
+/// OpenAI 请求里的 `model` 字段：MLX 必须用 HF repo 或本地路径，不能用占位名。
+pub fn sidecar_request_model(backend: InferenceBackend, mlx: &MlxModelRef) -> String {
+    match backend {
+        InferenceBackend::Mlx => mlx.spec.clone(),
+        InferenceBackend::Llama => "minicpm-v".to_string(),
+    }
+}
+
 pub async fn stream_from_sidecar(
     app: &AppHandle,
     port: u16,
+    model: &str,
     messages: &[serde_json::Value],
     cancel: &AtomicBool,
     sidecar_warm: bool,
 ) -> Result<(), String> {
     let body = serde_json::json!({
-        "model": "minicpm-v",
+        "model": model,
         "stream": true,
         "messages": messages
     });
@@ -118,47 +130,6 @@ pub async fn stream_from_sidecar(
 
     if !emitted_any {
         return Err("模型未返回内容，请重试或缩短问题".to_string());
-    }
-
-    emit_chunk(app, "", true)?;
-    Ok(())
-}
-
-pub async fn stream_fallback_response(
-    app: &AppHandle,
-    ocr_text: &str,
-    prompt: &str,
-    models_ready: bool,
-    note: Option<String>,
-) -> Result<(), String> {
-    let intro = match (models_ready, note) {
-        (true, Some(message)) => format!("（推理暂不可用：{message}）\n\n"),
-        (true, None) => "（推理暂不可用：请稍后重试或重启应用）\n\n".to_string(),
-        (false, Some(message)) => format!("（本地演示模式：{message}）\n\n"),
-        (false, None) => {
-            "（本地演示模式：模型或 mmproj 尚未下载，或 llama-server 不可用）\n\n".to_string()
-        }
-    };
-
-    let ocr_hint = if ocr_text.trim().is_empty() {
-        "图片中未识别到明显文字。".to_string()
-    } else {
-        format!("识别到的文字片段：{ocr_text}")
-    };
-
-    let footer = if models_ready {
-        "模型文件已就绪。若刚启动应用，首次提问需等待模型载入内存（约 30–90 秒），状态栏会显示「正在加载模型…」。"
-    } else {
-        "这是 MiniVu 的本地演示回复。下载 MiniCPM-V 4.5 主模型与 mmproj 并安装 llama-server 后，将自动切换为真实本地推理。"
-    };
-
-    let answer = format!(
-        "{intro}针对你的问题「{prompt}」，{ocr_hint}\n\n{footer}"
-    );
-
-    for word in answer.split_inclusive(char::is_whitespace) {
-        emit_chunk(app, word, false)?;
-        tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
     emit_chunk(app, "", true)?;

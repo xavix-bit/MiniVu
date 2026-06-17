@@ -2,7 +2,8 @@ use crate::inference::backends::{backend_for, port_for};
 use crate::inference_backend::{resolve_active_backend, sidecar_port};
 use crate::model_cache::ModelCache;
 use crate::settings::{load_settings, InferenceBackend};
-use std::process::Child;
+use std::net::TcpListener;
+use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
@@ -102,6 +103,15 @@ impl ModelSidecar {
 
         self.port = desired_port;
 
+        if is_port_in_use(desired_port) {
+            terminate_listeners_on_port(desired_port)?;
+            if is_port_in_use(desired_port) {
+                return Err(format!(
+                    "推理端口 {desired_port} 仍被占用。请退出其他 MiniVu 实例，或在终端执行：lsof -ti :{desired_port} | xargs kill"
+                ));
+            }
+        }
+
         let cache = ModelCache::new(app)?;
         let paths = cache.resolve(settings.model_path.as_deref());
         let mlx = cache.resolve_mlx(
@@ -117,6 +127,36 @@ impl ModelSidecar {
         self.set_service_ready(false);
         Ok(())
     }
+}
+
+fn is_port_in_use(port: u16) -> bool {
+    TcpListener::bind(("127.0.0.1", port)).is_err()
+}
+
+fn terminate_listeners_on_port(port: u16) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        let output = Command::new("lsof")
+            .args(["-ti", &format!(":{port}")])
+            .output()
+            .map_err(|e| format!("无法检查端口 {port}: {e}"))?;
+        if !output.status.success() {
+            return Ok(());
+        }
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let pid = line.trim();
+            if pid.is_empty() {
+                continue;
+            }
+            let _ = Command::new("kill").arg(pid).status();
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = port;
+    }
+    Ok(())
 }
 
 pub fn default_sidecar_port() -> u16 {

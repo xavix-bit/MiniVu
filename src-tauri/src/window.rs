@@ -1,5 +1,4 @@
 use crate::environment::is_environment_ready;
-use crate::model_sidecar::spawn_model_warmup;
 use crate::settings::load_settings;
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewWindow};
 
@@ -53,41 +52,39 @@ pub fn show_quick_panel_near_cursor(app: &AppHandle) -> Result<(), String> {
 
     let _ = window.set_always_on_top(true);
     present_window(&window, app)?;
-    spawn_model_warmup(app.clone());
     Ok(())
 }
 
-/// 点击 Dock 图标时：优先恢复被最小化的窗口，否则按默认入口打开。
-pub fn reopen_from_dock(app: &AppHandle) -> Result<(), String> {
-    if let Some(main) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-        if main.is_minimized().unwrap_or(false) {
-            return show_main_window(app);
-        }
-    }
-    if let Some(quick) = app.get_webview_window(QUICK_PANEL_LABEL) {
-        if quick.is_minimized().unwrap_or(false) {
-            return show_quick_panel_near_cursor(app);
-        }
-    }
-    show_entry_window(app)
+/// 应用启动、Dock 点击、托盘点击时打开主窗口。
+pub fn show_entry_window(app: &AppHandle) -> Result<(), String> {
+    show_main_window(app)
 }
 
-/// 引导未完成或环境未就绪时打开主窗口，否则打开识图面板。
-pub fn show_entry_window(app: &AppHandle) -> Result<(), String> {
+/// 全局快捷键：环境就绪时打开识图小面板，否则打开主窗口引导配置。
+pub fn show_quick_panel_via_shortcut(app: &AppHandle) -> Result<(), String> {
     let settings = load_settings(app)?;
     let environment_ready = is_environment_ready(app).unwrap_or(false);
 
     if !settings.onboarding_complete || !environment_ready {
         show_main_window(app)
-    } else if let Err(error) = show_quick_panel_near_cursor(app) {
-        eprintln!("快捷面板显示失败，改为打开主窗口: {error}");
-        show_main_window(app)
     } else {
-        Ok(())
+        show_quick_panel_near_cursor(app)
     }
 }
 
+/// 从主窗口主动打开识图小面板（首页按钮等）。
+pub fn show_quick_panel_from_main(app: &AppHandle) -> Result<(), String> {
+    show_quick_panel_via_shortcut(app)
+}
+
+/// 点击 Dock 图标时始终打开主窗口。
+pub fn reopen_from_dock(app: &AppHandle) -> Result<(), String> {
+    show_main_window(app)
+}
+
 pub fn show_main_window(app: &AppHandle) -> Result<(), String> {
+    let _ = hide_quick_panel_silent(app);
+
     let window = app
         .get_webview_window(MAIN_WINDOW_LABEL)
         .ok_or_else(|| "main window not found".to_string())?;
@@ -122,10 +119,13 @@ pub fn close_quick_panel(app: &AppHandle) -> Result<(), String> {
 
 /// 仅隐藏识图面板，不重置前端会话（截图等场景使用）。
 pub fn hide_quick_panel_silent(app: &AppHandle) -> Result<(), String> {
-    let window = app
-        .get_webview_window(QUICK_PANEL_LABEL)
-        .ok_or_else(|| "quick panel window not found".to_string())?;
-    window.hide().map_err(|e| e.to_string())
+    let Some(window) = app.get_webview_window(QUICK_PANEL_LABEL) else {
+        return Ok(());
+    };
+    if window.is_visible().unwrap_or(false) {
+        window.hide().map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// 截图等流程结束后恢复识图面板。
@@ -176,7 +176,7 @@ pub fn show_entry(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn show_quick_panel(app: AppHandle) -> Result<(), String> {
-    show_quick_panel_near_cursor(&app)
+    show_quick_panel_from_main(&app)
 }
 
 #[tauri::command]

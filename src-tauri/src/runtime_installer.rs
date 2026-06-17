@@ -278,9 +278,27 @@ pub fn mlx_venv_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(runtime_dir(app)?.join("mlx-venv"))
 }
 
+fn mlx_ready_marker_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(mlx_venv_dir(app)?.join(".minivu_mlx_ready"))
+}
+
+fn write_mlx_ready_marker(app: &AppHandle) {
+    if let Ok(path) = mlx_ready_marker_path(app) {
+        let _ = fs::write(path, "ok");
+    }
+}
+
 pub fn resolve_mlx_python(app: &AppHandle) -> Option<PathBuf> {
-    let venv_python = mlx_venv_dir(app).ok()?.join("bin").join("python3");
+    let venv_dir = mlx_venv_dir(app).ok()?;
+    let venv_python = venv_dir.join("bin").join("python3");
+    let marker = mlx_ready_marker_path(app).ok()?;
+
+    if venv_python.is_file() && marker.is_file() {
+        return Some(venv_python);
+    }
+
     if mlx_python_ready(&venv_python) {
+        write_mlx_ready_marker(app);
         return Some(venv_python);
     }
     None
@@ -378,6 +396,7 @@ pub async fn install_mlx_runtime(app: &AppHandle) -> Result<(), String> {
         return Err("MLX 安装完成但无法导入 mlx_vlm".to_string());
     }
 
+    write_mlx_ready_marker(app);
     emit_setup_progress(app, "runtime", "done", "MLX 推理引擎安装完成", 100);
     Ok(())
 }

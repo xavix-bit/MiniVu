@@ -1,8 +1,7 @@
 use crate::environment::{evaluate_environment, is_environment_ready, EnvironmentStatus};
 use crate::inference::{
     build_chat_messages, build_standalone_follow_up_prompt, emit_chunk, sidecar_health_ok,
-    stream_fallback_response, stream_from_sidecar, trim_history, wait_for_sidecar_ready,
-    HistoryMessage,
+    sidecar_request_model, stream_from_sidecar, trim_history, wait_for_sidecar_ready, HistoryMessage,
 };
 use crate::inference_backend::{
     backend_label, mlx_runtime_ready, resolve_active_backend,
@@ -10,12 +9,12 @@ use crate::inference_backend::{
 use crate::model_cache::ModelCache;
 use crate::runtime_installer::resolve_llama_server;
 use crate::settings::{load_settings, InferenceBackend};
-use crate::sidecar::{init_sidecar_state as sidecar_init, SidecarState};
+use crate::sidecar::{lock_sidecar, init_sidecar_state as sidecar_init, SidecarState};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 pub type GenerationFlag = Arc<AtomicBool>;
 
@@ -28,6 +27,23 @@ pub fn init_sidecar_state() -> SidecarState {
 }
 
 pub use crate::environment::models_ready_for_backend;
+
+fn model_not_ready_message(backend: InferenceBackend, app: &AppHandle) -> String {
+    match backend {
+        InferenceBackend::Mlx => {
+            if mlx_runtime_ready(app) {
+                "模型权重尚未下载。请前往「环境配置」或「模型文件」下载 MLX 权重（约 2 GB）。"
+                    .to_string()
+            } else {
+                "MLX 推理引擎未安装。请前往「环境配置」完成安装。".to_string()
+            }
+        }
+        InferenceBackend::Llama => {
+            "GGUF 模型尚未下载。请前往「环境配置」或「模型文件」下载主模型与 mmproj（约 6 GB）。"
+                .to_string()
+        }
+    }
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -65,14 +81,15 @@ pub fn get_model_status(
         settings.mlx_model_path.as_deref(),
         Some(settings.mlx_model_id.as_str()),
     );
-    let mut guard = sidecar.lock().map_err(|e| e.to_string())?;
+    let mut guard = lock_sidecar(sidecar.inner());
     let active = resolve_active_backend(settings.inference_backend, &app).ok();
+    let mlx_ready = mlx_runtime_ready(&app);
 
     Ok(ModelStatusResponse {
         model_ready: active
             .map(|backend| {
                 if backend == InferenceBackend::Mlx {
-                    mlx_runtime_ready(&app) && mlx.is_ready()
+                    mlx_ready && mlx.is_ready()
                 } else {
                     models_ready_for_backend(backend, &paths, &mlx)
                 }
@@ -92,7 +109,7 @@ pub fn get_model_status(
             .map(backend_label)
             .unwrap_or_else(|| backend_label(InferenceBackend::Llama))
             .to_string(),
-        mlx_runtime_available: mlx_runtime_ready(&app),
+        mlx_runtime_available: mlx_ready,
         mlx_model_id: mlx.spec.clone(),
         mlx_model_ready: mlx.is_ready(),
         mlx_requires_network: mlx.requires_network_on_first_run(),
@@ -122,48 +139,30 @@ pub async fn ask_image(
     let backend = resolve_active_backend(settings.inference_backend, &app)?;
     let models_ready = models_ready_for_backend(backend, &paths, &mlx);
 
-    let mock_note = {
-        let mut guard = sidecar.lock().map_err(|e| e.to_string())?;
-        guard.touch();
-        if !models_ready {
-            Some(None)
-        } else if let Err(error) = guard.ensure_started(&app) {
-            Some(Some(error))
-        } else {
-            None
-        }
-    };
+    if !models_ready {
+        return Err(model_not_ready_message(backend, &app));
+    }
 
-    if let Some(note) = mock_note {
-        if models_ready {
-            return Err(note.unwrap_or_else(|| "推理引擎启动失败".to_string()));
-        }
-        if backend == InferenceBackend::Mlx && mlx_runtime_ready(&app) {
-            return Err(
-                "MLX 模型权重尚未下载。请先在「偏好设置 → 推理引擎」或「模型文件」中下载。"
-                    .to_string(),
-            );
-        }
-        stream_fallback_response(&app, &ocr_text, &prompt, false, note).await?;
-        return Ok(());
+    {
+        let mut guard = lock_sidecar(sidecar.inner());
+        guard.touch();
+        guard.ensure_started(&app)?;
     }
 
     let port = {
-        let guard = sidecar.lock().map_err(|e| e.to_string())?;
+        let guard = lock_sidecar(sidecar.inner());
         guard.port
     };
 
     let sidecar_warm = {
-        let guard = sidecar.lock().map_err(|e| e.to_string())?;
+        let guard = lock_sidecar(sidecar.inner());
         guard.is_service_ready()
     };
 
     let skip_load_wait = sidecar_warm && sidecar_health_ok(port, backend).await;
     if !skip_load_wait {
         if sidecar_warm {
-            if let Ok(guard) = sidecar.lock() {
-                guard.set_service_ready(false);
-            }
+            lock_sidecar(sidecar.inner()).set_service_ready(false);
         }
         let sidecar_state = sidecar.inner().clone();
         if let Err(error) =
@@ -173,25 +172,21 @@ pub async fn ask_image(
                 emit_chunk(&app, "", true)?;
                 return Ok(());
             }
-            if models_ready {
-                return Err(error);
-            }
-            stream_fallback_response(&app, &ocr_text, &prompt, false, Some(error)).await?;
-            return Ok(());
+            return Err(error);
         }
-        if let Ok(guard) = sidecar.lock() {
-            guard.set_service_ready(true);
-        }
+        lock_sidecar(sidecar.inner()).set_service_ready(true);
     }
 
     let trimmed_history = trim_history(&history);
     let sidecar_warm_for_infer = skip_load_wait || sidecar_warm;
     let messages =
         build_chat_messages(&trimmed_history, &image_data_url, &ocr_text, &prompt);
+    let request_model = sidecar_request_model(backend, &mlx);
 
     let infer_result = stream_from_sidecar(
         &app,
         port,
+        &request_model,
         &messages,
         &cancel_flag,
         sidecar_warm_for_infer,
@@ -212,6 +207,7 @@ pub async fn ask_image(
             if stream_from_sidecar(
                 &app,
                 port,
+                &request_model,
                 &fallback_messages,
                 &cancel_flag,
                 sidecar_warm_for_infer,
@@ -224,15 +220,14 @@ pub async fn ask_image(
         }
 
         if models_ready {
-            if let Ok(mut guard) = sidecar.lock() {
-                if !guard.is_running() {
-                    guard.set_service_ready(false);
-                }
+            let mut guard = lock_sidecar(sidecar.inner());
+            if !guard.is_running() {
+                guard.set_service_ready(false);
             }
             return Err(error);
         }
 
-        stream_fallback_response(&app, &ocr_text, &prompt, false, Some(error)).await?;
+        return Err(error);
     }
 
     Ok(())
@@ -244,7 +239,7 @@ pub fn unload_model_if_idle(
     sidecar: tauri::State<SidecarState>,
 ) -> Result<(), String> {
     let settings = load_settings(&app)?;
-    let mut guard = sidecar.lock().map_err(|e| e.to_string())?;
+    let mut guard = lock_sidecar(sidecar.inner());
     if guard.should_unload(settings.model_warm_minutes) {
         guard.stop();
     }
@@ -260,10 +255,9 @@ pub fn spawn_idle_unloader(app: AppHandle) {
                 Ok(value) => value,
                 Err(_) => continue,
             };
-            if let Ok(mut guard) = sidecar.lock() {
-                if guard.should_unload(settings.model_warm_minutes) {
-                    guard.stop();
-                }
+            let mut guard = lock_sidecar(&sidecar);
+            if guard.should_unload(settings.model_warm_minutes) {
+                guard.stop();
             }
         }
     });
@@ -287,7 +281,7 @@ async fn warmup_model_inner(app: &AppHandle, sidecar: &SidecarState) -> Result<(
     }
 
     let port = {
-        let mut guard = sidecar.lock().map_err(|e| e.to_string())?;
+        let mut guard = lock_sidecar(sidecar);
         guard.touch();
         guard.ensure_started(app)?;
         guard.port
@@ -296,17 +290,24 @@ async fn warmup_model_inner(app: &AppHandle, sidecar: &SidecarState) -> Result<(
     let cancel = AtomicBool::new(false);
     let sidecar_state = sidecar.clone();
     wait_for_sidecar_ready(app, port, backend, &cancel, &sidecar_state).await?;
-    if let Ok(guard) = sidecar.lock() {
-        guard.set_service_ready(true);
-    }
+    lock_sidecar(sidecar).set_service_ready(true);
     Ok(())
 }
 
 pub fn spawn_model_warmup(app: AppHandle) {
     let sidecar = app.state::<SidecarState>().inner().clone();
     tauri::async_runtime::spawn(async move {
+        let settings = match load_settings(&app) {
+            Ok(value) => value,
+            Err(_) => return,
+        };
+        if !settings.preload_model {
+            return;
+        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
         if let Err(error) = warmup_model_inner(&app, &sidecar).await {
             eprintln!("模型预热: {error}");
+            let _ = app.emit("warmup-failed", serde_json::json!({ "message": error }));
         }
     });
 }

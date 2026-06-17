@@ -77,7 +77,17 @@ pub struct AppSettings {
 }
 
 fn default_preload_model() -> bool {
-    true
+    false
+}
+
+impl AppSettings {
+    pub fn default_for_device() -> Self {
+        let mut settings = Self::default();
+        if crate::platform_caps::system_memory_gb() < 16.0 {
+            settings.model_warm_minutes = 15;
+        }
+        settings
+    }
 }
 
 impl Default for AppSettings {
@@ -94,7 +104,7 @@ impl Default for AppSettings {
             preferred_mirror: None,
             last_speed_test_at: None,
             theme: AppTheme::System,
-            preload_model: true,
+            preload_model: default_preload_model(),
             inference_backend: InferenceBackend::default(),
             mlx_model_id: default_mlx_model_id(),
             mlx_model_path: None,
@@ -113,7 +123,7 @@ pub fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
 pub fn load_settings(app: &AppHandle) -> Result<AppSettings, String> {
     let path = settings_path(app)?;
     if !path.exists() {
-        return Ok(AppSettings::default());
+        return Ok(AppSettings::default_for_device());
     }
     let raw = fs::read_to_string(path).map_err(|e| e.to_string())?;
     serde_json::from_str(&raw).map_err(|e| e.to_string())

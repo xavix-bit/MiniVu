@@ -1,7 +1,9 @@
+use crate::environment::models_ready_for_backend;
 use crate::inference_backend::backend_label;
 use crate::inference::backends::read_mlx_sidecar_log_tail;
-use crate::sidecar::SidecarState;
-use crate::settings::InferenceBackend;
+use crate::model_cache::ModelCache;
+use crate::settings::{load_settings, InferenceBackend};
+use crate::sidecar::{lock_sidecar, SidecarState};
 use reqwest::Client;
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,22 +20,31 @@ struct SidecarLoadProgress {
     backend: String,
 }
 
-pub fn emit_sidecar_load_progress(app: &AppHandle, backend: InferenceBackend, elapsed_sec: u64) {
+pub fn emit_sidecar_load_progress(
+    app: &AppHandle,
+    backend: InferenceBackend,
+    elapsed_sec: u64,
+    weights_on_disk: bool,
+) {
     let message = match backend {
         InferenceBackend::Mlx => {
-            if elapsed_sec < 15 {
+            if !weights_on_disk {
+                if elapsed_sec < 15 {
+                    "正在启动 MLX 服务…".to_string()
+                } else {
+                    "正在从 HuggingFace 下载 MLX 权重（约 2GB，仅首次）…".to_string()
+                }
+            } else if elapsed_sec < 15 {
                 "正在启动 MLX 服务…".to_string()
-            } else if elapsed_sec < 120 {
-                "正在从 HuggingFace 下载 MLX 权重（约 2GB，仅首次）…".to_string()
             } else {
-                "正在将 MLX 模型载入内存…".to_string()
+                "正在将 MLX 模型载入内存（约 30–90 秒）…".to_string()
             }
         }
         InferenceBackend::Llama => {
             if elapsed_sec < 30 {
                 "正在启动 llama-server…".to_string()
             } else {
-                "正在将 GGUF 模型载入内存…".to_string()
+                "正在将 GGUF 模型载入内存（约 30–90 秒）…".to_string()
             }
         }
     };
@@ -45,6 +56,14 @@ pub fn emit_sidecar_load_progress(app: &AppHandle, backend: InferenceBackend, el
             backend: backend_label(backend).to_string(),
         },
     );
+}
+
+pub fn sidecar_health_ok_blocking(port: u16, backend: InferenceBackend) -> bool {
+    std::thread::spawn(move || {
+        tauri::async_runtime::block_on(sidecar_health_ok(port, backend))
+    })
+    .join()
+    .unwrap_or(false)
 }
 
 pub async fn sidecar_health_ok(port: u16, backend: InferenceBackend) -> bool {
@@ -78,6 +97,47 @@ async fn sidecar_health_response_ready(
     true
 }
 
+fn weights_on_disk(app: &AppHandle, backend: InferenceBackend) -> Result<bool, String> {
+    let settings = load_settings(app)?;
+    let cache = ModelCache::new(app)?;
+    let paths = cache.resolve(settings.model_path.as_deref());
+    let mlx = cache.resolve_mlx(
+        settings.mlx_model_path.as_deref(),
+        Some(settings.mlx_model_id.as_str()),
+    );
+    Ok(models_ready_for_backend(backend, &paths, &mlx))
+}
+
+pub fn format_mlx_sidecar_exit_error(tail: &str) -> String {
+    if tail.contains("address already in use") || tail.contains("[Errno 48]") {
+        return "推理服务端口被占用。请关闭其他 MiniVu 窗口后重试；若仍失败，可在终端执行：lsof -ti :18766 | xargs kill"
+            .to_string();
+    }
+    if tail.is_empty() {
+        return "MLX 推理进程已退出。请检查网络，或在「环境配置」中重新安装 MLX 引擎。".to_string();
+    }
+    "MLX 推理进程异常退出。请重试，或在「环境配置」中重新安装推理引擎。".to_string()
+}
+
+pub fn format_sidecar_load_timeout(backend: InferenceBackend, weights_on_disk: bool, tail: &str) -> String {
+    match backend {
+        InferenceBackend::Mlx if !weights_on_disk => {
+            "MLX 模型下载超时（约 2GB，仅首次）。请保持联网并重试，或在「模型文件」中手动下载。"
+                .to_string()
+        }
+        InferenceBackend::Mlx => {
+            if tail.contains("address already in use") {
+                return format_mlx_sidecar_exit_error(tail);
+            }
+            "MLX 模型载入超时（约 30–90 秒）。请稍后重试，或在「偏好设置」中关闭「后台预热模型」后再试。"
+                .to_string()
+        }
+        InferenceBackend::Llama => {
+            "GGUF 模型载入超时（首次约 30–90 秒）。请稍后重试。".to_string()
+        }
+    }
+}
+
 pub async fn wait_for_sidecar_ready(
     app: &AppHandle,
     port: u16,
@@ -85,6 +145,7 @@ pub async fn wait_for_sidecar_ready(
     cancel: &AtomicBool,
     sidecar: &SidecarState,
 ) -> Result<(), String> {
+    let weights_cached = weights_on_disk(app, backend)?;
     let client = Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
@@ -103,24 +164,23 @@ pub async fn wait_for_sidecar_ready(
             return Err("已取消".to_string());
         }
 
-        if let Ok(mut guard) = sidecar.lock() {
-            if !guard.is_child_alive() {
-                let tail = read_mlx_sidecar_log_tail(app, 8);
-                let message = if backend == InferenceBackend::Mlx {
-                    if tail.is_empty() {
-                        "MLX 推理进程已退出，请检查网络或在设置中重新安装 MLX 引擎。".to_string()
-                    } else {
-                        format!("MLX 推理进程已退出：{tail}")
-                    }
-                } else {
-                    "llama-server 进程已退出，请在环境配置中重新安装推理引擎。".to_string()
-                };
-                return Err(message);
+        let child_alive = {
+            let mut guard = lock_sidecar(sidecar);
+            guard.is_child_alive()
+        };
+        if !child_alive {
+            let tail = read_mlx_sidecar_log_tail(app, 8);
+            if backend == InferenceBackend::Mlx {
+                eprintln!("MLX sidecar exit log:\n{tail}");
+                return Err(format_mlx_sidecar_exit_error(&tail));
             }
+            return Err(
+                "llama-server 进程已退出。请在「环境配置」中重新安装推理引擎。".to_string(),
+            );
         }
 
         if last_progress_emit.elapsed() >= Duration::from_secs(1) {
-            emit_sidecar_load_progress(app, backend, started.elapsed().as_secs());
+            emit_sidecar_load_progress(app, backend, started.elapsed().as_secs(), weights_cached);
             last_progress_emit = Instant::now();
         }
 
@@ -136,16 +196,8 @@ pub async fn wait_for_sidecar_ready(
     }
 
     let tail = read_mlx_sidecar_log_tail(app, 6);
-    if backend == InferenceBackend::Mlx {
-        if tail.is_empty() {
-            return Err(
-                "MLX 模型加载超时（首次需下载约 2GB，请保持联网并重试）".to_string(),
-            );
-        }
-        return Err(format!(
-            "MLX 模型加载超时（首次下载可能较慢）。最近日志：{tail}"
-        ));
+    if !tail.is_empty() {
+        eprintln!("MLX sidecar timeout log:\n{tail}");
     }
-
-    Err("模型加载超时（首次载入约需 30–90 秒），请稍后重试".to_string())
+    Err(format_sidecar_load_timeout(backend, weights_cached, &tail))
 }

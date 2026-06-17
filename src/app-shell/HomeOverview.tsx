@@ -18,6 +18,8 @@ type ModelStatus = {
 type HomeOverviewProps = {
   modelReady: boolean;
   onOpenSetup: () => void;
+  onOpenModel: () => void;
+  onOpenSettings: () => void;
 };
 
 function runtimeLabel(status: ModelStatus | null) {
@@ -35,15 +37,15 @@ const STATUS_ITEMS = [
     pick: (s: ModelStatus | null) =>
       s?.inferenceBackend === "mlx"
         ? s.mlxModelReady
-          ? "首次识图下载"
+          ? "已就绪"
           : "未下载"
         : s?.modelDownloaded
           ? "已下载"
           : "未下载",
   },
   {
-    key: "mmproj",
-    label: "后端",
+    key: "backend",
+    label: "推理后端",
     pick: (s: ModelStatus | null) => s?.activeBackend ?? (s?.inferenceBackend === "mlx" ? "MLX" : "llama.cpp"),
   },
   { key: "sidecar", label: "推理进程", pick: (s: ModelStatus | null) => (s?.sidecarRunning ? "运行中" : "空闲") },
@@ -69,103 +71,174 @@ function formatShortcut(shortcut: string) {
 function isPositive(value: string) {
   return (
     value === "已下载" ||
+    value === "已就绪" ||
     value === "可用" ||
     value === "MLX 可用" ||
-    value === "MLX 已就绪" ||
     value === "运行中"
   );
 }
 
-export function HomeOverview({ modelReady, onOpenSetup }: HomeOverviewProps) {
+export function HomeOverview({
+  modelReady,
+  onOpenSetup,
+  onOpenModel,
+  onOpenSettings,
+}: HomeOverviewProps) {
   const [shortcut, setShortcut] = useState("Control+Option+Space");
   const [status, setStatus] = useState<ModelStatus | null>(null);
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
 
   useEffect(() => {
     void loadSettings().then((settings) => setShortcut(settings.shortcut));
-    void invoke<ModelStatus>("get_model_status").then(setStatus);
-    void invoke<DeviceInfo>("get_device_info").then(setDeviceInfo);
-  }, []);
+    const timer = window.setTimeout(() => {
+      void invoke<ModelStatus>("get_model_status").then(setStatus);
+      void invoke<DeviceInfo>("get_device_info").then(setDeviceInfo);
+    }, 100);
+    return () => window.clearTimeout(timer);
+  }, [modelReady]);
 
   async function openQuickPanel() {
     await invoke("show_quick_panel");
   }
 
+  const readyCount = STATUS_ITEMS.filter((item) => isPositive(item.pick(status))).length;
+
   return (
     <div className="settings-page settings-page--home">
-      <header className="settings-page-header reveal">
-        <div className="section-label">
-          <span className="section-label__dot" aria-hidden="true" />
-          <span className="section-label__text">本地识图</span>
+      <header className="home-hero-header reveal">
+        <div>
+          <h1>本地识图，随时问答</h1>
+          <p>
+            {modelReady ? (
+              <>
+                按 <strong>{formatShortcut(shortcut)}</strong> 唤起识图面板，截图或粘贴图片即可提问
+              </>
+            ) : (
+              "完成环境配置后，即可在本机进行视觉问答"
+            )}
+          </p>
         </div>
-        <h1>
-          <span className="settings-page-header__title-wrap">
-            本地识图，<span className="gradient-text">即时问答</span>
-            <span className="settings-page-header__underline" aria-hidden="true" />
-          </span>
-        </h1>
-        <p>
-          {modelReady
-            ? <>按 <strong>{formatShortcut(shortcut)}</strong> 随时唤起识图面板</>
-            : "完成环境配置后即可开始使用"}
-        </p>
+        {modelReady ? (
+          <button type="button" className="settings-btn settings-btn--primary" onClick={() => void openQuickPanel()}>
+            打开识图面板
+          </button>
+        ) : (
+          <button type="button" className="settings-btn settings-btn--primary" onClick={onOpenSetup}>
+            开始配置
+          </button>
+        )}
       </header>
 
       {!modelReady ? (
-        <div className="callout callout--attention" role="status">
-          <p>推理环境尚未就绪，需要先安装推理引擎并下载视觉模型。</p>
-          <button type="button" className="callout__action" onClick={onOpenSetup}>
-            开始配置
+        <div className="ui-card ui-card--notice reveal reveal--1" role="status">
+          <div>
+            <p className="ui-card__title">环境尚未就绪</p>
+            <p className="ui-card__desc">需要先安装推理引擎并下载视觉模型（约 2 GB）。</p>
+          </div>
+          <button type="button" className="settings-btn settings-btn--secondary" onClick={onOpenSetup}>
+            去配置
           </button>
         </div>
       ) : null}
 
-      <section className="surface surface--elevated home-panel reveal reveal--1" aria-label="概览">
-        <div className="home-panel__head">
-          <div>
-            <p className="home-panel__eyebrow">当前状态</p>
-            <p className="home-panel__title">{modelReady ? "可以开始识图" : "等待环境配置"}</p>
+      <div className="home-dashboard reveal reveal--1">
+        <section className="ui-card ui-card--hero" aria-label="使用概览">
+          <div className="ui-card__top">
+            <div>
+              <p className="ui-card__eyebrow">当前状态</p>
+              <p className="ui-card__headline">{modelReady ? "可以开始识图" : "等待环境配置"}</p>
+            </div>
+            <span className={`status-chip${modelReady ? " is-ready" : ""}`}>
+              <span className="status-chip__dot" aria-hidden="true" />
+              {modelReady ? "已就绪" : "未就绪"}
+            </span>
           </div>
-          <span className={`status-chip${modelReady ? " is-ready" : ""}`}>
-            <span className="status-chip__dot" aria-hidden="true" />
-            {modelReady ? "已就绪" : "未就绪"}
-          </span>
-        </div>
 
-        <ul className="home-panel__metrics inverted-section">
+          <div className="home-hero-ring" aria-hidden="true">
+            <svg viewBox="0 0 120 120">
+              <circle cx="60" cy="60" r="52" className="home-hero-ring__track" />
+              <circle
+                cx="60"
+                cy="60"
+                r="52"
+                className="home-hero-ring__progress"
+                style={{ strokeDashoffset: `${327 - (327 * readyCount) / STATUS_ITEMS.length}` }}
+              />
+            </svg>
+            <div className="home-hero-ring__label">
+              <strong>{readyCount}</strong>
+              <span>/ {STATUS_ITEMS.length}</span>
+            </div>
+          </div>
+
+          <p className="ui-card__desc">
+            {modelReady
+              ? "图片与对话仅保留在本机，仅在下载模型时使用网络。"
+              : "配置完成后，识图与推理都在本地完成。"}
+          </p>
+
+          {modelReady ? (
+            <button type="button" className="ui-card__text-link" onClick={() => void openQuickPanel()}>
+              立即识图 →
+            </button>
+          ) : null}
+        </section>
+
+        <div className="home-stat-grid" aria-label="环境指标">
           {STATUS_ITEMS.map((item) => {
             const value = item.pick(status);
             return (
-              <li key={item.key}>
-                <span>{item.label}</span>
+              <article key={item.key} className="ui-card ui-card--stat">
+                <span className="ui-card__stat-label">{item.label}</span>
                 <strong className={isPositive(value) ? "is-positive" : undefined}>{value}</strong>
-              </li>
+              </article>
             );
           })}
-        </ul>
-
-        <div className="home-panel__cta">
-          {modelReady ? (
-            <button type="button" className="settings-btn settings-btn--primary" onClick={() => void openQuickPanel()}>
-              打开识图面板
-            </button>
-          ) : (
-            <button type="button" className="settings-btn settings-btn--primary" onClick={onOpenSetup}>
-              一键配置环境
-            </button>
-          )}
         </div>
 
-        <footer className="home-panel__meta">
-          <p>
-            {deviceInfo
-              ? `${deviceInfo.message} · ${deviceInfo.platform} · ${deviceInfo.memoryGb.toFixed(1)} GB`
-              : "正在读取设备信息…"}
-            {status?.modelSize ? ` · 模型 ${status.modelSize}` : ""}
-          </p>
-          <p>图片与对话仅保留在本机，仅在下载模型时使用网络。</p>
-        </footer>
-      </section>
+        <button type="button" className="ui-card ui-card--action" onClick={() => void openQuickPanel()} disabled={!modelReady}>
+          <span className="ui-card__action-icon" aria-hidden="true">
+            ⌘
+          </span>
+          <div>
+            <p className="ui-card__title">快捷识图</p>
+            <p className="ui-card__desc">
+              {modelReady ? formatShortcut(shortcut) : "完成配置后可用"}
+            </p>
+          </div>
+        </button>
+
+        <button type="button" className="ui-card ui-card--action ui-card--tint-blue" onClick={onOpenModel}>
+          <span className="ui-card__action-icon" aria-hidden="true">
+            ◫
+          </span>
+          <div>
+            <p className="ui-card__title">模型文件</p>
+            <p className="ui-card__desc">
+              {status?.modelSize ? `已占用 ${status.modelSize}` : "查看下载与管理"}
+            </p>
+          </div>
+        </button>
+
+        <button type="button" className="ui-card ui-card--action ui-card--tint-warm" onClick={onOpenSettings}>
+          <span className="ui-card__action-icon" aria-hidden="true">
+            ⚙
+          </span>
+          <div>
+            <p className="ui-card__title">偏好设置</p>
+            <p className="ui-card__desc">快捷键、预热与推理引擎</p>
+          </div>
+        </button>
+      </div>
+
+      <footer className="ui-card ui-card--footer reveal reveal--2">
+        <p>
+          {deviceInfo
+            ? `${deviceInfo.message} · ${deviceInfo.platform} · ${deviceInfo.memoryGb.toFixed(1)} GB`
+            : "正在读取设备信息…"}
+        </p>
+        <p className="ui-card__muted">MiniVu v0.1.0 · 数据不出本机</p>
+      </footer>
     </div>
   );
 }

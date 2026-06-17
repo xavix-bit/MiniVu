@@ -6,6 +6,7 @@ import {
   loadSettings,
   saveSettings,
   type AppSettings,
+  type InferenceBackend,
   type MirrorBenchmarkResponse,
   type MirrorId,
 } from "./settingsStore";
@@ -24,6 +25,10 @@ type DeviceInfo = {
 type SettingsPanelProps = {
   onSaved?: () => void;
 };
+
+function backendLabel(backend: InferenceBackend) {
+  return backend === "mlx" ? "MLX" : "llama.cpp";
+}
 
 const MIRROR_LABELS: Record<AppSettings["downloadMirror"], string> = {
   auto: "自动（失败时切换备用源）",
@@ -53,11 +58,16 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
   const [mlxInstallError, setMlxInstallError] = useState("");
   const [mlxDownloadError, setMlxDownloadError] = useState("");
   const [mlxDownloadPercent, setMlxDownloadPercent] = useState<number | null>(null);
+  const [savedBackend, setSavedBackend] = useState<AppSettings["inferenceBackend"]>("mlx");
 
   const isMlx = (settings.inferenceBackend ?? "mlx") === "mlx";
+  const backendDirty = (settings.inferenceBackend ?? "mlx") !== savedBackend;
 
   useEffect(() => {
-    void loadSettings().then(setSettings);
+    void loadSettings().then((loaded) => {
+      setSettings(loaded);
+      setSavedBackend(loaded.inferenceBackend ?? "mlx");
+    });
     void invoke<DeviceInfo>("get_device_info").then(setDeviceInfo);
 
     let unlisten: (() => void) | undefined;
@@ -82,8 +92,16 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
 
   async function handleSave(event: React.FormEvent) {
     event.preventDefault();
+    const previousBackend = savedBackend;
     await saveSettings(settings);
-    setSavedMessage("设置已保存");
+    setSavedBackend(settings.inferenceBackend ?? "mlx");
+    if (previousBackend !== (settings.inferenceBackend ?? "mlx")) {
+      setSavedMessage(
+        `推理后端已切换为 ${backendLabel(settings.inferenceBackend ?? "mlx")}。首次识图前请确认对应模型权重已下载。`,
+      );
+    } else {
+      setSavedMessage("设置已保存");
+    }
     onSaved?.();
   }
 
@@ -147,6 +165,7 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
       await saveSettings(settings);
       await invoke("download_mlx_model", { force: false });
       setSavedMessage("MLX 模型权重已下载");
+      onSaved?.();
     } catch (error) {
       setMlxDownloadError(String(error));
     } finally {
@@ -208,6 +227,7 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
               {isMlx
                 ? "MLX 使用原生 Unified Memory，识图通常更快。需先安装引擎并下载 MLX 权重（约 2 GB）。"
                 : "使用 GGUF 主模型 + mmproj，适合已有 6 GB 模型文件或需跨平台时。"}
+              {backendDirty ? " 修改后端后请点击页面底部「保存设置」才会生效。" : ""}
             </span>
           </label>
 
@@ -300,7 +320,7 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
         <label className="settings-field settings-field--checkbox">
           <input
             type="checkbox"
-            checked={settings.preloadModel ?? true}
+            checked={settings.preloadModel ?? false}
             onChange={(event) =>
               setSettings((current) => ({
                 ...current,
@@ -310,9 +330,11 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
           />
           <span>打开应用时后台预热模型</span>
           <span className="field-hint">
-            {isMlx
-              ? "启动后预载入 MLX 模型到内存，首次提问更快（约占用 2–3 GB）。"
-              : "启动后预载入 GGUF 模型到内存，首次提问更快（约占用 6 GB）。"}
+            {deviceInfo && deviceInfo.memoryGb < 16
+              ? "检测到内存低于 16 GB，建议保持关闭以节省内存。首次提问会载入模型（约 30–90 秒）。"
+              : isMlx
+                ? "开启后启动时后台载入 MLX 模型，首次提问更快，但打开应用会变慢并占用约 2–3 GB 内存。"
+                : "开启后启动时后台载入 GGUF 模型，首次提问更快，但打开应用会变慢并占用约 6 GB 内存。"}
           </span>
         </label>
       </section>

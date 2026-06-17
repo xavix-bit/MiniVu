@@ -22,6 +22,7 @@ export function ChatPanel() {
   const [capturing, setCapturing] = useState(false);
   const [loadProgress, setLoadProgress] = useState("");
   const [inferenceBackend, setInferenceBackend] = useState<"llama" | "mlx">("mlx");
+  const [mlxWeightsReady, setMlxWeightsReady] = useState(true);
   const [elapsed, setElapsed] = useState(0);
   const {
     state,
@@ -33,6 +34,9 @@ export function ChatPanel() {
     error,
     clearError,
     setImage,
+    pendingReplaceImage,
+    confirmReplaceImage,
+    cancelReplaceImage,
     ask,
     stopGeneration,
     clearConversation,
@@ -55,9 +59,12 @@ export function ChatPanel() {
   const banner = error || notice;
 
   useEffect(() => {
-    void invoke<{ inferenceBackend: "llama" | "mlx" }>("get_model_status").then((status) => {
-      setInferenceBackend(status.inferenceBackend ?? "mlx");
-    });
+    void invoke<{ inferenceBackend: "llama" | "mlx"; mlxModelReady: boolean }>("get_model_status").then(
+      (status) => {
+        setInferenceBackend(status.inferenceBackend ?? "mlx");
+        setMlxWeightsReady(status.mlxModelReady ?? false);
+      },
+    );
   }, []);
 
   useEffect(() => {
@@ -236,8 +243,10 @@ export function ChatPanel() {
         detail={
           waitingForModel
             ? inferenceBackend === "mlx"
-              ? `已等待 ${elapsed}s · 首次需下载约 2GB 并载入内存，请保持联网`
-              : `已等待 ${elapsed}s · 仅首次约 30–90s`
+              ? mlxWeightsReady
+                ? `已等待 ${elapsed}s · 正在载入模型到内存（约 30–90 秒）`
+                : `已等待 ${elapsed}s · 正在下载 MLX 权重（约 2GB，仅首次），请保持联网`
+              : `已等待 ${elapsed}s · 正在载入 GGUF 模型到内存（约 30–90 秒）`
             : inferPhase === "thinking" && !streamingText
               ? "模型已在内存，视觉推理需要几秒"
               : undefined
@@ -260,6 +269,24 @@ export function ChatPanel() {
           >
             ✕
           </button>
+        </div>
+      ) : null}
+
+      {pendingReplaceImage ? (
+        <div className="chat-banner chat-banner--confirm" role="dialog" aria-label="确认替换图片">
+          <span>替换图片将清空当前对话，是否继续？</span>
+          <div className="chat-banner__actions">
+            <button type="button" className="ghost-btn" onClick={() => cancelReplaceImage()}>
+              取消
+            </button>
+            <button
+              type="button"
+              className="settings-btn settings-btn--primary"
+              onClick={() => void confirmReplaceImage()}
+            >
+              继续
+            </button>
+          </div>
         </div>
       ) : null}
 

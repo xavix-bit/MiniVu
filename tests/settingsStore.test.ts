@@ -8,7 +8,7 @@ describe("settingsStore", () => {
     expect(settings.shortcut).toBe("Control+Option+Space");
     expect(settings.modelWarmMinutes).toBe(-1);
     expect(settings.theme).toBe("system");
-    expect(settings.preloadModel).toBe(true);
+    expect(settings.preloadModel).toBe(false);
     expect(settings.inferenceBackend).toBe("mlx");
     expect(settings.mlxModelId).toBe("mlx-community/MiniCPM-V-4.6-4bit");
     expect(settings.autoCheckModelUpdates).toBe(false);
