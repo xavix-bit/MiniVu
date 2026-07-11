@@ -8,6 +8,7 @@ mod inference_profile;
 mod mirror_benchmark;
 mod model_cache;
 mod model_download;
+mod model_lifecycle;
 mod model_sidecar;
 mod ocr_macos;
 mod platform_caps;
@@ -38,6 +39,7 @@ pub fn run() {
         .manage(init_sidecar_state())
         .manage(init_generation_flag())
         .manage(model_download::DownloadTaskState::default())
+        .manage(model_lifecycle::ModelLifecycleState::default())
         .manage(Mutex::new(window::QuickPanelState::default()))
         .setup(|app| {
             tray::create_tray(app.handle())?;
@@ -70,6 +72,8 @@ pub fn run() {
             model_download::download_model,
             model_download::get_model_download_status,
             model_download::cancel_model_download,
+            model_lifecycle::install_gguf_model,
+            model_lifecycle::remove_installed_models,
             model_download::download_mlx_model,
             mirror_benchmark::benchmark_download_mirrors,
             model_sidecar::ask_image,

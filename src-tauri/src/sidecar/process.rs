@@ -1,5 +1,5 @@
 use crate::inference::backends::{backend_for, port_for};
-use crate::inference::context::ActiveInferenceContext;
+use crate::inference::context::{ActiveInferenceContext, SidecarIdentity};
 use crate::inference_backend::sidecar_port;
 use crate::settings::InferenceBackend;
 use std::net::TcpListener;
@@ -12,8 +12,9 @@ pub struct ModelSidecar {
     pub port: u16,
     child: Option<Child>,
     last_used: Mutex<Option<Instant>>,
-    service_ready: Mutex<bool>,
-    active_backend: Mutex<Option<InferenceBackend>>,
+    active_identity: Option<SidecarIdentity>,
+    generation: u64,
+    ready_generation: Option<u64>,
 }
 
 impl ModelSidecar {
@@ -22,32 +23,37 @@ impl ModelSidecar {
             port,
             child: None,
             last_used: Mutex::new(None),
-            service_ready: Mutex::new(false),
-            active_backend: Mutex::new(None),
+            active_identity: None,
+            generation: 0,
+            ready_generation: None,
         }
     }
 
-    fn active_backend(&self) -> Option<InferenceBackend> {
-        self.active_backend.lock().ok().and_then(|guard| *guard)
+    pub fn active_identity(&self) -> Option<&SidecarIdentity> {
+        self.active_identity.as_ref()
     }
 
-    fn set_active_backend(&self, backend: Option<InferenceBackend>) {
-        if let Ok(mut guard) = self.active_backend.lock() {
-            *guard = backend;
+    pub fn generation(&self) -> Option<u64> {
+        self.active_identity.as_ref().map(|_| self.generation)
+    }
+
+    pub fn set_service_ready(&mut self, generation: u64, ready: bool) -> bool {
+        if self.generation != generation || self.active_identity.is_none() {
+            return false;
         }
+        self.ready_generation = ready.then_some(generation);
+        true
     }
 
-    pub fn set_service_ready(&self, ready: bool) {
-        if let Ok(mut guard) = self.service_ready.lock() {
-            *guard = ready;
-        }
+    pub fn is_service_ready(&self, generation: u64) -> bool {
+        self.ready_generation == Some(generation) && self.generation == generation
     }
 
-    pub fn is_service_ready(&self) -> bool {
-        self.service_ready
-            .lock()
-            .map(|guard| *guard)
-            .unwrap_or(false)
+    fn start_generation(&mut self, identity: SidecarIdentity) -> u64 {
+        self.generation = self.generation.wrapping_add(1).max(1);
+        self.active_identity = Some(identity);
+        self.ready_generation = None;
+        self.generation
     }
 
     pub fn is_running(&mut self) -> bool {
@@ -85,21 +91,31 @@ impl ModelSidecar {
             let _ = child.kill();
             let _ = child.wait();
         }
-        self.set_service_ready(false);
-        self.set_active_backend(None);
+        self.active_identity = None;
+        self.ready_generation = None;
+    }
+
+    pub fn stop_and_confirm(&mut self) -> Result<(), String> {
+        self.stop();
+        if self.is_running() {
+            Err("无法停止当前推理进程，请稍后重试。".to_string())
+        } else {
+            Ok(())
+        }
     }
 
     pub fn ensure_started(
         &mut self,
         app: &AppHandle,
         context: &ActiveInferenceContext,
-    ) -> Result<(), String> {
+    ) -> Result<u64, String> {
         let backend = context.backend;
         let desired_port = sidecar_port(backend);
+        let desired_identity = context.sidecar_identity();
 
         if self.is_running() {
-            if self.port == desired_port && self.active_backend() == Some(backend) {
-                return Ok(());
+            if self.port == desired_port && self.active_identity() == Some(&desired_identity) {
+                return Ok(self.generation);
             }
             self.stop();
         }
@@ -118,10 +134,7 @@ impl ModelSidecar {
         let launcher = backend_for(backend, context.paths.clone(), context.mlx.clone());
         let child = launcher.spawn(app, self.port)?;
         self.child = Some(child);
-
-        self.set_active_backend(Some(backend));
-        self.set_service_ready(false);
-        Ok(())
+        Ok(self.start_generation(desired_identity))
     }
 }
 
@@ -162,16 +175,59 @@ pub fn default_sidecar_port() -> u16 {
 #[cfg(test)]
 mod tests {
     use super::ModelSidecar;
-    use crate::inference::context::ActiveInferenceContext;
+    use crate::inference::context::{ActiveInferenceContext, SidecarIdentity};
+    use std::path::PathBuf;
     use tauri::AppHandle;
 
     #[test]
     fn startup_requires_a_resolved_inference_context() {
         fn assert_signature(
-            _: fn(&mut ModelSidecar, &AppHandle, &ActiveInferenceContext) -> Result<(), String>,
+            _: fn(&mut ModelSidecar, &AppHandle, &ActiveInferenceContext) -> Result<u64, String>,
         ) {
         }
 
         assert_signature(ModelSidecar::ensure_started);
+    }
+
+    #[test]
+    fn llama_identity_differs_when_model_path_differs() {
+        let first = SidecarIdentity::Llama {
+            model: PathBuf::from("/models/q4.gguf"),
+            mmproj: PathBuf::from("/models/mmproj.gguf"),
+        };
+        let second = SidecarIdentity::Llama {
+            model: PathBuf::from("/models/q5.gguf"),
+            mmproj: PathBuf::from("/models/mmproj.gguf"),
+        };
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn backend_is_part_of_sidecar_identity() {
+        let llama = SidecarIdentity::Llama {
+            model: PathBuf::from("model.gguf"),
+            mmproj: PathBuf::from("mmproj.gguf"),
+        };
+        let mlx = SidecarIdentity::Mlx {
+            spec: "model.gguf".to_string(),
+        };
+
+        assert_ne!(llama, mlx);
+    }
+
+    #[test]
+    fn stale_generation_cannot_mark_new_process_ready() {
+        let mut sidecar = ModelSidecar::new(18765);
+        let old = sidecar.start_generation(SidecarIdentity::Mlx {
+            spec: "old/model".to_string(),
+        });
+        let new = sidecar.start_generation(SidecarIdentity::Mlx {
+            spec: "new/model".to_string(),
+        });
+
+        assert!(!sidecar.set_service_ready(old, true));
+        assert!(!sidecar.is_service_ready(old));
+        assert!(sidecar.set_service_ready(new, true));
+        assert!(sidecar.is_service_ready(new));
     }
 }

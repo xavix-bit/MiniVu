@@ -1,8 +1,10 @@
+use crate::model_lifecycle::ModelLifecycleState;
 use crate::settings::{
     load_settings, save_app_settings as persist_app_settings, AppSettings, SettingsSaveIntent,
 };
 use crate::sidecar::on_settings_saved;
 use serde::Serialize;
+use tauri::State;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,9 +24,11 @@ pub fn load_app_settings(app: tauri::AppHandle) -> Result<AppSettings, String> {
 #[tauri::command]
 pub fn save_app_settings(
     app: tauri::AppHandle,
+    lifecycle: State<'_, ModelLifecycleState>,
     settings: AppSettings,
     intent: Option<SettingsSaveIntent>,
 ) -> Result<(), String> {
+    let _mutation = lifecycle.begin_mutation()?;
     let settings = persist_app_settings(&app, settings, intent.unwrap_or_default())?;
     crate::shortcut::register_shortcut(&app, &settings.shortcut)?;
     on_settings_saved(&app);

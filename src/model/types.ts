@@ -30,6 +30,14 @@ export type ModelStatusResponse = {
   mlxRequiresNetwork: boolean;
 };
 
+/** 模型安装、切换或删除后的真实磁盘状态。 */
+export type ModelMutationResult = {
+  activeVariant: GgufModelVariant;
+  modelStorageBytes: number;
+  cleanupWarning: string | null;
+  inventory: GgufVariantInventory[];
+};
+
 /** 与 Rust `EnvironmentStatus` 对齐；环境是否可正常使用的单一判定来源。 */
 export type EnvironmentStatus = {
   onboardingComplete: boolean;

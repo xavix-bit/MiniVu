@@ -82,6 +82,14 @@ pub struct FinalizationLease {
 }
 
 impl DownloadTaskState {
+    pub fn is_active(&self) -> bool {
+        self.inner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .active
+            .is_some()
+    }
+
     pub fn begin(&self, variant: GgufModelVariant) -> Result<DownloadTaskGuard, String> {
         let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(active) = &inner.active {

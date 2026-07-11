@@ -4,6 +4,7 @@ use crate::inference::{
 };
 use crate::inference_backend::{backend_label, mlx_runtime_ready, resolve_active_backend};
 use crate::model_cache::{GgufVariantInventory, ModelCache};
+use crate::model_lifecycle::ModelLifecycleState;
 use crate::runtime_installer::resolve_llama_server;
 use crate::settings::{load_settings, GgufModelVariant, InferenceBackend};
 use crate::sidecar::lifecycle::warmup_model_for_user_image;
@@ -101,11 +102,13 @@ pub async fn ask_image(
     app: AppHandle,
     sidecar: tauri::State<'_, SidecarState>,
     cancel: tauri::State<'_, GenerationFlag>,
+    lifecycle: tauri::State<'_, ModelLifecycleState>,
     image_data_url: String,
     ocr_text: String,
     prompt: String,
     history: Vec<HistoryMessage>,
 ) -> Result<(), String> {
+    let _inference = lifecycle.begin_inference()?;
     let cancel_flag = cancel.inner().clone();
     cancel_flag.store(false, Ordering::SeqCst);
     run_ask_image(
@@ -134,10 +137,17 @@ pub async fn warmup_model(
 pub fn unload_model_if_idle(
     app: AppHandle,
     sidecar: tauri::State<SidecarState>,
+    lifecycle: tauri::State<ModelLifecycleState>,
 ) -> Result<(), String> {
     let settings = load_settings(&app)?;
-    let mut guard = lock_sidecar(sidecar.inner());
+    let guard = lock_sidecar(sidecar.inner());
     if guard.should_unload(settings.model_warm_minutes) {
+        drop(guard);
+        let _mutation = lifecycle.begin_mutation()?;
+        let mut guard = lock_sidecar(sidecar.inner());
+        if !guard.should_unload(settings.model_warm_minutes) {
+            return Ok(());
+        }
         guard.stop();
     }
     Ok(())

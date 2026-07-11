@@ -4,6 +4,17 @@ use crate::model_cache::{MlxModelRef, ModelCache, ModelPaths};
 use crate::settings::{load_settings, AppSettings, InferenceBackend};
 use tauri::AppHandle;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SidecarIdentity {
+    Llama {
+        model: std::path::PathBuf,
+        mmproj: std::path::PathBuf,
+    },
+    Mlx {
+        spec: String,
+    },
+}
+
 /// 当前活跃推理后端的模型路径与就绪状态（settings + ModelCache 解析的单一入口）。
 pub struct ActiveInferenceContext {
     pub backend: InferenceBackend,
@@ -13,6 +24,18 @@ pub struct ActiveInferenceContext {
 }
 
 impl ActiveInferenceContext {
+    pub fn sidecar_identity(&self) -> SidecarIdentity {
+        match self.backend {
+            InferenceBackend::Llama => SidecarIdentity::Llama {
+                model: self.paths.model.clone(),
+                mmproj: self.paths.mmproj.clone(),
+            },
+            InferenceBackend::Mlx => SidecarIdentity::Mlx {
+                spec: self.mlx.spec.clone(),
+            },
+        }
+    }
+
     pub fn load(app: &AppHandle) -> Result<Self, String> {
         let settings = load_settings(app)?;
         let cache = ModelCache::new(app)?;

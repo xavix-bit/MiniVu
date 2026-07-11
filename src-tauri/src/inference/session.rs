@@ -38,14 +38,13 @@ async fn ensure_sidecar_ready(
     context: &ActiveInferenceContext,
     cancel_flag: &GenerationFlag,
 ) -> Result<(u16, bool), String> {
-    {
+    let generation = {
         let mut guard = lock_sidecar(sidecar);
         guard.touch();
-        guard.ensure_started(app, context)?;
-    }
-
+        guard.ensure_started(app, context)?
+    };
     let port = lock_sidecar(sidecar).port;
-    let sidecar_warm = lock_sidecar(sidecar).is_service_ready();
+    let sidecar_warm = lock_sidecar(sidecar).is_service_ready(generation);
     let skip_load_wait = sidecar_warm && sidecar_health_ok(port, context.backend).await;
 
     if skip_load_wait {
@@ -53,12 +52,19 @@ async fn ensure_sidecar_ready(
     }
 
     if sidecar_warm {
-        lock_sidecar(sidecar).set_service_ready(false);
+        lock_sidecar(sidecar).set_service_ready(generation, false);
     }
 
     let sidecar_state = sidecar.clone();
-    if let Err(error) =
-        wait_for_sidecar_ready(app, port, context.backend, cancel_flag, &sidecar_state).await
+    if let Err(error) = wait_for_sidecar_ready(
+        app,
+        port,
+        context.backend,
+        generation,
+        cancel_flag,
+        &sidecar_state,
+    )
+    .await
     {
         if cancel_flag.load(Ordering::SeqCst) {
             emit_chunk(app, "", true)?;
@@ -67,7 +73,9 @@ async fn ensure_sidecar_ready(
         return Err(error);
     }
 
-    lock_sidecar(sidecar).set_service_ready(true);
+    if !lock_sidecar(sidecar).set_service_ready(generation, true) {
+        return Err("模型已切换，请重试。".to_string());
+    }
     Ok((port, sidecar_warm))
 }
 
@@ -143,7 +151,9 @@ pub async fn run_ask_image(
 
         let mut guard = lock_sidecar(sidecar);
         if !guard.is_running() {
-            guard.set_service_ready(false);
+            if let Some(generation) = guard.generation() {
+                guard.set_service_ready(generation, false);
+            }
         }
         return Err(error);
     }

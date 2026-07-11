@@ -2,6 +2,7 @@ use super::{lock_sidecar, SidecarState};
 use crate::inference::context::ActiveInferenceContext;
 use crate::inference::{sidecar_health_ok, wait_for_sidecar_ready};
 use crate::model_cache::ModelCache;
+use crate::model_lifecycle::ModelLifecycleState;
 use crate::settings::load_settings;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
@@ -46,6 +47,14 @@ pub fn spawn_idle_unloader(app: AppHandle) {
                 Ok(value) => value,
                 Err(_) => continue,
             };
+            let should_unload = lock_sidecar(&sidecar).should_unload(settings.model_warm_minutes);
+            if !should_unload {
+                continue;
+            }
+            let lifecycle = app.state::<ModelLifecycleState>();
+            let Ok(_mutation) = lifecycle.begin_mutation() else {
+                continue;
+            };
             let mut guard = lock_sidecar(&sidecar);
             if guard.should_unload(settings.model_warm_minutes) {
                 guard.stop();
@@ -59,6 +68,8 @@ async fn warmup_model_inner(
     sidecar: &SidecarState,
     policy: fn(bool, bool) -> bool,
 ) -> Result<(), String> {
+    let lifecycle = app.state::<ModelLifecycleState>();
+    let _inference = lifecycle.begin_inference()?;
     let settings = load_settings(app)?;
     let cache = ModelCache::new(app)?;
     let ctx = ActiveInferenceContext::from_parts(app, &settings, &cache)?;
@@ -66,21 +77,25 @@ async fn warmup_model_inner(
         return Ok(());
     }
 
-    let port = {
+    let (port, generation) = {
         let mut guard = lock_sidecar(sidecar);
         guard.touch();
-        guard.ensure_started(app, &ctx)?;
-        guard.port
+        let generation = guard.ensure_started(app, &ctx)?;
+        (guard.port, generation)
     };
 
-    if lock_sidecar(sidecar).is_service_ready() && sidecar_health_ok(port, ctx.backend).await {
+    if lock_sidecar(sidecar).is_service_ready(generation)
+        && sidecar_health_ok(port, ctx.backend).await
+    {
         return Ok(());
     }
 
     let cancel = AtomicBool::new(false);
     let sidecar_state = sidecar.clone();
-    wait_for_sidecar_ready(app, port, ctx.backend, &cancel, &sidecar_state).await?;
-    lock_sidecar(sidecar).set_service_ready(true);
+    wait_for_sidecar_ready(app, port, ctx.backend, generation, &cancel, &sidecar_state).await?;
+    if !lock_sidecar(sidecar).set_service_ready(generation, true) {
+        return Err("模型已切换，请重试。".to_string());
+    }
     Ok(())
 }
 

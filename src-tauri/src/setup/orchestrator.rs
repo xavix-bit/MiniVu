@@ -19,7 +19,9 @@ pub struct SetupEnvironmentResult {
 pub async fn setup_environment(app: AppHandle) -> Result<SetupEnvironmentResult, String> {
     use crate::commands::get_device_info;
     use crate::model_cache::ModelCache;
-    use crate::model_download::{download_mlx_model, download_model_for_setup, DownloadTaskState};
+    use crate::model_download::{download_mlx_model_inner, DownloadTaskState};
+    use crate::model_lifecycle::{install_gguf_model_inner, ModelLifecycleState};
+    use crate::sidecar::SidecarState;
 
     emit_setup_progress(&app, "device", "running", "正在检测本机配置…", 0);
     let device = get_device_info();
@@ -56,14 +58,26 @@ pub async fn setup_environment(app: AppHandle) -> Result<SetupEnvironmentResult,
         );
         emit_setup_progress(&app, "mmproj", "waiting", "等待主模型完成后开始…", 0);
         let download_state = app.state::<DownloadTaskState>();
-        download_model_for_setup(app.clone(), download_state.inner(), None).await?;
+        let lifecycle = app.state::<ModelLifecycleState>();
+        let sidecar = app.state::<SidecarState>();
+        install_gguf_model_inner(
+            app.clone(),
+            sidecar.inner(),
+            download_state.inner(),
+            lifecycle.inner(),
+            settings.gguf_model_variant,
+            false,
+        )
+        .await?;
         emit_setup_progress(&app, "mmproj", "done", "视觉投影已下载", 100);
         emit_setup_progress(&app, "model", "done", "主模型已下载", 100);
     } else if backend == InferenceBackend::Mlx {
         if !mlx.is_ready() {
             emit_setup_progress(&app, "model", "running", "正在下载 MLX 模型权重…", 0);
             emit_setup_progress(&app, "mmproj", "waiting", "MLX 模式无需 mmproj", 0);
-            download_mlx_model(app.clone(), None).await?;
+            let lifecycle = app.state::<ModelLifecycleState>();
+            let _mutation = lifecycle.begin_mutation()?;
+            download_mlx_model_inner(app.clone(), None).await?;
         } else {
             emit_setup_progress(&app, "model", "done", "MLX 模型已下载", 100);
             emit_setup_progress(&app, "mmproj", "done", "MLX 模式无需 mmproj", 100);

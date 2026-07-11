@@ -134,6 +134,7 @@ pub async fn wait_for_sidecar_ready(
     app: &AppHandle,
     port: u16,
     backend: InferenceBackend,
+    generation: u64,
     cancel: &AtomicBool,
     sidecar: &SidecarState,
 ) -> Result<(), String> {
@@ -158,6 +159,9 @@ pub async fn wait_for_sidecar_ready(
 
         let child_alive = {
             let mut guard = lock_sidecar(sidecar);
+            if guard.generation() != Some(generation) {
+                return Err("模型已切换，请重试。".to_string());
+            }
             guard.is_child_alive()
         };
         if !child_alive {
