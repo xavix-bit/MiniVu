@@ -1,5 +1,5 @@
 use crate::download_http::{build_http_client, with_download_headers};
-use crate::model_cache::ModelCache;
+use crate::model_cache::{managed_file_is_valid, ModelCache};
 use crate::model_download::progress::emit_download_progress;
 use crate::runtime_installer::emit_setup_progress;
 use crate::settings::{load_settings, DownloadMirror, MirrorId};
@@ -190,17 +190,8 @@ async fn finalize_part_file(
     dest: &Path,
     expected_bytes: u64,
 ) -> Result<u64, String> {
-    let part_bytes = tokio::fs::metadata(part_path)
-        .await
-        .map_err(|e| e.to_string())?
-        .len();
-    if !crate::model_cache::is_complete_size(expected_bytes, part_bytes) {
-        let expected = crate::model_cache::format_bytes(expected_bytes);
-        return Err(format!(
-            "文件不完整（{} / 预期 {}）",
-            crate::model_cache::format_bytes(part_bytes),
-            expected
-        ));
+    if !managed_file_is_valid(part_path, expected_bytes) {
+        return Err("文件无效（需要常规文件、精确大小和 GGUF 文件头）".to_string());
     }
     if dest.exists() {
         tokio::fs::remove_file(dest).await.ok();
@@ -208,7 +199,7 @@ async fn finalize_part_file(
     tokio::fs::rename(part_path, dest)
         .await
         .map_err(|e| format!("保存文件失败: {e}"))?;
-    Ok(part_bytes)
+    Ok(expected_bytes)
 }
 
 async fn download_file(
@@ -227,23 +218,19 @@ async fn download_file(
         tokio::fs::remove_file(dest).await.ok();
         tokio::fs::remove_file(&part_path).await.ok();
     } else if dest.exists() {
-        let final_bytes = tokio::fs::metadata(dest)
-            .await
-            .map_err(|e| e.to_string())?
-            .len();
-        if crate::model_cache::is_complete_size(expected_bytes, final_bytes) {
+        if managed_file_is_valid(dest, expected_bytes) {
             tokio::fs::remove_file(&part_path).await.ok();
             emit_download_progress(
                 app,
                 label,
                 source_name,
-                final_bytes,
-                Some(final_bytes),
+                expected_bytes,
+                Some(expected_bytes),
                 None,
                 "done",
                 Some("已存在，跳过下载"),
             );
-            return Ok(final_bytes);
+            return Ok(expected_bytes);
         }
         tokio::fs::remove_file(dest).await.ok();
         tokio::fs::remove_file(&part_path).await.ok();
@@ -430,4 +417,49 @@ async fn download_file(
     );
 
     Ok(final_bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::{self, File};
+    use std::io::Write;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(test_name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after Unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "minivu-download-{test_name}-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path).expect("temp directory should be created");
+        path
+    }
+
+    #[tokio::test]
+    async fn exact_size_wrong_magic_part_is_not_promoted() {
+        let root = temp_dir("wrong-magic-part");
+        let part_path = root.join("model.part");
+        let dest = root.join("model.gguf");
+        let expected_bytes = 64;
+        let mut part = File::create(&part_path).expect("part file should be created");
+        part.write_all(b"NOPE")
+            .expect("wrong magic should be written");
+        part.set_len(expected_bytes)
+            .expect("part file should have exact expected size");
+        drop(part);
+
+        let result = finalize_part_file(&part_path, &dest, expected_bytes).await;
+        let part_exists = part_path.exists();
+        let dest_exists = dest.exists();
+        fs::remove_dir_all(root).expect("temp directory should be removed");
+
+        assert!(result.is_err());
+        assert!(part_exists);
+        assert!(!dest_exists);
+    }
 }

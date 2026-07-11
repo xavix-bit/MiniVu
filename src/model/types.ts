@@ -1,6 +1,15 @@
 /** 与 Rust `ModelStatusResponse` 对齐；运维/调试详情（侧车、路径、后端细项）。 */
 import type { GgufModelVariant } from "../settings/settingsStore";
 
+export type GgufVariantInventory = {
+  variant: GgufModelVariant;
+  installed: boolean;
+  installedBytes: number;
+  partialBytes: number;
+  expectedBytes: number;
+  active: boolean;
+};
+
 export type ModelStatusResponse = {
   modelReady: boolean;
   modelDownloaded: boolean;
@@ -12,6 +21,8 @@ export type ModelStatusResponse = {
   llamaServerAvailable: boolean;
   inferenceBackend: "llama" | "mlx";
   ggufModelVariant: GgufModelVariant;
+  ggufVariants: GgufVariantInventory[];
+  modelStorageBytes: number;
   activeBackend: string;
   mlxRuntimeAvailable: boolean;
   mlxModelId: string;

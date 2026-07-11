@@ -193,17 +193,11 @@ pub fn is_complete_size(expected: u64, bytes: u64) -> bool {
     bytes == expected
 }
 
-pub fn file_is_valid(path: &std::path::Path, label: &str) -> bool {
+pub fn managed_file_is_valid(path: &Path, expected_bytes: u64) -> bool {
     let Ok(meta) = fs::symlink_metadata(path) else {
         return false;
     };
-    if !meta.file_type().is_file() {
-        return false;
-    }
-    let size_valid = expected_bytes_for_path(path, label)
-        .map(|expected| is_complete_size(expected, meta.len()))
-        .unwrap_or(meta.len() > 0);
-    if !size_valid {
+    if !meta.file_type().is_file() || !is_complete_size(expected_bytes, meta.len()) {
         return false;
     }
 
@@ -211,6 +205,12 @@ pub fn file_is_valid(path: &std::path::Path, label: &str) -> bool {
     fs::File::open(path)
         .and_then(|mut file| file.read_exact(&mut magic))
         .map(|()| magic == *GGUF_MAGIC)
+        .unwrap_or(false)
+}
+
+pub fn file_is_valid(path: &Path, label: &str) -> bool {
+    expected_bytes_for_path(path, label)
+        .map(|expected| managed_file_is_valid(path, expected))
         .unwrap_or(false)
 }
 
@@ -299,10 +299,11 @@ impl ModelCache {
             .iter()
             .map(|spec| {
                 let model_path = self.root.join(spec.filename);
+                let final_bytes = regular_file_bytes(&model_path);
                 let installed = file_is_valid(&model_path, "model");
-                let installed_bytes = if installed { spec.model_bytes } else { 0 };
+                let installed_bytes = if installed { final_bytes } else { 0 };
                 let partial_bytes = regular_file_bytes(&model_path.with_extension("part"));
-                model_storage_bytes += installed_bytes + partial_bytes;
+                model_storage_bytes += final_bytes + partial_bytes;
 
                 GgufVariantInventory {
                     variant: spec.variant,
@@ -316,9 +317,7 @@ impl ModelCache {
             .collect();
 
         let mmproj_path = self.default_mmproj_path();
-        if file_is_valid(&mmproj_path, "mmproj") {
-            model_storage_bytes += EXPECTED_MMPROJ_BYTES;
-        }
+        model_storage_bytes += regular_file_bytes(&mmproj_path);
         model_storage_bytes += regular_file_bytes(&mmproj_path.with_extension("part"));
 
         ManagedModelInventory {
@@ -569,6 +568,22 @@ mod tests {
             inventory.model_storage_bytes,
             installed_spec.model_bytes + 123 + EXPECTED_MMPROJ_BYTES + 456
         );
+
+        fs::remove_dir_all(root).expect("temp directory should be removed");
+    }
+
+    #[test]
+    fn inventory_counts_actual_bytes_for_corrupt_known_final_files() {
+        let root = temp_dir("corrupt-storage");
+        let spec = &GGUF_MODEL_SPECS[0];
+        write_sparse_file(&root.join(spec.filename), 17, b"NOPE");
+        write_sparse_file(&root.join(DEFAULT_MMPROJ_FILENAME), 23, b"NOPE");
+
+        let inventory = ModelCache { root: root.clone() }.inventory(GgufModelVariant::Q4KM);
+
+        assert!(!inventory.gguf_variants[0].installed);
+        assert_eq!(inventory.gguf_variants[0].installed_bytes, 0);
+        assert_eq!(inventory.model_storage_bytes, 40);
 
         fs::remove_dir_all(root).expect("temp directory should be removed");
     }
