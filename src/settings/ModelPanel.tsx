@@ -195,7 +195,10 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
     });
     try {
       const settings = await loadSettings();
-      await saveSettings({ ...settings, ggufModelVariant: selectedVariant });
+      await saveSettings(
+        { ...settings, ggufModelVariant: selectedVariant },
+        "modelVariant",
+      );
       await invoke<string>("download_model", { force: true });
       const expectedBytes = expectedGgufBytesForVariant(selectedVariant);
       setFileProgress({
@@ -221,7 +224,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
     setDownloadError("");
     try {
       const settings = await loadSettings();
-      await saveSettings({ ...settings, ggufModelVariant: variant });
+      await saveSettings({ ...settings, ggufModelVariant: variant }, "modelVariant");
       setFileProgress(createIdleProgress());
       await refresh();
       onStatusChange?.();

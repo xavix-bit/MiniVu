@@ -191,6 +191,15 @@ async fn finalize_part_file(
     expected_bytes: u64,
 ) -> Result<u64, String> {
     if !managed_file_is_valid(part_path, expected_bytes) {
+        let should_remove = tokio::fs::symlink_metadata(part_path)
+            .await
+            .map(|meta| !meta.file_type().is_file() || meta.len() >= expected_bytes)
+            .unwrap_or(false);
+        if should_remove {
+            tokio::fs::remove_file(part_path)
+                .await
+                .map_err(|e| format!("删除损坏文件失败: {e}"))?;
+        }
         return Err("文件无效（需要常规文件、精确大小和 GGUF 文件头）".to_string());
     }
     if dest.exists() {
@@ -441,7 +450,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exact_size_wrong_magic_part_is_not_promoted() {
+    async fn exact_size_wrong_magic_part_is_removed_and_retry_can_promote() {
         let root = temp_dir("wrong-magic-part");
         let part_path = root.join("model.part");
         let dest = root.join("model.gguf");
@@ -454,12 +463,51 @@ mod tests {
         drop(part);
 
         let result = finalize_part_file(&part_path, &dest, expected_bytes).await;
-        let part_exists = part_path.exists();
-        let dest_exists = dest.exists();
+        let invalid_part_removed = !part_path.exists();
+        let invalid_dest_absent = !dest.exists();
+        let retry_promoted = if invalid_part_removed {
+            let mut retry_part = File::create(&part_path).expect("retry part should be created");
+            retry_part
+                .write_all(b"GGUF")
+                .expect("valid magic should be written");
+            retry_part
+                .set_len(expected_bytes)
+                .expect("retry part should have exact expected size");
+            drop(retry_part);
+            finalize_part_file(&part_path, &dest, expected_bytes)
+                .await
+                .is_ok()
+                && managed_file_is_valid(&dest, expected_bytes)
+        } else {
+            false
+        };
         fs::remove_dir_all(root).expect("temp directory should be removed");
 
         assert!(result.is_err());
-        assert!(part_exists);
-        assert!(!dest_exists);
+        assert!(invalid_part_removed);
+        assert!(invalid_dest_absent);
+        assert!(retry_promoted);
+    }
+
+    #[tokio::test]
+    async fn incomplete_regular_part_is_preserved_for_resume() {
+        let root = temp_dir("incomplete-part");
+        let part_path = root.join("model.part");
+        let dest = root.join("model.gguf");
+        let mut part = File::create(&part_path).expect("part file should be created");
+        part.write_all(b"GGUF")
+            .expect("valid magic should be written");
+        part.set_len(32)
+            .expect("part file should remain incomplete");
+        drop(part);
+
+        let result = finalize_part_file(&part_path, &dest, 64).await;
+        let part_preserved = part_path.exists();
+        let dest_absent = !dest.exists();
+        fs::remove_dir_all(root).expect("temp directory should be removed");
+
+        assert!(result.is_err());
+        assert!(part_preserved);
+        assert!(dest_absent);
     }
 }

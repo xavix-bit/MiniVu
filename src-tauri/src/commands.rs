@@ -1,4 +1,6 @@
-use crate::settings::{load_settings, save_settings_preserving_gguf_variant, AppSettings};
+use crate::settings::{
+    load_settings, save_app_settings as persist_app_settings, AppSettings, SettingsSaveIntent,
+};
 use crate::sidecar::on_settings_saved;
 use serde::Serialize;
 
@@ -18,8 +20,12 @@ pub fn load_app_settings(app: tauri::AppHandle) -> Result<AppSettings, String> {
 }
 
 #[tauri::command]
-pub fn save_app_settings(app: tauri::AppHandle, settings: AppSettings) -> Result<(), String> {
-    let settings = save_settings_preserving_gguf_variant(&app, settings)?;
+pub fn save_app_settings(
+    app: tauri::AppHandle,
+    settings: AppSettings,
+    intent: Option<SettingsSaveIntent>,
+) -> Result<(), String> {
+    let settings = persist_app_settings(&app, settings, intent.unwrap_or_default())?;
     crate::shortcut::register_shortcut(&app, &settings.shortcut)?;
     on_settings_saved(&app);
     Ok(())

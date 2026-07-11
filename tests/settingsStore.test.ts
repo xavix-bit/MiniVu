@@ -1,7 +1,16 @@
-import { describe, expect, it } from "vitest";
-import { createDefaultSettings } from "../src/settings/settingsStore";
+import { invoke } from "@tauri-apps/api/core";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDefaultSettings, saveSettings } from "../src/settings/settingsStore";
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+
+const invokeMock = vi.mocked(invoke);
 
 describe("settingsStore", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+  });
+
   it("uses privacy-safe defaults", () => {
     const settings = createDefaultSettings();
 
@@ -19,5 +28,29 @@ describe("settingsStore", () => {
     expect(settings.downloadMirror).toBe("auto");
     expect(settings.preferredMirror).toBeNull();
     expect(settings.lastSpeedTestAt).toBeNull();
+  });
+
+  it("uses general intent by default when saving settings", async () => {
+    const settings = createDefaultSettings();
+    invokeMock.mockResolvedValue(undefined);
+
+    await saveSettings(settings);
+
+    expect(invokeMock).toHaveBeenCalledWith("save_app_settings", {
+      settings,
+      intent: "general",
+    });
+  });
+
+  it("passes explicit model variant save intent", async () => {
+    const settings = createDefaultSettings();
+    invokeMock.mockResolvedValue(undefined);
+
+    await saveSettings(settings, "modelVariant");
+
+    expect(invokeMock).toHaveBeenCalledWith("save_app_settings", {
+      settings,
+      intent: "modelVariant",
+    });
   });
 });

@@ -3,6 +3,7 @@ export type MirrorId = "modelscope" | "huggingface";
 export type AppTheme = "system" | "light" | "dark";
 export type InferenceBackend = "llama" | "mlx";
 export type GgufModelVariant = "q4_k_m" | "q5_k_m" | "q6_k";
+export type SettingsSaveIntent = "general" | "modelVariant";
 
 export type AppSettings = {
   shortcut: string;
@@ -60,7 +61,10 @@ export async function loadSettings(): Promise<AppSettings> {
   return invoke<AppSettings>("load_app_settings");
 }
 
-export async function saveSettings(settings: AppSettings): Promise<void> {
+export async function saveSettings(
+  settings: AppSettings,
+  intent: SettingsSaveIntent = "general",
+): Promise<void> {
   const { invoke } = await import("@tauri-apps/api/core");
-  await invoke("save_app_settings", { settings });
+  await invoke("save_app_settings", { settings, intent });
 }

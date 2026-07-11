@@ -69,6 +69,14 @@ impl Default for GgufModelVariant {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum SettingsSaveIntent {
+    #[default]
+    General,
+    ModelVariant,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -147,12 +155,14 @@ fn load_settings_at(path: &Path) -> Result<AppSettings, String> {
     serde_json::from_str(&raw).map_err(|e| e.to_string())
 }
 
-pub fn save_settings(app: &AppHandle, settings: &AppSettings) -> Result<(), String> {
-    let path = settings_path(app)?;
-    write_settings_atomically(&path, settings)
+pub fn update_settings(
+    app: &AppHandle,
+    update: impl FnOnce(&mut AppSettings),
+) -> Result<AppSettings, String> {
+    update_settings_at(&settings_path(app)?, update)
 }
 
-pub(crate) fn write_settings_atomically(path: &Path, settings: &AppSettings) -> Result<(), String> {
+fn write_settings_atomically(path: &Path, settings: &AppSettings) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -194,44 +204,51 @@ pub(crate) fn write_settings_atomically(path: &Path, settings: &AppSettings) -> 
     result.map_err(|e| e.to_string())
 }
 
-fn save_settings_preserving_gguf_variant_at(
+fn update_settings_at(
     path: &Path,
-    settings: AppSettings,
+    update: impl FnOnce(&mut AppSettings),
 ) -> Result<AppSettings, String> {
-    save_settings_preserving_gguf_variant_at_with_hook(path, settings, || {})
+    update_settings_at_with_hook(path, || {}, update)
 }
 
-fn save_settings_preserving_gguf_variant_at_with_hook(
+fn update_settings_at_with_hook(
     path: &Path,
-    settings: AppSettings,
-    before_write: impl FnOnce(),
+    after_update: impl FnOnce(),
+    update: impl FnOnce(&mut AppSettings),
 ) -> Result<AppSettings, String> {
     let _guard = SETTINGS_UPDATE_LOCK
         .lock()
         .map_err(|_| "settings update lock is poisoned".to_string())?;
-    let current = load_settings_at(path)?;
-    let settings = merge_generic_settings(&current, settings);
-    before_write();
+    let mut settings = load_settings_at(path)?;
+    update(&mut settings);
+    after_update();
     write_settings_atomically(path, &settings)?;
     Ok(settings)
 }
 
-fn merge_generic_settings(current: &AppSettings, incoming: AppSettings) -> AppSettings {
-    let incoming_variant = incoming.gguf_model_variant;
-    let variant_changed = incoming_variant != current.gguf_model_variant;
-    let mut merged = incoming;
-    merged.gguf_model_variant = current.gguf_model_variant;
-    if variant_changed && merged == *current {
-        merged.gguf_model_variant = incoming_variant;
-    }
-    merged
+fn save_app_settings_at(
+    path: &Path,
+    incoming: AppSettings,
+    intent: SettingsSaveIntent,
+) -> Result<AppSettings, String> {
+    update_settings_at(path, move |current| match intent {
+        SettingsSaveIntent::General => {
+            let persisted_variant = current.gguf_model_variant;
+            *current = incoming;
+            current.gguf_model_variant = persisted_variant;
+        }
+        SettingsSaveIntent::ModelVariant => {
+            current.gguf_model_variant = incoming.gguf_model_variant;
+        }
+    })
 }
 
-pub(crate) fn save_settings_preserving_gguf_variant(
+pub(crate) fn save_app_settings(
     app: &AppHandle,
     settings: AppSettings,
+    intent: SettingsSaveIntent,
 ) -> Result<AppSettings, String> {
-    save_settings_preserving_gguf_variant_at(&settings_path(app)?, settings)
+    save_app_settings_at(&settings_path(app)?, settings, intent)
 }
 
 pub(crate) fn commit_gguf_model_variant(
@@ -242,20 +259,15 @@ pub(crate) fn commit_gguf_model_variant(
 }
 
 fn commit_gguf_model_variant_at(path: &Path, variant: GgufModelVariant) -> Result<(), String> {
-    let _guard = SETTINGS_UPDATE_LOCK
-        .lock()
-        .map_err(|_| "settings update lock is poisoned".to_string())?;
-    let mut settings = load_settings_at(path)?;
-    settings.gguf_model_variant = variant;
-    write_settings_atomically(path, &settings)
+    update_settings_at(path, |settings| settings.gguf_model_variant = variant).map(|_| ())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc::{self, RecvTimeoutError};
+    use std::sync::mpsc;
+    use std::sync::TryLockError;
     use std::thread;
-    use std::time::Duration;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_dir(test_name: &str) -> PathBuf {
@@ -307,8 +319,8 @@ mod tests {
         let mut stale_submission = AppSettings::default();
         stale_submission.gguf_model_variant = GgufModelVariant::Q4KM;
         stale_submission.shortcut = "Control+Shift+M".to_string();
-        save_settings_preserving_gguf_variant_at(&path, stale_submission)
-            .expect("generic settings should be saved");
+        save_app_settings_at(&path, stale_submission, SettingsSaveIntent::General)
+            .expect("general settings should be saved");
 
         let raw = fs::read_to_string(&path).expect("saved settings should be readable");
         let saved: AppSettings =
@@ -320,79 +332,94 @@ mod tests {
     }
 
     #[test]
-    fn generic_settings_save_accepts_variant_only_change() {
-        let root = temp_dir("variant-only");
+    fn general_settings_save_preserves_variant_for_variant_only_submission() {
+        let root = temp_dir("general-variant-only");
         let path = root.join("settings.json");
         let current = AppSettings::default();
         write_settings_atomically(&path, &current).expect("current settings should be written");
 
         let mut variant_only_submission = current.clone();
         variant_only_submission.gguf_model_variant = GgufModelVariant::Q5KM;
-        save_settings_preserving_gguf_variant_at(&path, variant_only_submission)
-            .expect("variant-only settings should be saved");
+        save_app_settings_at(&path, variant_only_submission, SettingsSaveIntent::General)
+            .expect("general settings should be saved");
 
         let saved = load_settings_at(&path).expect("saved settings should be readable");
-        assert_eq!(saved.gguf_model_variant, GgufModelVariant::Q5KM);
+        assert_eq!(saved.gguf_model_variant, GgufModelVariant::Q4KM);
 
         fs::remove_dir_all(root).expect("temp directory should be removed");
     }
 
     #[test]
-    fn generic_save_cannot_overwrite_concurrent_variant_commit() {
+    fn model_variant_save_intent_accepts_incoming_variant() {
+        let root = temp_dir("model-variant-intent");
+        let path = root.join("settings.json");
+        let mut current = AppSettings::default();
+        current.shortcut = "Control+Shift+M".to_string();
+        write_settings_atomically(&path, &current).expect("current settings should be written");
+
+        let mut variant_submission = AppSettings::default();
+        variant_submission.gguf_model_variant = GgufModelVariant::Q5KM;
+        save_app_settings_at(&path, variant_submission, SettingsSaveIntent::ModelVariant)
+            .expect("model variant settings should be saved");
+
+        let saved = load_settings_at(&path).expect("saved settings should be readable");
+        assert_eq!(saved.gguf_model_variant, GgufModelVariant::Q5KM);
+        assert_eq!(saved.shortcut, "Control+Shift+M");
+
+        fs::remove_dir_all(root).expect("temp directory should be removed");
+    }
+
+    #[test]
+    fn locked_field_update_cannot_overwrite_concurrent_variant_commit() {
         let root = temp_dir("serialized-update");
         let path = root.join("settings.json");
         let current = AppSettings::default();
         write_settings_atomically(&path, &current).expect("current settings should be written");
 
-        let mut generic_submission = current;
-        generic_submission.shortcut = "Control+Shift+M".to_string();
-        let generic_path = path.clone();
-        let (generic_loaded_tx, generic_loaded_rx) = mpsc::channel();
-        let (release_generic_tx, release_generic_rx) = mpsc::channel();
-        let generic = thread::spawn(move || {
-            save_settings_preserving_gguf_variant_at_with_hook(
-                &generic_path,
-                generic_submission,
+        let update_path = path.clone();
+        let (update_locked_tx, update_locked_rx) = mpsc::channel();
+        let (release_update_tx, release_update_rx) = mpsc::channel();
+        let update = thread::spawn(move || {
+            update_settings_at_with_hook(
+                &update_path,
                 || {
-                    generic_loaded_tx
+                    update_locked_tx
                         .send(())
-                        .expect("generic load signal should be sent");
-                    release_generic_rx
+                        .expect("update lock signal should be sent");
+                    release_update_rx
                         .recv()
-                        .expect("generic save should be released");
+                        .expect("field update should be released");
                 },
+                |settings| settings.shortcut = "Control+Shift+M".to_string(),
             )
-            .expect("generic settings should be saved");
+            .expect("field update should be saved");
         });
 
-        generic_loaded_rx
+        update_locked_rx
             .recv()
-            .expect("generic save should reach the write barrier");
+            .expect("field update should hold the settings lock");
+        assert!(matches!(
+            SETTINGS_UPDATE_LOCK.try_lock(),
+            Err(TryLockError::WouldBlock)
+        ));
+
         let commit_path = path.clone();
         let (commit_started_tx, commit_started_rx) = mpsc::channel();
-        let (commit_done_tx, commit_done_rx) = mpsc::channel();
         let commit = thread::spawn(move || {
             commit_started_tx
                 .send(())
                 .expect("commit start should be sent");
             commit_gguf_model_variant_at(&commit_path, GgufModelVariant::Q6K)
                 .expect("variant should be committed");
-            commit_done_tx
-                .send(())
-                .expect("commit completion should be sent");
         });
 
         commit_started_rx
             .recv()
             .expect("variant commit should be attempted");
-        assert!(matches!(
-            commit_done_rx.recv_timeout(Duration::from_secs(1)),
-            Err(RecvTimeoutError::Timeout)
-        ));
-        release_generic_tx
+        release_update_tx
             .send(())
-            .expect("generic save should be released");
-        generic.join().expect("generic save thread should finish");
+            .expect("field update should be released");
+        update.join().expect("field update thread should finish");
         commit.join().expect("variant commit thread should finish");
 
         let saved = load_settings_at(&path).expect("saved settings should be readable");
