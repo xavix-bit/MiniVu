@@ -1,7 +1,7 @@
 use crate::download_http::{build_http_client, with_download_headers};
 use crate::model_cache::{managed_file_is_valid, DownloadSource, ModelCache};
 use crate::model_download::progress::{emit_download_progress, emit_task_progress};
-use crate::model_download::task::{cancelable, DownloadTaskGuard, DownloadTaskState};
+use crate::model_download::task::{cancelable, DownloadTaskGuard, DownloadTaskState, FailureSeal};
 use crate::runtime_installer::emit_setup_progress;
 use crate::settings::{load_settings, DownloadMirror, GgufModelVariant, MirrorId};
 use futures_util::StreamExt;
@@ -93,7 +93,13 @@ pub async fn download_model(
     let settings = load_settings(&app)?;
     let variant = target_variant.unwrap_or(settings.gguf_model_variant);
     let task = state.begin(variant)?;
-    let result = download_model_task(&app, &task, force.unwrap_or(false), &settings).await;
+    let result = match download_model_task(&app, &task, force.unwrap_or(false), &settings).await {
+        Err(DownloadError::Failed(error)) => match task.seal_failure() {
+            Ok(FailureSeal::Canceled) => Err(DownloadError::Cancelled),
+            Ok(FailureSeal::Failed) | Err(_) => Err(DownloadError::Failed(error)),
+        },
+        result => result,
+    };
 
     if let Err(error) = &result {
         let snapshot = state.snapshot();
@@ -287,10 +293,24 @@ async fn download_file_with_fallback(
             Err(DownloadError::Failed(error)) => {
                 errors.push(format!("{}: {error}", source.name));
                 on_source_failed();
+                if index + 1 == sources.len() {
+                    return match task.seal_failure() {
+                        Ok(FailureSeal::Failed) => Err(DownloadError::Failed(errors.join("；"))),
+                        Ok(FailureSeal::Canceled) | Err(_) => Err(DownloadError::Cancelled),
+                    };
+                }
             }
         }
     }
-    Err(DownloadError::Failed(errors.join("；")))
+    let error = if errors.is_empty() {
+        "没有可用的模型下载源".to_string()
+    } else {
+        errors.join("；")
+    };
+    match task.seal_failure() {
+        Ok(FailureSeal::Failed) => Err(DownloadError::Failed(error)),
+        Ok(FailureSeal::Canceled) | Err(_) => Err(DownloadError::Cancelled),
+    }
 }
 
 fn source_metadata_path(part_path: &Path) -> PathBuf {
@@ -793,7 +813,7 @@ mod tests {
     use super::*;
     use std::fs::{self, File};
     use std::io::{Read, Write};
-    use std::net::TcpListener;
+    use std::net::{TcpListener, TcpStream};
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration;
@@ -820,6 +840,52 @@ mod tests {
 
     fn leak(value: String) -> &'static str {
         Box::leak(value.into_boxed_str())
+    }
+
+    fn accept_loopback(listener: &TcpListener) -> TcpStream {
+        listener.set_nonblocking(true).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    stream.set_nonblocking(false).unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
+                    stream
+                        .set_write_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
+                    return stream;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "loopback server did not receive a connection before deadline"
+                    );
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("loopback accept failed: {error}"),
+            }
+        }
+    }
+
+    fn read_loopback_request(stream: &mut TcpStream) -> Vec<u8> {
+        let mut request = Vec::new();
+        loop {
+            let mut chunk = [0_u8; 512];
+            let bytes = stream
+                .read(&mut chunk)
+                .expect("loopback request should arrive before deadline");
+            assert!(bytes > 0, "loopback peer closed before sending a request");
+            request.extend_from_slice(&chunk[..bytes]);
+            assert!(
+                request.len() <= 8192,
+                "loopback request headers are too large"
+            );
+            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                return request;
+            }
+        }
     }
 
     #[tokio::test]
@@ -1117,12 +1183,8 @@ mod tests {
         let (body_sent, body_received) = std::sync::mpsc::channel();
         let (release_server, wait_for_release) = std::sync::mpsc::channel();
         let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
-            let mut request = [0_u8; 2048];
-            let _ = stream.read(&mut request).unwrap();
+            let mut stream = accept_loopback(&listener);
+            let _ = read_loopback_request(&mut stream);
             stream
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nETag: test-etag\r\n\r\nGGUF")
                 .unwrap();
@@ -1212,9 +1274,8 @@ mod tests {
         let (request_seen, wait_for_request) = std::sync::mpsc::channel();
         let (release_server, wait_for_release) = std::sync::mpsc::channel();
         let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut request = [0_u8; 2048];
-            let _ = stream.read(&mut request).unwrap();
+            let mut stream = accept_loopback(&listener);
+            let _ = read_loopback_request(&mut stream);
             request_seen.send(()).unwrap();
             let _ = wait_for_release.recv_timeout(Duration::from_secs(2));
         });
@@ -1294,9 +1355,8 @@ mod tests {
         .await
         .unwrap();
         let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut request = [0_u8; 2048];
-            let _ = stream.read(&mut request).unwrap();
+            let mut stream = accept_loopback(&listener);
+            let _ = read_loopback_request(&mut stream);
             stream
                 .write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n")
                 .unwrap();
@@ -1339,6 +1399,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancellation_before_final_failure_seal_returns_canceled() {
+        let root = temp_dir("cancel-final-failure");
+        let dest = root.join("model.gguf");
+        let state = DownloadTaskState::default();
+        let task = state.begin(GgufModelVariant::Q4KM).unwrap();
+        let task_id = task.task_id();
+        let cancel_state = state.clone();
+        let sources = [DownloadSource {
+            name: "invalid",
+            url: "://invalid",
+        }];
+
+        let result = download_file_with_fallback(
+            None,
+            &task,
+            &build_http_client().unwrap(),
+            &sources,
+            &dest,
+            "model",
+            8,
+            false,
+            false,
+            move || cancel_state.cancel(task_id).unwrap(),
+        )
+        .await;
+
+        assert!(matches!(result, Err(DownloadError::Cancelled)));
+        assert_eq!(state.snapshot().unwrap().status, "canceled");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn final_failure_seals_failed_before_returning() {
+        let root = temp_dir("seal-final-failure");
+        let dest = root.join("model.gguf");
+        let state = DownloadTaskState::default();
+        let task = state.begin(GgufModelVariant::Q4KM).unwrap();
+        let task_id = task.task_id();
+        let sources = [DownloadSource {
+            name: "invalid",
+            url: "://invalid",
+        }];
+
+        let result = download_file_with_fallback(
+            None,
+            &task,
+            &build_http_client().unwrap(),
+            &sources,
+            &dest,
+            "model",
+            8,
+            false,
+            false,
+            || {},
+        )
+        .await;
+
+        assert!(matches!(result, Err(DownloadError::Failed(_))));
+        assert_eq!(state.snapshot().unwrap().status, "failed");
+        assert!(state.cancel(task_id).unwrap_err().contains("太晚"));
+        drop(task);
+        assert_eq!(state.snapshot().unwrap().status, "failed");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn force_redownload_requests_fallback_and_replaces_valid_destination() {
         let root = temp_dir("force-fallback");
         let dest = root.join("model.gguf");
@@ -1355,9 +1481,14 @@ mod tests {
             while requests.len() < 2 && Instant::now() < deadline {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
-                        let mut request = [0_u8; 2048];
-                        let bytes = stream.read(&mut request).unwrap();
-                        requests.push(String::from_utf8_lossy(&request[..bytes]).to_string());
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(2)))
+                            .unwrap();
+                        stream
+                            .set_write_timeout(Some(Duration::from_secs(2)))
+                            .unwrap();
+                        let request = read_loopback_request(&mut stream);
+                        requests.push(String::from_utf8_lossy(&request).to_string());
                         if requests.len() == 1 {
                             stream
                                 .write_all(
@@ -1477,10 +1608,9 @@ mod tests {
         .await
         .unwrap();
         let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut request = [0_u8; 2048];
-            let bytes = stream.read(&mut request).unwrap();
-            let request = String::from_utf8_lossy(&request[..bytes]).to_ascii_lowercase();
+            let mut stream = accept_loopback(&listener);
+            let request = read_loopback_request(&mut stream);
+            let request = String::from_utf8_lossy(&request).to_ascii_lowercase();
             assert!(request.contains("range: bytes=7-"));
             stream
                 .write_all(
@@ -1536,10 +1666,9 @@ mod tests {
         .await
         .unwrap();
         let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut request = [0_u8; 2048];
-            let bytes = stream.read(&mut request).unwrap();
-            let request = String::from_utf8_lossy(&request[..bytes]).to_ascii_lowercase();
+            let mut stream = accept_loopback(&listener);
+            let request = read_loopback_request(&mut stream);
+            let request = String::from_utf8_lossy(&request).to_ascii_lowercase();
             assert!(request.contains("range: bytes=4-\r\n"));
             assert!(request.contains("if-range: \"stable-etag\"\r\n"));
             stream
@@ -1596,9 +1725,8 @@ mod tests {
         .await
         .unwrap();
         let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut request = [0_u8; 2048];
-            let _ = stream.read(&mut request).unwrap();
+            let mut stream = accept_loopback(&listener);
+            let _ = read_loopback_request(&mut stream);
             stream
                 .write_all(
                     b"HTTP/1.1 206 Partial Content\r\nTransfer-Encoding: chunked\r\nContent-Range: bytes 4-7/8\r\nETag: \"stable-etag\"\r\n\r\n3\r\nNEW\r\n0\r\n\r\n",
@@ -1642,9 +1770,8 @@ mod tests {
             listener.local_addr().unwrap()
         ));
         let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut request = [0_u8; 2048];
-            let _ = stream.read(&mut request).unwrap();
+            let mut stream = accept_loopback(&listener);
+            let _ = read_loopback_request(&mut stream);
             stream
                 .write_all(
                     b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nETag: race-etag\r\n\r\nGGUFRACE",

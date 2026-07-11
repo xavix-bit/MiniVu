@@ -7,6 +7,12 @@ use tokio::sync::watch;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DownloadCancelled;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FailureSeal {
+    Failed,
+    Canceled,
+}
+
 pub async fn cancelable<T>(
     cancellation: &mut watch::Receiver<bool>,
     operation: impl Future<Output = T>,
@@ -45,6 +51,8 @@ enum DownloadTaskPhase {
     CancelRequested,
     Finalizing,
     Completed,
+    Failed,
+    Canceled,
 }
 
 #[derive(Default)]
@@ -52,7 +60,7 @@ struct DownloadTaskInner {
     next_task_id: u64,
     active: Option<ActiveTask>,
     latest_terminal: Option<DownloadTaskSnapshot>,
-    last_completed_task_id: Option<u64>,
+    last_terminal_task_id: Option<u64>,
 }
 
 #[derive(Clone, Default)]
@@ -122,8 +130,8 @@ impl DownloadTaskState {
     pub fn cancel(&self, task_id: u64) -> Result<(), String> {
         let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
         if inner.active.is_none() {
-            return if inner.last_completed_task_id == Some(task_id) {
-                Err("取消请求太晚：该模型下载任务已经完成".to_string())
+            return if inner.last_terminal_task_id == Some(task_id) {
+                Err("取消请求太晚：该模型下载任务已经结束".to_string())
             } else {
                 Err("当前没有正在运行的模型下载任务".to_string())
             };
@@ -145,8 +153,13 @@ impl DownloadTaskState {
                     .map_err(|_| "下载任务已结束".to_string())
             }
             DownloadTaskPhase::CancelRequested => Err("该模型下载任务已接受取消请求".to_string()),
-            DownloadTaskPhase::Finalizing | DownloadTaskPhase::Completed => {
+            DownloadTaskPhase::Finalizing => {
                 Err("取消请求太晚：模型文件正在完成安装，未接受取消".to_string())
+            }
+            DownloadTaskPhase::Completed
+            | DownloadTaskPhase::Failed
+            | DownloadTaskPhase::Canceled => {
+                Err("取消请求太晚：该模型下载任务已经结束".to_string())
             }
         }
     }
@@ -164,10 +177,17 @@ impl DownloadTaskState {
             if inner
                 .active
                 .as_ref()
-                .map(|active| active.phase == DownloadTaskPhase::Completed)
+                .map(|active| {
+                    matches!(
+                        active.phase,
+                        DownloadTaskPhase::Completed
+                            | DownloadTaskPhase::Failed
+                            | DownloadTaskPhase::Canceled
+                    )
+                })
                 .unwrap_or(false)
             {
-                inner.last_completed_task_id = Some(task_id);
+                inner.last_terminal_task_id = Some(task_id);
             }
             inner.active = None;
             if terminal_snapshot.is_some() {
@@ -234,6 +254,34 @@ impl DownloadTaskGuard {
         })
     }
 
+    pub(crate) fn seal_failure(&self) -> Result<FailureSeal, DownloadCancelled> {
+        let mut inner = self
+            .state
+            .inner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let active = inner
+            .active
+            .as_mut()
+            .filter(|active| active.snapshot.task_id == self.task_id)
+            .ok_or(DownloadCancelled)?;
+        match active.phase {
+            DownloadTaskPhase::Running => {
+                active.phase = DownloadTaskPhase::Failed;
+                active.snapshot.status = "failed".to_string();
+                Ok(FailureSeal::Failed)
+            }
+            DownloadTaskPhase::CancelRequested => {
+                active.phase = DownloadTaskPhase::Canceled;
+                active.snapshot.status = "canceled".to_string();
+                Ok(FailureSeal::Canceled)
+            }
+            DownloadTaskPhase::Failed => Ok(FailureSeal::Failed),
+            DownloadTaskPhase::Canceled => Ok(FailureSeal::Canceled),
+            DownloadTaskPhase::Finalizing | DownloadTaskPhase::Completed => Err(DownloadCancelled),
+        }
+    }
+
     pub fn update(
         &self,
         status: &str,
@@ -252,10 +300,24 @@ impl DownloadTaskGuard {
             .as_mut()
             .filter(|active| active.snapshot.task_id == self.task_id)
         {
-            if active.phase != DownloadTaskPhase::CancelRequested
-                || matches!(status, "canceled" | "failed")
-            {
-                active.snapshot.status = status.to_string();
+            match active.phase {
+                DownloadTaskPhase::Running | DownloadTaskPhase::Finalizing => {
+                    active.snapshot.status = status.to_string();
+                    if status == "failed" {
+                        active.phase = DownloadTaskPhase::Failed;
+                    }
+                }
+                DownloadTaskPhase::CancelRequested if status == "canceled" => {
+                    active.phase = DownloadTaskPhase::Canceled;
+                    active.snapshot.status = status.to_string();
+                }
+                DownloadTaskPhase::Completed if status == "done" => {
+                    active.snapshot.status = status.to_string();
+                }
+                DownloadTaskPhase::Failed
+                | DownloadTaskPhase::Canceled
+                | DownloadTaskPhase::CancelRequested
+                | DownloadTaskPhase::Completed => {}
             }
             active.snapshot.file = file.map(str::to_string);
             active.snapshot.downloaded = downloaded;
@@ -448,6 +510,36 @@ mod tests {
             assert_ne!(cancel_won, finalization.is_some());
             drop(finalization);
         }
+    }
+
+    #[test]
+    fn cancellation_before_failure_seal_resolves_as_canceled() {
+        let state = DownloadTaskState::default();
+        let task = state.begin(GgufModelVariant::Q4KM).unwrap();
+        let task_id = task.task_id();
+        state.cancel(task_id).unwrap();
+
+        assert_eq!(task.seal_failure().unwrap(), FailureSeal::Canceled);
+        assert_eq!(state.snapshot().unwrap().status, "canceled");
+        drop(task);
+
+        assert_eq!(state.snapshot().unwrap().status, "canceled");
+        assert!(state.cancel(task_id).unwrap_err().contains("太晚"));
+    }
+
+    #[test]
+    fn failure_seal_before_cancellation_retains_failed_terminal() {
+        let state = DownloadTaskState::default();
+        let task = state.begin(GgufModelVariant::Q4KM).unwrap();
+        let task_id = task.task_id();
+
+        assert_eq!(task.seal_failure().unwrap(), FailureSeal::Failed);
+        assert_eq!(state.snapshot().unwrap().status, "failed");
+        assert!(state.cancel(task_id).unwrap_err().contains("太晚"));
+        drop(task);
+
+        assert_eq!(state.snapshot().unwrap().status, "failed");
+        assert!(state.cancel(task_id).unwrap_err().contains("太晚"));
     }
 
     #[test]
