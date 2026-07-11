@@ -36,12 +36,22 @@ pub struct DownloadTaskSnapshot {
 struct ActiveTask {
     snapshot: DownloadTaskSnapshot,
     cancel: watch::Sender<bool>,
+    phase: DownloadTaskPhase,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DownloadTaskPhase {
+    Running,
+    CancelRequested,
+    Finalizing,
+    Completed,
 }
 
 #[derive(Default)]
 struct DownloadTaskInner {
     next_task_id: u64,
     active: Option<ActiveTask>,
+    last_completed_task_id: Option<u64>,
 }
 
 #[derive(Clone, Default)]
@@ -54,6 +64,12 @@ pub struct DownloadTaskGuard {
     task_id: u64,
     variant: GgufModelVariant,
     cancellation: watch::Receiver<bool>,
+}
+
+pub struct FinalizationLease {
+    state: DownloadTaskState,
+    task_id: u64,
+    restore_running: bool,
 }
 
 impl DownloadTaskState {
@@ -83,6 +99,7 @@ impl DownloadTaskState {
                 source: None,
             },
             cancel,
+            phase: DownloadTaskPhase::Running,
         });
         Ok(DownloadTaskGuard {
             state: self.clone(),
@@ -102,26 +119,48 @@ impl DownloadTaskState {
     }
 
     pub fn cancel(&self, task_id: u64) -> Result<(), String> {
-        let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
-        let active = inner
-            .active
-            .as_ref()
-            .ok_or_else(|| "当前没有正在运行的模型下载任务".to_string())?;
+        let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        if inner.active.is_none() {
+            return if inner.last_completed_task_id == Some(task_id) {
+                Err("取消请求太晚：该模型下载任务已经完成".to_string())
+            } else {
+                Err("当前没有正在运行的模型下载任务".to_string())
+            };
+        }
+        let active = inner.active.as_mut().expect("active task checked above");
         if active.snapshot.task_id != task_id {
             return Err(format!(
                 "任务 ID 已失效：当前任务为 {}，不会取消当前下载",
                 active.snapshot.task_id
             ));
         }
-        active
-            .cancel
-            .send(true)
-            .map_err(|_| "下载任务已结束".to_string())
+        match active.phase {
+            DownloadTaskPhase::Running => {
+                active.phase = DownloadTaskPhase::CancelRequested;
+                active.snapshot.status = "cancelRequested".to_string();
+                active
+                    .cancel
+                    .send(true)
+                    .map_err(|_| "下载任务已结束".to_string())
+            }
+            DownloadTaskPhase::CancelRequested => Err("该模型下载任务已接受取消请求".to_string()),
+            DownloadTaskPhase::Finalizing | DownloadTaskPhase::Completed => {
+                Err("取消请求太晚：模型文件正在完成安装，未接受取消".to_string())
+            }
+        }
     }
 
     fn clear(&self, task_id: u64) {
         let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
         if inner.active.as_ref().map(|active| active.snapshot.task_id) == Some(task_id) {
+            if inner
+                .active
+                .as_ref()
+                .map(|active| active.phase == DownloadTaskPhase::Completed)
+                .unwrap_or(false)
+            {
+                inner.last_completed_task_id = Some(task_id);
+            }
             inner.active = None;
         }
     }
@@ -144,6 +183,46 @@ impl DownloadTaskGuard {
         self.cancellation.clone()
     }
 
+    pub fn checkpoint(&self) -> Result<(), DownloadCancelled> {
+        let inner = self
+            .state
+            .inner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        match inner
+            .active
+            .as_ref()
+            .filter(|active| active.snapshot.task_id == self.task_id)
+            .map(|active| active.phase)
+        {
+            Some(DownloadTaskPhase::Running) => Ok(()),
+            _ => Err(DownloadCancelled),
+        }
+    }
+
+    pub fn begin_finalization(&self) -> Result<FinalizationLease, DownloadCancelled> {
+        let mut inner = self
+            .state
+            .inner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let active = inner
+            .active
+            .as_mut()
+            .filter(|active| active.snapshot.task_id == self.task_id)
+            .ok_or(DownloadCancelled)?;
+        if active.phase != DownloadTaskPhase::Running {
+            return Err(DownloadCancelled);
+        }
+        active.phase = DownloadTaskPhase::Finalizing;
+        active.snapshot.status = "finalizing".to_string();
+        Ok(FinalizationLease {
+            state: self.state.clone(),
+            task_id: self.task_id,
+            restore_running: true,
+        })
+    }
+
     pub fn update(
         &self,
         status: &str,
@@ -162,11 +241,58 @@ impl DownloadTaskGuard {
             .as_mut()
             .filter(|active| active.snapshot.task_id == self.task_id)
         {
-            active.snapshot.status = status.to_string();
+            if active.phase != DownloadTaskPhase::CancelRequested
+                || matches!(status, "canceled" | "failed")
+            {
+                active.snapshot.status = status.to_string();
+            }
             active.snapshot.file = file.map(str::to_string);
             active.snapshot.downloaded = downloaded;
             active.snapshot.total = total;
             active.snapshot.source = source.map(str::to_string);
+        }
+    }
+}
+
+impl FinalizationLease {
+    pub fn commit_terminal(mut self) {
+        let mut inner = self
+            .state
+            .inner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(active) = inner
+            .active
+            .as_mut()
+            .filter(|active| active.snapshot.task_id == self.task_id)
+        {
+            if active.phase == DownloadTaskPhase::Finalizing {
+                active.phase = DownloadTaskPhase::Completed;
+            }
+        }
+        self.restore_running = false;
+    }
+}
+
+impl Drop for FinalizationLease {
+    fn drop(&mut self) {
+        if !self.restore_running {
+            return;
+        }
+        let mut inner = self
+            .state
+            .inner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(active) = inner
+            .active
+            .as_mut()
+            .filter(|active| active.snapshot.task_id == self.task_id)
+        {
+            if active.phase == DownloadTaskPhase::Finalizing {
+                active.phase = DownloadTaskPhase::Running;
+                active.snapshot.status = "running".to_string();
+            }
         }
     }
 }
@@ -182,6 +308,7 @@ mod tests {
     use super::*;
     use crate::settings::GgufModelVariant;
     use std::future::pending;
+    use std::sync::{Arc, Barrier};
     use std::time::Duration;
 
     #[test]
@@ -248,5 +375,69 @@ mod tests {
         assert_eq!(snapshot.downloaded, 42);
         assert_eq!(snapshot.total, Some(100));
         assert_eq!(snapshot.source.as_deref(), Some("HuggingFace"));
+    }
+
+    #[test]
+    fn exactly_one_of_cancel_and_finalization_wins() {
+        for _ in 0..100 {
+            let state = DownloadTaskState::default();
+            let task = Arc::new(state.begin(GgufModelVariant::Q4KM).unwrap());
+            let barrier = Arc::new(Barrier::new(3));
+
+            let cancel_state = state.clone();
+            let cancel_barrier = barrier.clone();
+            let task_id = task.task_id();
+            let cancel = std::thread::spawn(move || {
+                cancel_barrier.wait();
+                cancel_state.cancel(task_id).is_ok()
+            });
+
+            let finalize_task = task.clone();
+            let finalize_barrier = barrier.clone();
+            let finalize = std::thread::spawn(move || {
+                finalize_barrier.wait();
+                finalize_task.begin_finalization().ok()
+            });
+
+            barrier.wait();
+            let cancel_won = cancel.join().unwrap();
+            let finalization = finalize.join().unwrap();
+            assert_ne!(cancel_won, finalization.is_some());
+            drop(finalization);
+        }
+    }
+
+    #[test]
+    fn accepted_cancellation_prevents_finalization() {
+        let state = DownloadTaskState::default();
+        let task = state.begin(GgufModelVariant::Q4KM).unwrap();
+        state.cancel(task.task_id()).unwrap();
+
+        assert!(task.begin_finalization().is_err());
+    }
+
+    #[test]
+    fn cancellation_is_rejected_as_too_late_during_finalization() {
+        let state = DownloadTaskState::default();
+        let task = state.begin(GgufModelVariant::Q4KM).unwrap();
+        let _finalization = task.begin_finalization().unwrap();
+
+        let error = state.cancel(task.task_id()).unwrap_err();
+
+        assert!(error.contains("太晚"));
+        assert!(!task.is_cancelled());
+    }
+
+    #[test]
+    fn completed_task_id_remains_too_late_after_guard_cleanup() {
+        let state = DownloadTaskState::default();
+        let task = state.begin(GgufModelVariant::Q4KM).unwrap();
+        let task_id = task.task_id();
+        task.begin_finalization().unwrap().commit_terminal();
+        drop(task);
+
+        let error = state.cancel(task_id).unwrap_err();
+
+        assert!(error.contains("太晚"));
     }
 }

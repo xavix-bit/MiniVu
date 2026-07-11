@@ -158,7 +158,7 @@ async fn download_model_task(
         model_sources.first().map(|source| source.name),
     );
     download_file_with_fallback(
-        app,
+        Some(app),
         task,
         &client,
         &model_sources,
@@ -166,6 +166,8 @@ async fn download_model_task(
         "model",
         spec.model_bytes,
         force,
+        false,
+        || {},
     )
     .await?;
 
@@ -189,7 +191,7 @@ async fn download_model_task(
 
     let mmproj_sources = mmproj_sources_for(settings.download_mirror, settings.preferred_mirror);
     download_file_with_fallback(
-        app,
+        Some(app),
         task,
         &client,
         &mmproj_sources,
@@ -197,6 +199,8 @@ async fn download_model_task(
         "mmproj",
         EXPECTED_MMPROJ_BYTES,
         force,
+        true,
+        || {},
     )
     .await?;
 
@@ -204,7 +208,7 @@ async fn download_model_task(
 }
 
 async fn download_file_with_fallback(
-    app: &AppHandle,
+    app: Option<&AppHandle>,
     task: &DownloadTaskGuard,
     client: &Client,
     sources: &[DownloadSource],
@@ -212,24 +216,32 @@ async fn download_file_with_fallback(
     label: &str,
     expected_bytes: u64,
     force: bool,
+    terminal_artifact: bool,
+    mut on_source_failed: impl FnMut(),
 ) -> DownloadResult<()> {
     let mut errors = Vec::new();
     for (index, source) in sources.iter().enumerate() {
         if index > 0 {
+            let mutation = task
+                .begin_finalization()
+                .map_err(|_| DownloadError::Cancelled)?;
             reset_partial(&dest.with_extension("part"))
                 .await
                 .map_err(DownloadError::Failed)?;
             let failed = errors.last().map(String::as_str).unwrap_or("上一源失败");
-            emit_task_progress(
-                app,
-                task,
-                label,
-                "switching",
-                &format!("{failed}，正在切换至 {}", source.name),
-                0,
-                None,
-                Some(source.name),
-            );
+            if let Some(app) = app {
+                emit_task_progress(
+                    app,
+                    task,
+                    label,
+                    "switching",
+                    &format!("{failed}，正在切换至 {}", source.name),
+                    0,
+                    None,
+                    Some(source.name),
+                );
+            }
+            drop(mutation);
         }
 
         match download_file(
@@ -241,27 +253,31 @@ async fn download_file_with_fallback(
             label,
             source.name,
             expected_bytes,
-            force,
+            force && index == 0,
+            terminal_artifact,
         )
         .await
         {
             Ok(bytes) => {
-                emit_download_progress(
-                    app,
-                    task,
-                    label,
-                    source.name,
-                    bytes,
-                    Some(bytes),
-                    None,
-                    "done",
-                    Some("下载完成"),
-                );
+                if let Some(app) = app {
+                    emit_download_progress(
+                        app,
+                        task,
+                        label,
+                        source.name,
+                        bytes,
+                        Some(bytes),
+                        None,
+                        "done",
+                        Some("下载完成"),
+                    );
+                }
                 return Ok(());
             }
             Err(DownloadError::Cancelled) => return Err(DownloadError::Cancelled),
             Err(DownloadError::Failed(error)) => {
                 errors.push(format!("{}: {error}", source.name));
+                on_source_failed();
             }
         }
     }
@@ -301,24 +317,33 @@ async fn reset_partial(part_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+async fn reset_partial_checked(task: &DownloadTaskGuard, part_path: &Path) -> DownloadResult<()> {
+    let _mutation = task
+        .begin_finalization()
+        .map_err(|_| DownloadError::Cancelled)?;
+    reset_partial(part_path)
+        .await
+        .map_err(DownloadError::Failed)
+}
+
 async fn prepare_part_for_source(
+    task: &DownloadTaskGuard,
     part_path: &Path,
     url: &str,
     allow_resume: bool,
-) -> Result<u64, String> {
+) -> DownloadResult<u64> {
+    task.checkpoint().map_err(|_| DownloadError::Cancelled)?;
     let part_len = match tokio::fs::metadata(part_path).await {
         Ok(metadata) if metadata.is_file() => metadata.len(),
         Ok(_) => {
-            reset_partial(part_path).await?;
+            reset_partial_checked(task, part_path).await?;
             return Ok(0);
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            tokio::fs::remove_file(source_metadata_path(part_path))
-                .await
-                .ok();
+            reset_partial_checked(task, part_path).await?;
             return Ok(0);
         }
-        Err(error) => return Err(error.to_string()),
+        Err(error) => return Err(DownloadError::Failed(error.to_string())),
     };
 
     let metadata = read_source_metadata(part_path).await;
@@ -330,7 +355,7 @@ async fn prepare_part_for_source(
     if can_resume {
         Ok(part_len)
     } else {
-        reset_partial(part_path).await?;
+        reset_partial_checked(task, part_path).await?;
         Ok(0)
     }
 }
@@ -364,19 +389,20 @@ fn validate_partial_response(
 }
 
 async fn validate_or_reset_partial(
+    task: &DownloadTaskGuard,
     part_path: &Path,
     resume_from: u64,
     content_range: Option<&str>,
     previous: Option<&SourceMetadata>,
     current: &SourceMetadata,
-) -> Result<u64, String> {
+) -> DownloadResult<u64> {
     match validate_partial_response(resume_from, content_range, previous, current) {
         Ok(total) => Ok(total),
         Err(reason) => {
-            reset_partial(part_path).await?;
-            Err(format!(
+            reset_partial_checked(task, part_path).await?;
+            Err(DownloadError::Failed(format!(
                 "服务器返回了不兼容的续传范围（{reason}），已重置未完成下载"
-            ))
+            )))
         }
     }
 }
@@ -390,29 +416,36 @@ fn header_string(response: &Response, name: reqwest::header::HeaderName) -> Opti
 }
 
 async fn finalize_part_file(
+    task: &DownloadTaskGuard,
     part_path: &Path,
     dest: &Path,
     expected_bytes: u64,
-) -> Result<u64, String> {
+    terminal_artifact: bool,
+) -> DownloadResult<u64> {
     if !managed_file_is_valid(part_path, expected_bytes) {
         let should_remove = tokio::fs::symlink_metadata(part_path)
             .await
             .map(|meta| !meta.file_type().is_file() || meta.len() >= expected_bytes)
             .unwrap_or(false);
         if should_remove {
-            reset_partial(part_path).await?;
+            reset_partial_checked(task, part_path).await?;
         }
-        return Err("文件无效（需要常规文件、精确大小和 GGUF 文件头）".to_string());
+        return Err(DownloadError::Failed(
+            "文件无效（需要常规文件、精确大小和 GGUF 文件头）".to_string(),
+        ));
     }
+    let finalization = task
+        .begin_finalization()
+        .map_err(|_| DownloadError::Cancelled)?;
     if dest.exists() {
-        tokio::fs::remove_file(dest).await.ok();
+        std::fs::remove_file(dest).ok();
     }
-    tokio::fs::rename(part_path, dest)
-        .await
-        .map_err(|error| format!("保存文件失败: {error}"))?;
-    tokio::fs::remove_file(source_metadata_path(part_path))
-        .await
-        .ok();
+    std::fs::rename(part_path, dest)
+        .map_err(|error| DownloadError::Failed(format!("保存文件失败: {error}")))?;
+    std::fs::remove_file(source_metadata_path(part_path)).ok();
+    if terminal_artifact {
+        finalization.commit_terminal();
+    }
     Ok(expected_bytes)
 }
 
@@ -421,7 +454,7 @@ async fn flush_and_preserve_partial(file: &mut tokio::fs::File) -> Result<(), St
 }
 
 async fn download_file(
-    app: &AppHandle,
+    app: Option<&AppHandle>,
     task: &DownloadTaskGuard,
     client: &Client,
     url: &str,
@@ -430,52 +463,58 @@ async fn download_file(
     source_name: &str,
     expected_bytes: u64,
     force: bool,
+    terminal_artifact: bool,
 ) -> DownloadResult<u64> {
     let part_path = dest.with_extension("part");
 
+    task.checkpoint().map_err(|_| DownloadError::Cancelled)?;
+
     if force {
-        reset_partial(&part_path)
-            .await
-            .map_err(DownloadError::Failed)?;
+        reset_partial_checked(task, &part_path).await?;
     } else if dest.exists() {
         if managed_file_is_valid(dest, expected_bytes) {
-            reset_partial(&part_path)
-                .await
-                .map_err(DownloadError::Failed)?;
+            reset_partial_checked(task, &part_path).await?;
+            if terminal_artifact {
+                task.begin_finalization()
+                    .map_err(|_| DownloadError::Cancelled)?
+                    .commit_terminal();
+            }
             return Ok(expected_bytes);
         }
+        let mutation = task
+            .begin_finalization()
+            .map_err(|_| DownloadError::Cancelled)?;
         tokio::fs::remove_file(dest).await.ok();
         reset_partial(&part_path)
             .await
             .map_err(DownloadError::Failed)?;
+        drop(mutation);
     }
 
     let allow_resume = !url.contains("modelscope.cn");
-    let mut resume_from = prepare_part_for_source(&part_path, url, allow_resume)
-        .await
-        .map_err(DownloadError::Failed)?;
+    let mut resume_from = prepare_part_for_source(task, &part_path, url, allow_resume).await?;
     let previous_metadata = read_source_metadata(&part_path).await;
 
     if task.is_cancelled() {
         return Err(DownloadError::Cancelled);
     }
     if resume_from == expected_bytes {
-        return finalize_part_file(&part_path, dest, expected_bytes)
-            .await
-            .map_err(DownloadError::Failed);
+        return finalize_part_file(task, &part_path, dest, expected_bytes, terminal_artifact).await;
     }
     if resume_from > 0 {
-        emit_download_progress(
-            app,
-            task,
-            label,
-            source_name,
-            resume_from,
-            Some(expected_bytes),
-            None,
-            "running",
-            Some("续传下载…"),
-        );
+        if let Some(app) = app {
+            emit_download_progress(
+                app,
+                task,
+                label,
+                source_name,
+                resume_from,
+                Some(expected_bytes),
+                None,
+                "running",
+                Some("续传下载…"),
+            );
+        }
     }
 
     let mut request = with_download_headers(client.get(url), url);
@@ -498,13 +537,10 @@ async fn download_file(
 
     if status == StatusCode::RANGE_NOT_SATISFIABLE {
         if resume_from == expected_bytes && !task.is_cancelled() {
-            return finalize_part_file(&part_path, dest, expected_bytes)
-                .await
-                .map_err(DownloadError::Failed);
+            return finalize_part_file(task, &part_path, dest, expected_bytes, terminal_artifact)
+                .await;
         }
-        reset_partial(&part_path)
-            .await
-            .map_err(DownloadError::Failed)?;
+        reset_partial_checked(task, &part_path).await?;
         return Err(DownloadError::Failed(
             "续传偏移无效，请重试下载".to_string(),
         ));
@@ -520,6 +556,7 @@ async fn download_file(
             .get(CONTENT_RANGE)
             .and_then(|value| value.to_str().ok());
         match validate_or_reset_partial(
+            task,
             &part_path,
             resume_from,
             content_range,
@@ -529,18 +566,19 @@ async fn download_file(
         .await
         {
             Ok(total) => Some(total),
-            Err(error) => return Err(DownloadError::Failed(error)),
+            Err(error) => return Err(error),
         }
     } else {
         if resume_from > 0 {
-            reset_partial(&part_path)
-                .await
-                .map_err(DownloadError::Failed)?;
+            reset_partial_checked(task, &part_path).await?;
             resume_from = 0;
         }
         response.content_length()
     };
 
+    let preparation = task
+        .begin_finalization()
+        .map_err(|_| DownloadError::Cancelled)?;
     write_source_metadata(&part_path, &current_metadata)
         .await
         .map_err(DownloadError::Failed)?;
@@ -556,6 +594,7 @@ async fn download_file(
             .await
             .map_err(|error| DownloadError::Failed(error.to_string()))?
     };
+    drop(preparation);
 
     let mut downloaded = resume_from;
     let mut stream = response.bytes_stream();
@@ -596,17 +635,19 @@ async fn download_file(
             let session_bytes = downloaded.saturating_sub(stream_base_bytes);
             let session_speed = (session_bytes as f64 / session_elapsed) / (1024.0 * 1024.0);
             let speed_mbps = 0.7 * session_speed + 0.3 * ema_speed_mbps.unwrap_or(window_speed);
-            emit_download_progress(
-                app,
-                task,
-                label,
-                source_name,
-                downloaded,
-                total,
-                Some((speed_mbps * 10.0).round() / 10.0),
-                "running",
-                None,
-            );
+            if let Some(app) = app {
+                emit_download_progress(
+                    app,
+                    task,
+                    label,
+                    source_name,
+                    downloaded,
+                    total,
+                    Some((speed_mbps * 10.0).round() / 10.0),
+                    "running",
+                    None,
+                );
+            }
             last_emit = now;
             last_downloaded = downloaded;
         }
@@ -616,20 +657,18 @@ async fn download_file(
         .await
         .map_err(DownloadError::Failed)?;
     drop(file);
-    if task.is_cancelled() {
-        return Err(DownloadError::Cancelled);
-    }
-    finalize_part_file(&part_path, dest, expected_bytes)
-        .await
-        .map_err(DownloadError::Failed)
+    finalize_part_file(task, &part_path, dest, expected_bytes, terminal_artifact).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs::{self, File};
-    use std::io::Write;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
     use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::time::Duration;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_dir(test_name: &str) -> PathBuf {
@@ -645,8 +684,19 @@ mod tests {
         path
     }
 
+    fn test_task() -> (DownloadTaskState, DownloadTaskGuard) {
+        let state = DownloadTaskState::default();
+        let task = state.begin(GgufModelVariant::Q4KM).unwrap();
+        (state, task)
+    }
+
+    fn leak(value: String) -> &'static str {
+        Box::leak(value.into_boxed_str())
+    }
+
     #[tokio::test]
     async fn exact_size_wrong_magic_part_is_removed_and_retry_can_promote() {
+        let (_state, task) = test_task();
         let root = temp_dir("wrong-magic-part");
         let part_path = root.join("model.part");
         let dest = root.join("model.gguf");
@@ -658,7 +708,7 @@ mod tests {
             .expect("part file should have exact expected size");
         drop(part);
 
-        let result = finalize_part_file(&part_path, &dest, expected_bytes).await;
+        let result = finalize_part_file(&task, &part_path, &dest, expected_bytes, false).await;
         let invalid_part_removed = !part_path.exists();
         let invalid_dest_absent = !dest.exists();
         let retry_promoted = if invalid_part_removed {
@@ -670,7 +720,7 @@ mod tests {
                 .set_len(expected_bytes)
                 .expect("retry part should have exact expected size");
             drop(retry_part);
-            finalize_part_file(&part_path, &dest, expected_bytes)
+            finalize_part_file(&task, &part_path, &dest, expected_bytes, false)
                 .await
                 .is_ok()
                 && managed_file_is_valid(&dest, expected_bytes)
@@ -687,6 +737,7 @@ mod tests {
 
     #[tokio::test]
     async fn incomplete_regular_part_is_preserved_for_resume() {
+        let (_state, task) = test_task();
         let root = temp_dir("incomplete-part");
         let part_path = root.join("model.part");
         let dest = root.join("model.gguf");
@@ -697,7 +748,7 @@ mod tests {
             .expect("part file should remain incomplete");
         drop(part);
 
-        let result = finalize_part_file(&part_path, &dest, 64).await;
+        let result = finalize_part_file(&task, &part_path, &dest, 64, false).await;
         let part_preserved = part_path.exists();
         let dest_absent = !dest.exists();
         fs::remove_dir_all(root).expect("temp directory should be removed");
@@ -709,6 +760,7 @@ mod tests {
 
     #[tokio::test]
     async fn different_source_resets_partial_bytes_and_metadata() {
+        let (_state, task) = test_task();
         let root = temp_dir("different-source");
         let part_path = root.join("model.part");
         fs::write(&part_path, b"GGUFold-source").unwrap();
@@ -723,9 +775,10 @@ mod tests {
         .await
         .unwrap();
 
-        let resume = prepare_part_for_source(&part_path, "https://second.example/model.gguf", true)
-            .await
-            .unwrap();
+        let resume =
+            prepare_part_for_source(&task, &part_path, "https://second.example/model.gguf", true)
+                .await
+                .unwrap();
 
         assert_eq!(resume, 0);
         assert!(!part_path.exists());
@@ -735,6 +788,7 @@ mod tests {
 
     #[tokio::test]
     async fn matching_source_with_validator_resumes_from_partial_length() {
+        let (_state, task) = test_task();
         let root = temp_dir("matching-source");
         let part_path = root.join("model.part");
         fs::write(&part_path, b"GGUFsame-source").unwrap();
@@ -749,9 +803,10 @@ mod tests {
         .await
         .unwrap();
 
-        let resume = prepare_part_for_source(&part_path, "https://example.com/model.gguf", true)
-            .await
-            .unwrap();
+        let resume =
+            prepare_part_for_source(&task, &part_path, "https://example.com/model.gguf", true)
+                .await
+                .unwrap();
 
         assert_eq!(resume, b"GGUFsame-source".len() as u64);
         assert!(part_path.exists());
@@ -793,6 +848,7 @@ mod tests {
 
     #[tokio::test]
     async fn wrong_content_range_start_is_rejected_and_reset() {
+        let (_state, task) = test_task();
         let root = temp_dir("wrong-content-range");
         let part_path = root.join("model.part");
         fs::write(&part_path, b"GGUFincomplete").unwrap();
@@ -804,6 +860,7 @@ mod tests {
         write_source_metadata(&part_path, &metadata).await.unwrap();
 
         let result = validate_or_reset_partial(
+            &task,
             &part_path,
             14,
             Some("bytes 0-63/64"),
@@ -813,6 +870,307 @@ mod tests {
         .await;
 
         assert!(result.is_err());
+        assert!(!part_path.exists());
+        assert!(!source_metadata_path(&part_path).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn blocked_stream_cancels_promptly_preserves_part_and_skips_fallback() {
+        let root = temp_dir("blocked-stream");
+        let dest = root.join("model.gguf");
+        let part_path = dest.with_extension("part");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = leak(format!(
+            "http://{}/model.gguf",
+            listener.local_addr().unwrap()
+        ));
+        let (body_sent, body_received) = std::sync::mpsc::channel();
+        let (release_server, wait_for_release) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = [0_u8; 2048];
+            let _ = stream.read(&mut request).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nETag: test-etag\r\n\r\nGGUF")
+                .unwrap();
+            stream.flush().unwrap();
+            body_sent.send(()).unwrap();
+            let _ = wait_for_release.recv_timeout(Duration::from_secs(2));
+        });
+
+        let state = DownloadTaskState::default();
+        let task = Arc::new(state.begin(GgufModelVariant::Q4KM).unwrap());
+        let task_for_download = task.clone();
+        let dest_for_download = dest.clone();
+        let sources = vec![
+            DownloadSource {
+                name: "blocked",
+                url,
+            },
+            DownloadSource {
+                name: "must-not-run",
+                url: "http://127.0.0.1:9/fallback.gguf",
+            },
+        ];
+        let download = tokio::spawn(async move {
+            let client = build_http_client().unwrap();
+            download_file_with_fallback(
+                None,
+                &task_for_download,
+                &client,
+                &sources,
+                &dest_for_download,
+                "model",
+                8,
+                false,
+                false,
+                || {},
+            )
+            .await
+        });
+
+        tokio::task::spawn_blocking(move || {
+            body_received.recv_timeout(Duration::from_secs(2)).unwrap()
+        })
+        .await
+        .unwrap();
+        for _ in 0..100 {
+            if fs::metadata(&part_path).map(|meta| meta.len()).ok() == Some(4) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        state.cancel(task.task_id()).unwrap();
+        let result = tokio::time::timeout(Duration::from_millis(300), download)
+            .await
+            .expect("blocked stream should be interrupted")
+            .unwrap();
+        release_server.send(()).ok();
+        server.join().unwrap();
+
+        assert!(matches!(result, Err(DownloadError::Cancelled)));
+        assert_eq!(fs::read(&part_path).unwrap(), b"GGUF");
+        assert!(source_metadata_path(&part_path).exists());
+        assert!(!dest.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn blocked_response_cancels_promptly_and_preserves_existing_partial() {
+        let root = temp_dir("blocked-response");
+        let dest = root.join("model.gguf");
+        let part_path = dest.with_extension("part");
+        fs::write(&part_path, b"GGUFOLD").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = leak(format!(
+            "http://{}/model.gguf",
+            listener.local_addr().unwrap()
+        ));
+        write_source_metadata(
+            &part_path,
+            &SourceMetadata {
+                url: url.to_string(),
+                etag: Some("stable-etag".to_string()),
+                last_modified: None,
+            },
+        )
+        .await
+        .unwrap();
+        let (request_seen, wait_for_request) = std::sync::mpsc::channel();
+        let (release_server, wait_for_release) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 2048];
+            let _ = stream.read(&mut request).unwrap();
+            request_seen.send(()).unwrap();
+            let _ = wait_for_release.recv_timeout(Duration::from_secs(2));
+        });
+
+        let state = DownloadTaskState::default();
+        let task = Arc::new(state.begin(GgufModelVariant::Q4KM).unwrap());
+        let task_for_download = task.clone();
+        let dest_for_download = dest.clone();
+        let sources = vec![
+            DownloadSource {
+                name: "blocked",
+                url,
+            },
+            DownloadSource {
+                name: "must-not-run",
+                url: "http://127.0.0.1:9/fallback.gguf",
+            },
+        ];
+        let download = tokio::spawn(async move {
+            let client = build_http_client().unwrap();
+            download_file_with_fallback(
+                None,
+                &task_for_download,
+                &client,
+                &sources,
+                &dest_for_download,
+                "model",
+                8,
+                false,
+                false,
+                || {},
+            )
+            .await
+        });
+
+        tokio::task::spawn_blocking(move || {
+            wait_for_request
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+        })
+        .await
+        .unwrap();
+        state.cancel(task.task_id()).unwrap();
+        let result = tokio::time::timeout(Duration::from_millis(300), download)
+            .await
+            .expect("blocked response should be interrupted")
+            .unwrap();
+        release_server.send(()).ok();
+        server.join().unwrap();
+
+        assert!(matches!(result, Err(DownloadError::Cancelled)));
+        assert_eq!(fs::read(&part_path).unwrap(), b"GGUFOLD");
+        assert!(source_metadata_path(&part_path).exists());
+        assert!(!dest.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn accepted_cancellation_after_source_failure_prevents_fallback_reset() {
+        let root = temp_dir("cancel-before-fallback");
+        let dest = root.join("model.gguf");
+        let part_path = dest.with_extension("part");
+        fs::write(&part_path, b"GGUFOLD").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = leak(format!(
+            "http://{}/model.gguf",
+            listener.local_addr().unwrap()
+        ));
+        write_source_metadata(
+            &part_path,
+            &SourceMetadata {
+                url: url.to_string(),
+                etag: Some("stable-etag".to_string()),
+                last_modified: None,
+            },
+        )
+        .await
+        .unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 2048];
+            let _ = stream.read(&mut request).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n")
+                .unwrap();
+        });
+
+        let state = DownloadTaskState::default();
+        let task = state.begin(GgufModelVariant::Q4KM).unwrap();
+        let task_id = task.task_id();
+        let cancel_state = state.clone();
+        let sources = vec![
+            DownloadSource {
+                name: "failed",
+                url,
+            },
+            DownloadSource {
+                name: "must-not-run",
+                url: "http://127.0.0.1:9/fallback.gguf",
+            },
+        ];
+        let client = build_http_client().unwrap();
+        let result = download_file_with_fallback(
+            None,
+            &task,
+            &client,
+            &sources,
+            &dest,
+            "model",
+            8,
+            false,
+            false,
+            move || cancel_state.cancel(task_id).unwrap(),
+        )
+        .await;
+        server.join().unwrap();
+
+        assert!(matches!(result, Err(DownloadError::Cancelled)));
+        assert_eq!(fs::read(&part_path).unwrap(), b"GGUFOLD");
+        assert!(source_metadata_path(&part_path).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn accepted_cancellation_prevents_actual_file_promotion() {
+        let root = temp_dir("cancel-before-promote");
+        let part_path = root.join("model.part");
+        let dest = root.join("model.gguf");
+        fs::write(&part_path, b"GGUFNEW!").unwrap();
+        fs::write(&dest, b"GGUFOLD!").unwrap();
+        let (state, task) = test_task();
+        state.cancel(task.task_id()).unwrap();
+
+        let result = finalize_part_file(&task, &part_path, &dest, 8, false).await;
+
+        assert!(matches!(result, Err(DownloadError::Cancelled)));
+        assert_eq!(fs::read(&part_path).unwrap(), b"GGUFNEW!");
+        assert_eq!(fs::read(&dest).unwrap(), b"GGUFOLD!");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn range_request_answered_with_200_restarts_from_zero() {
+        let root = temp_dir("range-200");
+        let dest = root.join("model.gguf");
+        let part_path = dest.with_extension("part");
+        fs::write(&part_path, b"GGUFOLD").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = leak(format!(
+            "http://{}/model.gguf",
+            listener.local_addr().unwrap()
+        ));
+        write_source_metadata(
+            &part_path,
+            &SourceMetadata {
+                url: url.to_string(),
+                etag: Some("old-etag".to_string()),
+                last_modified: None,
+            },
+        )
+        .await
+        .unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 2048];
+            let bytes = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..bytes]).to_ascii_lowercase();
+            assert!(request.contains("range: bytes=7-"));
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nETag: new-etag\r\n\r\nGGUFNEW!",
+                )
+                .unwrap();
+        });
+
+        let (_state, task) = test_task();
+        let client = build_http_client().unwrap();
+        let result = download_file(
+            None, &task, &client, url, &dest, "model", "local", 8, false, false,
+        )
+        .await;
+        server.join().unwrap();
+
+        assert_eq!(result.unwrap(), 8);
+        assert_eq!(fs::read(&dest).unwrap(), b"GGUFNEW!");
         assert!(!part_path.exists());
         assert!(!source_metadata_path(&part_path).exists());
         fs::remove_dir_all(root).unwrap();
