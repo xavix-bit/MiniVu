@@ -434,6 +434,25 @@ pub(crate) async fn install_gguf_model_inner(
 ) -> Result<ModelMutationResult, String> {
     let _mutation = lifecycle.begin_mutation()?;
     let previous_settings = load_settings(&app)?;
+    install_gguf_model_with_lease(
+        app,
+        sidecar,
+        download_state,
+        previous_settings,
+        variant,
+        force,
+    )
+    .await
+}
+
+pub(crate) async fn install_gguf_model_with_lease(
+    app: AppHandle,
+    sidecar: &SidecarState,
+    download_state: &DownloadTaskState,
+    previous_settings: crate::settings::AppSettings,
+    variant: GgufModelVariant,
+    force: bool,
+) -> Result<ModelMutationResult, String> {
     ensure_gguf_backend(previous_settings.inference_backend)?;
     let previous_variant = previous_settings.gguf_model_variant;
     let cache = ModelCache::new(&app)?;

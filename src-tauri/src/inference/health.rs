@@ -162,7 +162,7 @@ pub async fn wait_for_sidecar_ready(
             if guard.generation() != Some(generation) {
                 return Err("模型已切换，请重试。".to_string());
             }
-            guard.is_child_alive()
+            guard.is_child_alive()?
         };
         if !child_alive {
             let tail = read_mlx_sidecar_log_tail(app, 8);

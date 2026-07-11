@@ -80,7 +80,7 @@ pub fn get_model_status(
         model_size: cache
             .model_size_bytes(settings.gguf_model_variant)
             .map(crate::model_cache::format_bytes),
-        sidecar_running: guard.is_running(),
+        sidecar_running: guard.is_running()?,
         llama_server_available: resolve_llama_server(&app).is_some(),
         inference_backend: settings.inference_backend,
         gguf_model_variant: settings.gguf_model_variant,

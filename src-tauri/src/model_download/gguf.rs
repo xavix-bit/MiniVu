@@ -321,22 +321,82 @@ fn source_metadata_path(part_path: &Path) -> PathBuf {
     part_path.with_file_name(format!("{file_name}.source.json"))
 }
 
-async fn read_source_metadata(part_path: &Path) -> Option<SourceMetadata> {
-    let raw = tokio::fs::read(source_metadata_path(part_path))
-        .await
-        .ok()?;
-    serde_json::from_slice(&raw).ok()
+fn reject_symlink(path: &Path, label: &str) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err(format!("拒绝使用符号链接形式的{label}"))
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("无法检查{label}: {error}")),
+    }
+}
+
+fn reject_managed_symlinks(dest: &Path, part_path: &Path) -> Result<(), String> {
+    reject_symlink(dest, "模型文件")?;
+    reject_symlink(part_path, "未完成下载文件")?;
+    reject_symlink(&source_metadata_path(part_path), "下载来源记录")
+}
+
+async fn read_source_metadata(part_path: &Path) -> Result<Option<SourceMetadata>, String> {
+    let path = source_metadata_path(part_path);
+    reject_symlink(&path, "下载来源记录")?;
+    let raw = match tokio::fs::read(path).await {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    Ok(serde_json::from_slice(&raw).ok())
 }
 
 async fn write_source_metadata(part_path: &Path, metadata: &SourceMetadata) -> Result<(), String> {
     let raw = serde_json::to_vec(metadata).map_err(|error| error.to_string())?;
-    tokio::fs::write(source_metadata_path(part_path), raw)
+    let path = source_metadata_path(part_path);
+    reject_symlink(&path, "下载来源记录")?;
+    let mut options = OpenOptions::new();
+    options.create(true).write(true).truncate(true);
+    #[cfg(unix)]
+    {
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = options
+        .open(path)
+        .await
+        .map_err(|error| error.to_string())?;
+    file.write_all(&raw)
+        .await
+        .map_err(|error| error.to_string())?;
+    file.flush().await.map_err(|error| error.to_string())
+}
+
+async fn open_partial_for_write(
+    part_path: &Path,
+    resume_from: u64,
+) -> Result<tokio::fs::File, String> {
+    reject_symlink(part_path, "未完成下载文件")?;
+    let mut options = OpenOptions::new();
+    options.create(true).write(true);
+    if resume_from > 0 {
+        options.append(true);
+    } else {
+        options.truncate(true);
+    }
+    #[cfg(unix)]
+    {
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    options
+        .open(part_path)
         .await
         .map_err(|error| error.to_string())
 }
 
 async fn reset_partial(part_path: &Path) -> Result<(), String> {
-    for path in [part_path.to_path_buf(), source_metadata_path(part_path)] {
+    let paths = [part_path.to_path_buf(), source_metadata_path(part_path)];
+    for path in &paths {
+        reject_symlink(&path, "受管下载文件")?;
+    }
+    for path in paths {
         match tokio::fs::remove_file(path).await {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -362,6 +422,7 @@ async fn prepare_part_for_source(
     allow_resume: bool,
 ) -> DownloadResult<u64> {
     task.checkpoint().map_err(|_| DownloadError::Cancelled)?;
+    reject_symlink(part_path, "未完成下载文件").map_err(DownloadError::Failed)?;
     let part_len = match tokio::fs::metadata(part_path).await {
         Ok(metadata) if metadata.is_file() => metadata.len(),
         Ok(_) => {
@@ -375,7 +436,9 @@ async fn prepare_part_for_source(
         Err(error) => return Err(DownloadError::Failed(error.to_string())),
     };
 
-    let metadata = read_source_metadata(part_path).await;
+    let metadata = read_source_metadata(part_path)
+        .await
+        .map_err(DownloadError::Failed)?;
     let can_resume = allow_resume
         && metadata
             .as_ref()
@@ -533,6 +596,7 @@ async fn finalize_part_file(
     terminal_artifact: bool,
     before_promotion: &(dyn Fn() + Send + Sync),
 ) -> DownloadResult<u64> {
+    reject_managed_symlinks(dest, part_path).map_err(DownloadError::Failed)?;
     if !managed_file_is_valid(part_path, expected_bytes) {
         let should_remove = tokio::fs::symlink_metadata(part_path)
             .await
@@ -546,6 +610,7 @@ async fn finalize_part_file(
         ));
     }
     before_promotion();
+    reject_managed_symlinks(dest, part_path).map_err(DownloadError::Failed)?;
     let finalization = task
         .begin_finalization()
         .map_err(|_| DownloadError::Cancelled)?;
@@ -578,6 +643,7 @@ async fn download_file(
     let part_path = dest.with_extension("part");
 
     task.checkpoint().map_err(|_| DownloadError::Cancelled)?;
+    reject_managed_symlinks(dest, &part_path).map_err(DownloadError::Failed)?;
 
     if force {
         reset_partial_checked(task, &part_path).await?;
@@ -603,7 +669,9 @@ async fn download_file(
 
     let allow_resume = !url.contains("modelscope.cn");
     let mut resume_from = prepare_part_for_source(task, &part_path, url, allow_resume).await?;
-    let previous_metadata = read_source_metadata(&part_path).await;
+    let previous_metadata = read_source_metadata(&part_path)
+        .await
+        .map_err(DownloadError::Failed)?;
 
     if task.is_cancelled() {
         return Err(DownloadError::Cancelled);
@@ -709,21 +777,13 @@ async fn download_file(
     let preparation = task
         .begin_finalization()
         .map_err(|_| DownloadError::Cancelled)?;
+    reject_managed_symlinks(dest, &part_path).map_err(DownloadError::Failed)?;
     write_source_metadata(&part_path, &current_metadata)
         .await
         .map_err(DownloadError::Failed)?;
-    let mut file = if resume_from > 0 {
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&part_path)
-            .await
-            .map_err(|error| DownloadError::Failed(error.to_string()))?
-    } else {
-        tokio::fs::File::create(&part_path)
-            .await
-            .map_err(|error| DownloadError::Failed(error.to_string()))?
-    };
+    let mut file = open_partial_for_write(&part_path, resume_from)
+        .await
+        .map_err(DownloadError::Failed)?;
     drop(preparation);
 
     let mut downloaded = resume_from;
@@ -935,6 +995,101 @@ mod tests {
 
         assert_eq!(downloaded, 8);
         assert_eq!(requests.load(Ordering::SeqCst), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_symlinks_are_rejected_without_touching_their_targets() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_dir("managed-symlink-rejection");
+        let client = build_http_client().unwrap();
+        let url = "http://127.0.0.1:9/model.gguf";
+
+        let final_dest = root.join("final.gguf");
+        let final_target = root.join("outside-final.bin");
+        fs::write(&final_target, b"FINAL-UNCHANGED").unwrap();
+        symlink(&final_target, &final_dest).unwrap();
+        let (_state, task) = test_task();
+        let error = download_file(
+            None,
+            &task,
+            &client,
+            url,
+            &final_dest,
+            "model",
+            "local-test",
+            8,
+            false,
+            false,
+            &no_op_promotion_hook,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("符号链接"));
+        assert_eq!(fs::read(&final_target).unwrap(), b"FINAL-UNCHANGED");
+        assert!(fs::symlink_metadata(&final_dest)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+
+        let part_dest = root.join("part.gguf");
+        let part_path = part_dest.with_extension("part");
+        let part_target = root.join("outside-part.bin");
+        fs::write(&part_target, b"PART-UNCHANGED").unwrap();
+        symlink(&part_target, &part_path).unwrap();
+        let (_state, task) = test_task();
+        let error = download_file(
+            None,
+            &task,
+            &client,
+            url,
+            &part_dest,
+            "model",
+            "local-test",
+            8,
+            false,
+            false,
+            &no_op_promotion_hook,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("符号链接"));
+        assert_eq!(fs::read(&part_target).unwrap(), b"PART-UNCHANGED");
+        assert!(fs::symlink_metadata(&part_path)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+
+        let metadata_dest = root.join("metadata.gguf");
+        let metadata_path = source_metadata_path(&metadata_dest.with_extension("part"));
+        let metadata_target = root.join("outside-metadata.json");
+        fs::write(&metadata_target, b"METADATA-UNCHANGED").unwrap();
+        symlink(&metadata_target, &metadata_path).unwrap();
+        let (_state, task) = test_task();
+        let error = download_file(
+            None,
+            &task,
+            &client,
+            url,
+            &metadata_dest,
+            "model",
+            "local-test",
+            8,
+            false,
+            false,
+            &no_op_promotion_hook,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("符号链接"));
+        assert_eq!(fs::read(&metadata_target).unwrap(), b"METADATA-UNCHANGED");
+        assert!(fs::symlink_metadata(&metadata_path)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+
         fs::remove_dir_all(root).unwrap();
     }
 

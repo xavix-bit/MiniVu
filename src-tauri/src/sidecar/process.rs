@@ -58,6 +58,25 @@ fn terminate_and_confirm<P: ProcessControl>(
     Err("停止推理进程超时，请稍后重试。".to_string())
 }
 
+fn process_running<P: ProcessControl>(
+    child: &mut Option<P>,
+    active_identity: &mut Option<SidecarIdentity>,
+    ready_generation: &mut Option<u64>,
+) -> Result<bool, String> {
+    let exited = match child.as_mut() {
+        Some(process) => process
+            .has_exited()
+            .map_err(|error| format!("无法检查推理进程状态：{error}"))?,
+        None => return Ok(false),
+    };
+    if exited {
+        *child = None;
+        *active_identity = None;
+        *ready_generation = None;
+    }
+    Ok(!exited)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn ensure_identity_started<P: ProcessControl>(
     child: &mut Option<P>,
@@ -146,23 +165,15 @@ impl ModelSidecar {
         self.generation
     }
 
-    pub fn is_running(&mut self) -> bool {
-        let exited = match self.child.as_mut() {
-            Some(child) => match child.try_wait() {
-                Ok(status) => status.is_some(),
-                Err(_) => return false,
-            },
-            None => return false,
-        };
-        if exited {
-            self.child = None;
-            self.active_identity = None;
-            self.ready_generation = None;
-        }
-        !exited
+    pub fn is_running(&mut self) -> Result<bool, String> {
+        process_running(
+            &mut self.child,
+            &mut self.active_identity,
+            &mut self.ready_generation,
+        )
     }
 
-    pub fn is_child_alive(&mut self) -> bool {
+    pub fn is_child_alive(&mut self) -> Result<bool, String> {
         self.is_running()
     }
 
@@ -273,7 +284,10 @@ pub fn default_sidecar_port() -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_identity_started, terminate_and_confirm, ModelSidecar, ProcessControl};
+    use super::{
+        ensure_identity_started, process_running, terminate_and_confirm, ModelSidecar,
+        ProcessControl,
+    };
     use crate::inference::context::{ActiveInferenceContext, SidecarIdentity};
     use std::cell::Cell;
     use std::io;
@@ -418,6 +432,30 @@ mod tests {
         assert!(error.contains("超时"));
         assert_eq!(kills.get(), 1);
         assert!(!process.exited);
+    }
+
+    #[test]
+    fn running_status_propagates_wait_error_without_clearing_identity() {
+        let kills = Rc::new(Cell::new(1));
+        let mut child = Some(FakeProcess {
+            exited: false,
+            exits_after_kill: false,
+            kill_error: false,
+            wait_error: true,
+            kills,
+        });
+        let expected_identity = SidecarIdentity::Mlx {
+            spec: "active".to_string(),
+        };
+        let mut identity = Some(expected_identity.clone());
+        let mut ready = Some(4);
+
+        let error = process_running(&mut child, &mut identity, &mut ready).unwrap_err();
+
+        assert!(error.contains("wait failed"));
+        assert!(child.is_some());
+        assert_eq!(identity, Some(expected_identity));
+        assert_eq!(ready, Some(4));
     }
 
     #[test]

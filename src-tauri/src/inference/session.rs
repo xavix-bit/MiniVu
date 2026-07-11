@@ -150,7 +150,7 @@ pub async fn run_ask_image(
         }
 
         let mut guard = lock_sidecar(sidecar);
-        if !guard.is_running() {
+        if !guard.is_running()? {
             if let Some(generation) = guard.generation() {
                 guard.set_service_ready(generation, false);
             }
