@@ -37,6 +37,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(init_sidecar_state())
         .manage(init_generation_flag())
+        .manage(model_download::DownloadTaskState::default())
         .manage(Mutex::new(window::QuickPanelState::default()))
         .setup(|app| {
             tray::create_tray(app.handle())?;
@@ -67,6 +68,8 @@ pub fn run() {
             model_sidecar::get_environment_status,
             model_sidecar::is_app_environment_ready,
             model_download::download_model,
+            model_download::get_model_download_status,
+            model_download::cancel_model_download,
             model_download::download_mlx_model,
             mirror_benchmark::benchmark_download_mirrors,
             model_sidecar::ask_image,

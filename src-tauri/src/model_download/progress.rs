@@ -1,4 +1,5 @@
 use crate::model_cache;
+use crate::model_download::task::DownloadTaskGuard;
 use crate::runtime_installer::emit_setup_progress;
 use tauri::{AppHandle, Emitter};
 
@@ -14,6 +15,7 @@ pub fn emit_setup_progress_for_file(
 
 pub fn emit_download_progress(
     app: &AppHandle,
+    task: &DownloadTaskGuard,
     label: &str,
     source_name: &str,
     downloaded: u64,
@@ -40,10 +42,14 @@ pub fn emit_download_progress(
         }
     });
 
+    task.update(status, Some(label), downloaded, total, Some(source_name));
+
     let _ = app.emit(
         "model-download-progress",
         serde_json::json!({
             "file": label,
+            "taskId": task.task_id(),
+            "variant": task.variant(),
             "status": status,
             "downloaded": downloaded,
             "total": total,
@@ -58,6 +64,33 @@ pub fn emit_download_progress(
         let setup_status = if status == "done" { "done" } else { "running" };
         emit_setup_progress(app, label, setup_status, &message_owned, percent);
     }
+}
+
+pub fn emit_task_progress(
+    app: &AppHandle,
+    task: &DownloadTaskGuard,
+    label: &str,
+    status: &str,
+    message: &str,
+    downloaded: u64,
+    total: Option<u64>,
+    source: Option<&str>,
+) {
+    task.update(status, Some(label), downloaded, total, source);
+    let _ = app.emit(
+        "model-download-progress",
+        serde_json::json!({
+            "taskId": task.task_id(),
+            "variant": task.variant(),
+            "file": label,
+            "status": status,
+            "message": message,
+            "downloaded": downloaded,
+            "total": total,
+            "percent": 0,
+            "source": source,
+        }),
+    );
 }
 
 pub fn emit_mlx_download_progress(

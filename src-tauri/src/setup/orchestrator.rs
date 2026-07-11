@@ -6,7 +6,7 @@ use crate::runtime_installer::{
 use crate::settings::{load_settings, update_settings, InferenceBackend};
 use crate::shortcut::register_shortcut;
 use serde::Serialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,7 +19,7 @@ pub struct SetupEnvironmentResult {
 pub async fn setup_environment(app: AppHandle) -> Result<SetupEnvironmentResult, String> {
     use crate::commands::get_device_info;
     use crate::model_cache::ModelCache;
-    use crate::model_download::{download_mlx_model, download_model};
+    use crate::model_download::{download_mlx_model, download_model_for_setup, DownloadTaskState};
 
     emit_setup_progress(&app, "device", "running", "正在检测本机配置…", 0);
     let device = get_device_info();
@@ -55,7 +55,8 @@ pub async fn setup_environment(app: AppHandle) -> Result<SetupEnvironmentResult,
             0,
         );
         emit_setup_progress(&app, "mmproj", "waiting", "等待主模型完成后开始…", 0);
-        download_model(app.clone(), None).await?;
+        let download_state = app.state::<DownloadTaskState>();
+        download_model_for_setup(app.clone(), download_state.inner(), None).await?;
         emit_setup_progress(&app, "mmproj", "done", "视觉投影已下载", 100);
         emit_setup_progress(&app, "model", "done", "主模型已下载", 100);
     } else if backend == InferenceBackend::Mlx {

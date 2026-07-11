@@ -24,7 +24,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
 reqwest = { version = "0.12", features = ["stream", "json", "rustls-tls", "cookies"], default-features = false }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "time", "sync"] }
 futures-util = "0.3"
 thiserror = "2"
 tauri-plugin-dialog = "2"
@@ -37,4 +37,3 @@ tauri-plugin-global-shortcut = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24"
-

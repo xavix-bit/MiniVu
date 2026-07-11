@@ -1,15 +1,60 @@
 use crate::download_http::{build_http_client, with_download_headers};
-use crate::model_cache::{managed_file_is_valid, ModelCache};
-use crate::model_download::progress::emit_download_progress;
+use crate::model_cache::{managed_file_is_valid, DownloadSource, ModelCache};
+use crate::model_download::progress::{emit_download_progress, emit_task_progress};
+use crate::model_download::task::{cancelable, DownloadTaskGuard, DownloadTaskState};
 use crate::runtime_installer::emit_setup_progress;
-use crate::settings::{load_settings, DownloadMirror, MirrorId};
+use crate::settings::{load_settings, DownloadMirror, GgufModelVariant, MirrorId};
 use futures_util::StreamExt;
-use reqwest::{Client, StatusCode};
-use std::path::Path;
+use reqwest::header::{CONTENT_RANGE, ETAG, IF_RANGE, LAST_MODIFIED, RANGE};
+use reqwest::{Client, Response, StatusCode};
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use std::time::Instant;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
+
+const CANCELLATION_ERROR: &str = "模型下载已取消";
+
+#[derive(Debug, thiserror::Error)]
+enum DownloadError {
+    #[error("{CANCELLATION_ERROR}")]
+    Cancelled,
+    #[error("{0}")]
+    Failed(String),
+}
+
+type DownloadResult<T> = Result<T, DownloadError>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct SourceMetadata {
+    url: String,
+    etag: Option<String>,
+    last_modified: Option<String>,
+}
+
+impl SourceMetadata {
+    fn from_response(url: &str, response: &Response) -> Self {
+        Self {
+            url: url.to_string(),
+            etag: header_string(response, ETAG),
+            last_modified: header_string(response, LAST_MODIFIED),
+        }
+    }
+
+    fn validator(&self) -> Option<&str> {
+        self.etag.as_deref().or(self.last_modified.as_deref())
+    }
+
+    fn is_compatible_with(&self, current: &Self) -> bool {
+        self.url == current.url
+            && match (&self.etag, &self.last_modified) {
+                (Some(expected), _) => current.etag.as_ref() == Some(expected),
+                (None, Some(expected)) => current.last_modified.as_ref() == Some(expected),
+                (None, None) => false,
+            }
+    }
+}
 
 fn mirror_mode_label(mirror: DownloadMirror, preferred: Option<MirrorId>) -> &'static str {
     match mirror {
@@ -23,7 +68,7 @@ fn mirror_mode_label(mirror: DownloadMirror, preferred: Option<MirrorId>) -> &'s
     }
 }
 
-fn source_plan_label(sources: &[crate::model_cache::DownloadSource]) -> String {
+fn source_plan_label(sources: &[DownloadSource]) -> String {
     sources
         .iter()
         .map(|source| source.name)
@@ -31,59 +76,90 @@ fn source_plan_label(sources: &[crate::model_cache::DownloadSource]) -> String {
         .join(" → ")
 }
 
-pub async fn download_model(app: AppHandle, force: Option<bool>) -> Result<String, String> {
+pub async fn download_model(
+    app: AppHandle,
+    state: &DownloadTaskState,
+    force: Option<bool>,
+    target_variant: Option<GgufModelVariant>,
+) -> Result<String, String> {
+    let settings = load_settings(&app)?;
+    let variant = target_variant.unwrap_or(settings.gguf_model_variant);
+    let task = state.begin(variant)?;
+    let result = download_model_task(&app, &task, force.unwrap_or(false), &settings).await;
+
+    if let Err(error) = &result {
+        let snapshot = state.snapshot();
+        let status = if matches!(error, DownloadError::Cancelled) {
+            "canceled"
+        } else {
+            "failed"
+        };
+        let message = error.to_string();
+        emit_task_progress(
+            &app,
+            &task,
+            snapshot
+                .as_ref()
+                .and_then(|value| value.file.as_deref())
+                .unwrap_or("model"),
+            status,
+            &message,
+            snapshot.as_ref().map(|value| value.downloaded).unwrap_or(0),
+            snapshot.as_ref().and_then(|value| value.total),
+            snapshot.as_ref().and_then(|value| value.source.as_deref()),
+        );
+    }
+
+    result.map_err(|error| error.to_string())
+}
+
+async fn download_model_task(
+    app: &AppHandle,
+    task: &DownloadTaskGuard,
+    force: bool,
+    settings: &crate::settings::AppSettings,
+) -> DownloadResult<String> {
     use crate::model_cache::{
         gguf_model_spec, mmproj_sources_for, model_sources_for, EXPECTED_MMPROJ_BYTES,
     };
 
-    let force = force.unwrap_or(false);
-    let settings = load_settings(&app)?;
-    let variant = settings.gguf_model_variant;
+    let variant = task.variant();
     let spec = gguf_model_spec(variant);
-    let mirror = settings.download_mirror;
-    let preferred = settings.preferred_mirror;
-    let cache = ModelCache::new(&app)?;
-    let client = build_http_client()?;
-
+    let cache = ModelCache::new(app).map_err(DownloadError::Failed)?;
+    let client = build_http_client().map_err(DownloadError::Failed)?;
     let mmproj_dest = cache.default_mmproj_path();
     let model_dest = cache.default_model_path(variant);
     let model_dest_return = model_dest.clone();
+    let model_sources =
+        model_sources_for(variant, settings.download_mirror, settings.preferred_mirror);
 
-    if !crate::model_cache::file_is_valid(&mmproj_dest, "mmproj") {
-        tokio::fs::remove_file(mmproj_dest.with_extension("part"))
-            .await
-            .ok();
-    }
-
-    let model_sources = model_sources_for(variant, mirror, preferred);
-    let mirror_label = mirror_mode_label(mirror, preferred);
-    let model_plan = source_plan_label(&model_sources);
-
-    let _ = app.emit(
-        "model-download-progress",
-        serde_json::json!({
-            "file": "mmproj",
-            "status": "waiting",
-            "message": "等待主模型完成后开始…",
-            "downloaded": 0,
-            "total": null,
-            "percent": 0,
-        }),
+    emit_task_progress(
+        app,
+        task,
+        "mmproj",
+        "waiting",
+        "等待主模型完成后开始…",
+        0,
+        None,
+        None,
     );
-    let _ = app.emit(
-        "model-download-progress",
-        serde_json::json!({
-            "file": "model",
-            "status": "running",
-            "message": format!("{mirror_label} · {model_plan}"),
-            "downloaded": 0,
-            "total": null,
-            "percent": 0,
-            "source": model_sources.first().map(|s| s.name),
-        }),
+    emit_task_progress(
+        app,
+        task,
+        "model",
+        "running",
+        &format!(
+            "{} · {}",
+            mirror_mode_label(settings.download_mirror, settings.preferred_mirror),
+            source_plan_label(&model_sources)
+        ),
+        0,
+        None,
+        model_sources.first().map(|source| source.name),
     );
     download_file_with_fallback(
-        &app,
+        app,
+        task,
         &client,
         &model_sources,
         &model_dest,
@@ -93,28 +169,28 @@ pub async fn download_model(app: AppHandle, force: Option<bool>) -> Result<Strin
     )
     .await?;
 
-    let _ = app.emit(
-        "model-download-progress",
-        serde_json::json!({
-            "file": "mmproj",
-            "status": "running",
-            "message": "主模型已完成，开始下载视觉投影器…",
-            "downloaded": 0,
-            "total": null,
-            "percent": 0,
-        }),
+    emit_task_progress(
+        app,
+        task,
+        "mmproj",
+        "running",
+        "主模型已完成，开始下载视觉投影器…",
+        0,
+        None,
+        None,
     );
     emit_setup_progress(
-        &app,
+        app,
         "mmproj",
         "running",
         "主模型已完成，开始下载视觉投影器…",
         0,
     );
 
-    let mmproj_sources = mmproj_sources_for(mirror, preferred);
+    let mmproj_sources = mmproj_sources_for(settings.download_mirror, settings.preferred_mirror);
     download_file_with_fallback(
-        &app,
+        app,
+        task,
         &client,
         &mmproj_sources,
         &mmproj_dest,
@@ -129,28 +205,36 @@ pub async fn download_model(app: AppHandle, force: Option<bool>) -> Result<Strin
 
 async fn download_file_with_fallback(
     app: &AppHandle,
+    task: &DownloadTaskGuard,
     client: &Client,
-    sources: &[crate::model_cache::DownloadSource],
+    sources: &[DownloadSource],
     dest: &Path,
     label: &str,
     expected_bytes: u64,
     force: bool,
-) -> Result<(), String> {
+) -> DownloadResult<()> {
     let mut errors = Vec::new();
     for (index, source) in sources.iter().enumerate() {
         if index > 0 {
+            reset_partial(&dest.with_extension("part"))
+                .await
+                .map_err(DownloadError::Failed)?;
             let failed = errors.last().map(String::as_str).unwrap_or("上一源失败");
-            let _ = app.emit(
-                "model-download-progress",
-                serde_json::json!({
-                    "file": label,
-                    "status": "switching",
-                    "message": format!("{failed}，正在切换至 {}", source.name),
-                }),
+            emit_task_progress(
+                app,
+                task,
+                label,
+                "switching",
+                &format!("{failed}，正在切换至 {}", source.name),
+                0,
+                None,
+                Some(source.name),
             );
         }
+
         match download_file(
             app,
+            task,
             client,
             source.url,
             dest,
@@ -164,6 +248,7 @@ async fn download_file_with_fallback(
             Ok(bytes) => {
                 emit_download_progress(
                     app,
+                    task,
                     label,
                     source.name,
                     bytes,
@@ -174,15 +259,134 @@ async fn download_file_with_fallback(
                 );
                 return Ok(());
             }
-            Err(error) => errors.push(format!("{}: {error}", source.name)),
+            Err(DownloadError::Cancelled) => return Err(DownloadError::Cancelled),
+            Err(DownloadError::Failed(error)) => {
+                errors.push(format!("{}: {error}", source.name));
+            }
         }
     }
-    Err(errors.join("；"))
+    Err(DownloadError::Failed(errors.join("；")))
 }
 
-fn parse_content_range_total(value: &str) -> Option<u64> {
-    let (_, total) = value.split_once('/')?;
-    total.trim().parse().ok()
+fn source_metadata_path(part_path: &Path) -> PathBuf {
+    let file_name = part_path
+        .file_name()
+        .map(|value| value.to_string_lossy())
+        .unwrap_or_default();
+    part_path.with_file_name(format!("{file_name}.source.json"))
+}
+
+async fn read_source_metadata(part_path: &Path) -> Option<SourceMetadata> {
+    let raw = tokio::fs::read(source_metadata_path(part_path))
+        .await
+        .ok()?;
+    serde_json::from_slice(&raw).ok()
+}
+
+async fn write_source_metadata(part_path: &Path, metadata: &SourceMetadata) -> Result<(), String> {
+    let raw = serde_json::to_vec(metadata).map_err(|error| error.to_string())?;
+    tokio::fs::write(source_metadata_path(part_path), raw)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn reset_partial(part_path: &Path) -> Result<(), String> {
+    for path in [part_path.to_path_buf(), source_metadata_path(part_path)] {
+        match tokio::fs::remove_file(path).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("重置未完成下载失败: {error}")),
+        }
+    }
+    Ok(())
+}
+
+async fn prepare_part_for_source(
+    part_path: &Path,
+    url: &str,
+    allow_resume: bool,
+) -> Result<u64, String> {
+    let part_len = match tokio::fs::metadata(part_path).await {
+        Ok(metadata) if metadata.is_file() => metadata.len(),
+        Ok(_) => {
+            reset_partial(part_path).await?;
+            return Ok(0);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            tokio::fs::remove_file(source_metadata_path(part_path))
+                .await
+                .ok();
+            return Ok(0);
+        }
+        Err(error) => return Err(error.to_string()),
+    };
+
+    let metadata = read_source_metadata(part_path).await;
+    let can_resume = allow_resume
+        && metadata
+            .as_ref()
+            .map(|value| value.url == url && value.validator().is_some())
+            .unwrap_or(false);
+    if can_resume {
+        Ok(part_len)
+    } else {
+        reset_partial(part_path).await?;
+        Ok(0)
+    }
+}
+
+fn parse_content_range(value: &str) -> Option<(u64, u64)> {
+    let value = value.strip_prefix("bytes ")?;
+    let (range, total) = value.split_once('/')?;
+    let (start, _) = range.split_once('-')?;
+    Some((start.trim().parse().ok()?, total.trim().parse().ok()?))
+}
+
+fn validate_partial_response(
+    resume_from: u64,
+    content_range: Option<&str>,
+    previous: Option<&SourceMetadata>,
+    current: &SourceMetadata,
+) -> Result<u64, String> {
+    let (start, total) = content_range
+        .and_then(parse_content_range)
+        .ok_or_else(|| "服务器未返回有效的 Content-Range".to_string())?;
+    if start != resume_from {
+        return Err(format!("服务器续传起点为 {start}，预期为 {resume_from}"));
+    }
+    if !previous
+        .map(|metadata| metadata.is_compatible_with(current))
+        .unwrap_or(false)
+    {
+        return Err("下载源校验标识已变化".to_string());
+    }
+    Ok(total)
+}
+
+async fn validate_or_reset_partial(
+    part_path: &Path,
+    resume_from: u64,
+    content_range: Option<&str>,
+    previous: Option<&SourceMetadata>,
+    current: &SourceMetadata,
+) -> Result<u64, String> {
+    match validate_partial_response(resume_from, content_range, previous, current) {
+        Ok(total) => Ok(total),
+        Err(reason) => {
+            reset_partial(part_path).await?;
+            Err(format!(
+                "服务器返回了不兼容的续传范围（{reason}），已重置未完成下载"
+            ))
+        }
+    }
+}
+
+fn header_string(response: &Response, name: reqwest::header::HeaderName) -> Option<String> {
+    response
+        .headers()
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
 }
 
 async fn finalize_part_file(
@@ -196,9 +400,7 @@ async fn finalize_part_file(
             .map(|meta| !meta.file_type().is_file() || meta.len() >= expected_bytes)
             .unwrap_or(false);
         if should_remove {
-            tokio::fs::remove_file(part_path)
-                .await
-                .map_err(|e| format!("删除损坏文件失败: {e}"))?;
+            reset_partial(part_path).await?;
         }
         return Err("文件无效（需要常规文件、精确大小和 GGUF 文件头）".to_string());
     }
@@ -207,12 +409,20 @@ async fn finalize_part_file(
     }
     tokio::fs::rename(part_path, dest)
         .await
-        .map_err(|e| format!("保存文件失败: {e}"))?;
+        .map_err(|error| format!("保存文件失败: {error}"))?;
+    tokio::fs::remove_file(source_metadata_path(part_path))
+        .await
+        .ok();
     Ok(expected_bytes)
+}
+
+async fn flush_and_preserve_partial(file: &mut tokio::fs::File) -> Result<(), String> {
+    file.flush().await.map_err(|error| error.to_string())
 }
 
 async fn download_file(
     app: &AppHandle,
+    task: &DownloadTaskGuard,
     client: &Client,
     url: &str,
     dest: &Path,
@@ -220,152 +430,131 @@ async fn download_file(
     source_name: &str,
     expected_bytes: u64,
     force: bool,
-) -> Result<u64, String> {
+) -> DownloadResult<u64> {
     let part_path = dest.with_extension("part");
 
     if force {
-        tokio::fs::remove_file(dest).await.ok();
-        tokio::fs::remove_file(&part_path).await.ok();
+        reset_partial(&part_path)
+            .await
+            .map_err(DownloadError::Failed)?;
     } else if dest.exists() {
         if managed_file_is_valid(dest, expected_bytes) {
-            tokio::fs::remove_file(&part_path).await.ok();
-            emit_download_progress(
-                app,
-                label,
-                source_name,
-                expected_bytes,
-                Some(expected_bytes),
-                None,
-                "done",
-                Some("已存在，跳过下载"),
-            );
+            reset_partial(&part_path)
+                .await
+                .map_err(DownloadError::Failed)?;
             return Ok(expected_bytes);
         }
         tokio::fs::remove_file(dest).await.ok();
-        tokio::fs::remove_file(&part_path).await.ok();
-        emit_download_progress(
-            app,
-            label,
-            source_name,
-            0,
-            Some(expected_bytes),
-            None,
-            "running",
-            Some("检测到不完整文件，重新下载…"),
-        );
+        reset_partial(&part_path)
+            .await
+            .map_err(DownloadError::Failed)?;
     }
 
-    let is_modelscope = url.contains("modelscope.cn");
-    let mut resume_from = if part_path.exists() {
-        tokio::fs::metadata(&part_path)
-            .await
-            .map_err(|e| e.to_string())?
-            .len()
-    } else {
-        0
-    };
+    let allow_resume = !url.contains("modelscope.cn");
+    let mut resume_from = prepare_part_for_source(&part_path, url, allow_resume)
+        .await
+        .map_err(DownloadError::Failed)?;
+    let previous_metadata = read_source_metadata(&part_path).await;
 
-    if is_modelscope && resume_from > 0 {
-        if crate::model_cache::is_complete_size(expected_bytes, resume_from) {
-            let final_bytes = finalize_part_file(&part_path, dest, expected_bytes).await?;
-            emit_download_progress(
-                app,
-                label,
-                source_name,
-                final_bytes,
-                Some(final_bytes),
-                None,
-                "done",
-                Some("已存在，跳过下载"),
-            );
-            return Ok(final_bytes);
-        }
-        tokio::fs::remove_file(&part_path).await.ok();
-        resume_from = 0;
+    if task.is_cancelled() {
+        return Err(DownloadError::Cancelled);
+    }
+    if resume_from == expected_bytes {
+        return finalize_part_file(&part_path, dest, expected_bytes)
+            .await
+            .map_err(DownloadError::Failed);
+    }
+    if resume_from > 0 {
         emit_download_progress(
             app,
-            label,
-            source_name,
-            0,
-            Some(expected_bytes),
-            None,
-            "running",
-            Some("ModelScope 不支持断点续传，从头下载…"),
-        );
-    } else if resume_from > 0 {
-        emit_download_progress(
-            app,
+            task,
             label,
             source_name,
             resume_from,
-            None,
+            Some(expected_bytes),
             None,
             "running",
-            Some(&format!(
-                "续传下载… 已下载 {}",
-                crate::model_cache::format_bytes(resume_from)
-            )),
+            Some("续传下载…"),
         );
     }
 
     let mut request = with_download_headers(client.get(url), url);
     if resume_from > 0 {
-        request = request.header("Range", format!("bytes={resume_from}-"));
+        request = request.header(RANGE, format!("bytes={resume_from}-"));
+        if let Some(validator) = previous_metadata
+            .as_ref()
+            .and_then(SourceMetadata::validator)
+        {
+            request = request.header(IF_RANGE, validator);
+        }
     }
 
-    let response = request.send().await.map_err(|e| format!("连接失败: {e}"))?;
-
+    let mut cancellation = task.cancellation();
+    let response = cancelable(&mut cancellation, request.send())
+        .await
+        .map_err(|_| DownloadError::Cancelled)?
+        .map_err(|error| DownloadError::Failed(format!("连接失败: {error}")))?;
     let status = response.status();
 
     if status == StatusCode::RANGE_NOT_SATISFIABLE {
-        if resume_from > 0 && crate::model_cache::is_complete_size(expected_bytes, resume_from) {
-            let final_bytes = finalize_part_file(&part_path, dest, expected_bytes).await?;
-            return Ok(final_bytes);
+        if resume_from == expected_bytes && !task.is_cancelled() {
+            return finalize_part_file(&part_path, dest, expected_bytes)
+                .await
+                .map_err(DownloadError::Failed);
         }
-        if resume_from > 0 {
-            tokio::fs::remove_file(&part_path).await.ok();
-            return Err("续传偏移无效，请重试下载".to_string());
-        }
-        return Err(format!("HTTP {}", status));
+        reset_partial(&part_path)
+            .await
+            .map_err(DownloadError::Failed)?;
+        return Err(DownloadError::Failed(
+            "续传偏移无效，请重试下载".to_string(),
+        ));
     }
-
     if !status.is_success() {
-        return Err(format!("HTTP {}", status));
+        return Err(DownloadError::Failed(format!("HTTP {status}")));
     }
 
+    let current_metadata = SourceMetadata::from_response(url, &response);
     let total = if status == StatusCode::PARTIAL_CONTENT {
-        response
+        let content_range = response
             .headers()
-            .get("content-range")
-            .and_then(|value| value.to_str().ok())
-            .and_then(parse_content_range_total)
+            .get(CONTENT_RANGE)
+            .and_then(|value| value.to_str().ok());
+        match validate_or_reset_partial(
+            &part_path,
+            resume_from,
+            content_range,
+            previous_metadata.as_ref(),
+            &current_metadata,
+        )
+        .await
+        {
+            Ok(total) => Some(total),
+            Err(error) => return Err(DownloadError::Failed(error)),
+        }
     } else {
+        if resume_from > 0 {
+            reset_partial(&part_path)
+                .await
+                .map_err(DownloadError::Failed)?;
+            resume_from = 0;
+        }
         response.content_length()
     };
 
-    if status == StatusCode::OK && resume_from > 0 {
-        resume_from = 0;
-        tokio::fs::remove_file(&part_path).await.ok();
-    }
-
-    if let (Some(total_bytes), current) = (total, resume_from) {
-        if current >= total_bytes && part_path.exists() {
-            let final_bytes = finalize_part_file(&part_path, dest, expected_bytes).await?;
-            return Ok(final_bytes);
-        }
-    }
-
+    write_source_metadata(&part_path, &current_metadata)
+        .await
+        .map_err(DownloadError::Failed)?;
     let mut file = if resume_from > 0 {
         OpenOptions::new()
             .create(true)
             .append(true)
             .open(&part_path)
             .await
-            .map_err(|e| e.to_string())?
+            .map_err(|error| DownloadError::Failed(error.to_string()))?
     } else {
         tokio::fs::File::create(&part_path)
             .await
-            .map_err(|e| e.to_string())?
+            .map_err(|error| DownloadError::Failed(error.to_string()))?
     };
 
     let mut downloaded = resume_from;
@@ -376,9 +565,22 @@ async fn download_file(
     let mut last_downloaded = resume_from;
     let mut ema_speed_mbps: Option<f64> = None;
 
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| e.to_string())?;
-        file.write_all(&chunk).await.map_err(|e| e.to_string())?;
+    loop {
+        let chunk = match cancelable(&mut cancellation, stream.next()).await {
+            Err(_) => {
+                flush_and_preserve_partial(&mut file)
+                    .await
+                    .map_err(DownloadError::Failed)?;
+                drop(file);
+                return Err(DownloadError::Cancelled);
+            }
+            Ok(None) => break,
+            Ok(Some(Err(error))) => return Err(DownloadError::Failed(error.to_string())),
+            Ok(Some(Ok(chunk))) => chunk,
+        };
+        file.write_all(&chunk)
+            .await
+            .map_err(|error| DownloadError::Failed(error.to_string()))?;
         downloaded += chunk.len() as u64;
 
         let now = Instant::now();
@@ -388,15 +590,15 @@ async fn download_file(
             let window_speed = (delta as f64 / elapsed) / (1024.0 * 1024.0);
             ema_speed_mbps = Some(match ema_speed_mbps {
                 None => window_speed,
-                Some(prev) => 0.25 * window_speed + 0.75 * prev,
+                Some(previous) => 0.25 * window_speed + 0.75 * previous,
             });
             let session_elapsed = stream_started.elapsed().as_secs_f64().max(1.0);
             let session_bytes = downloaded.saturating_sub(stream_base_bytes);
             let session_speed = (session_bytes as f64 / session_elapsed) / (1024.0 * 1024.0);
-            let ema_speed = ema_speed_mbps.unwrap_or(window_speed);
-            let speed_mbps = 0.7 * session_speed + 0.3 * ema_speed;
+            let speed_mbps = 0.7 * session_speed + 0.3 * ema_speed_mbps.unwrap_or(window_speed);
             emit_download_progress(
                 app,
+                task,
                 label,
                 source_name,
                 downloaded,
@@ -410,22 +612,16 @@ async fn download_file(
         }
     }
 
-    file.flush().await.map_err(|e| e.to_string())?;
+    flush_and_preserve_partial(&mut file)
+        .await
+        .map_err(DownloadError::Failed)?;
     drop(file);
-
-    let final_bytes = finalize_part_file(&part_path, dest, expected_bytes).await?;
-    emit_download_progress(
-        app,
-        label,
-        source_name,
-        final_bytes,
-        total.or(Some(final_bytes)),
-        None,
-        "running",
-        None,
-    );
-
-    Ok(final_bytes)
+    if task.is_cancelled() {
+        return Err(DownloadError::Cancelled);
+    }
+    finalize_part_file(&part_path, dest, expected_bytes)
+        .await
+        .map_err(DownloadError::Failed)
 }
 
 #[cfg(test)]
@@ -509,5 +705,116 @@ mod tests {
         assert!(result.is_err());
         assert!(part_preserved);
         assert!(dest_absent);
+    }
+
+    #[tokio::test]
+    async fn different_source_resets_partial_bytes_and_metadata() {
+        let root = temp_dir("different-source");
+        let part_path = root.join("model.part");
+        fs::write(&part_path, b"GGUFold-source").unwrap();
+        write_source_metadata(
+            &part_path,
+            &SourceMetadata {
+                url: "https://first.example/model.gguf".to_string(),
+                etag: Some("first-etag".to_string()),
+                last_modified: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let resume = prepare_part_for_source(&part_path, "https://second.example/model.gguf", true)
+            .await
+            .unwrap();
+
+        assert_eq!(resume, 0);
+        assert!(!part_path.exists());
+        assert!(!source_metadata_path(&part_path).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn matching_source_with_validator_resumes_from_partial_length() {
+        let root = temp_dir("matching-source");
+        let part_path = root.join("model.part");
+        fs::write(&part_path, b"GGUFsame-source").unwrap();
+        write_source_metadata(
+            &part_path,
+            &SourceMetadata {
+                url: "https://example.com/model.gguf".to_string(),
+                etag: Some("stable-etag".to_string()),
+                last_modified: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let resume = prepare_part_for_source(&part_path, "https://example.com/model.gguf", true)
+            .await
+            .unwrap();
+
+        assert_eq!(resume, b"GGUFsame-source".len() as u64);
+        assert!(part_path.exists());
+        assert!(source_metadata_path(&part_path).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancellation_preserves_partial_and_completed_destination() {
+        let root = temp_dir("cancel-preserves-files");
+        let part_path = root.join("model.part");
+        let dest = root.join("model.gguf");
+        fs::write(&dest, b"GGUFcompleted").unwrap();
+        let mut part = tokio::fs::File::create(&part_path).await.unwrap();
+        part.write_all(b"GGUFincomplete").await.unwrap();
+
+        flush_and_preserve_partial(&mut part).await.unwrap();
+        drop(part);
+
+        assert_eq!(fs::read(&part_path).unwrap(), b"GGUFincomplete");
+        assert_eq!(fs::read(&dest).unwrap(), b"GGUFcompleted");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn matching_validator_and_range_can_resume() {
+        let previous = SourceMetadata {
+            url: "https://example.com/model.gguf".to_string(),
+            etag: Some("stable-etag".to_string()),
+            last_modified: None,
+        };
+        let current = previous.clone();
+
+        assert_eq!(
+            validate_partial_response(14, Some("bytes 14-63/64"), Some(&previous), &current,),
+            Ok(64)
+        );
+    }
+
+    #[tokio::test]
+    async fn wrong_content_range_start_is_rejected_and_reset() {
+        let root = temp_dir("wrong-content-range");
+        let part_path = root.join("model.part");
+        fs::write(&part_path, b"GGUFincomplete").unwrap();
+        let metadata = SourceMetadata {
+            url: "https://example.com/model.gguf".to_string(),
+            etag: Some("stable-etag".to_string()),
+            last_modified: None,
+        };
+        write_source_metadata(&part_path, &metadata).await.unwrap();
+
+        let result = validate_or_reset_partial(
+            &part_path,
+            14,
+            Some("bytes 0-63/64"),
+            Some(&metadata),
+            &metadata,
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(!part_path.exists());
+        assert!(!source_metadata_path(&part_path).exists());
+        fs::remove_dir_all(root).unwrap();
     }
 }
