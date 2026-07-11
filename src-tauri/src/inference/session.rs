@@ -35,18 +35,18 @@ fn model_not_ready_message(backend: InferenceBackend, app: &AppHandle) -> String
 async fn ensure_sidecar_ready(
     app: &AppHandle,
     sidecar: &SidecarState,
-    backend: InferenceBackend,
+    context: &ActiveInferenceContext,
     cancel_flag: &GenerationFlag,
 ) -> Result<(u16, bool), String> {
     {
         let mut guard = lock_sidecar(sidecar);
         guard.touch();
-        guard.ensure_started(app)?;
+        guard.ensure_started(app, context)?;
     }
 
     let port = lock_sidecar(sidecar).port;
     let sidecar_warm = lock_sidecar(sidecar).is_service_ready();
-    let skip_load_wait = sidecar_warm && sidecar_health_ok(port, backend).await;
+    let skip_load_wait = sidecar_warm && sidecar_health_ok(port, context.backend).await;
 
     if skip_load_wait {
         return Ok((port, true));
@@ -58,7 +58,7 @@ async fn ensure_sidecar_ready(
 
     let sidecar_state = sidecar.clone();
     if let Err(error) =
-        wait_for_sidecar_ready(app, port, backend, cancel_flag, &sidecar_state).await
+        wait_for_sidecar_ready(app, port, context.backend, cancel_flag, &sidecar_state).await
     {
         if cancel_flag.load(Ordering::SeqCst) {
             emit_chunk(app, "", true)?;
@@ -83,7 +83,7 @@ pub async fn run_ask_image(
     }
 
     let (port, sidecar_warm_for_infer) =
-        match ensure_sidecar_ready(app, sidecar, ctx.backend, cancel_flag).await {
+        match ensure_sidecar_ready(app, sidecar, &ctx, cancel_flag).await {
             Ok((port, warm)) => (port, warm),
             Err(error) => return Err(error),
         };

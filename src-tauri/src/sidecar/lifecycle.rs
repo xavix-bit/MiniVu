@@ -1,6 +1,7 @@
 use super::{lock_sidecar, SidecarState};
 use crate::inference::context::ActiveInferenceContext;
 use crate::inference::{sidecar_health_ok, wait_for_sidecar_ready};
+use crate::model_cache::ModelCache;
 use crate::settings::load_settings;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
@@ -21,6 +22,14 @@ pub(crate) fn should_warmup(
             WarmupTrigger::Launch => preload_model,
             WarmupTrigger::UserImage => true,
         }
+}
+
+fn should_warmup_for_launch(preload_model: bool, models_ready: bool) -> bool {
+    should_warmup(WarmupTrigger::Launch, preload_model, models_ready)
+}
+
+fn should_warmup_for_user_image(preload_model: bool, models_ready: bool) -> bool {
+    should_warmup(WarmupTrigger::UserImage, preload_model, models_ready)
 }
 
 /// 设置变更后停止侧车，下次识图时按新后端/路径重新启动。
@@ -45,21 +54,22 @@ pub fn spawn_idle_unloader(app: AppHandle) {
     });
 }
 
-pub(crate) async fn warmup_model_inner(
+async fn warmup_model_inner(
     app: &AppHandle,
     sidecar: &SidecarState,
-    trigger: WarmupTrigger,
+    policy: fn(bool, bool) -> bool,
 ) -> Result<(), String> {
     let settings = load_settings(app)?;
-    let ctx = ActiveInferenceContext::load(app)?;
-    if !should_warmup(trigger, settings.preload_model, ctx.models_ready) {
+    let cache = ModelCache::new(app)?;
+    let ctx = ActiveInferenceContext::from_parts(app, &settings, &cache)?;
+    if !policy(settings.preload_model, ctx.models_ready) {
         return Ok(());
     }
 
     let port = {
         let mut guard = lock_sidecar(sidecar);
         guard.touch();
-        guard.ensure_started(app)?;
+        guard.ensure_started(app, &ctx)?;
         guard.port
     };
 
@@ -74,6 +84,17 @@ pub(crate) async fn warmup_model_inner(
     Ok(())
 }
 
+async fn warmup_model_on_launch(app: &AppHandle, sidecar: &SidecarState) -> Result<(), String> {
+    warmup_model_inner(app, sidecar, should_warmup_for_launch).await
+}
+
+pub(crate) async fn warmup_model_for_user_image(
+    app: &AppHandle,
+    sidecar: &SidecarState,
+) -> Result<(), String> {
+    warmup_model_inner(app, sidecar, should_warmup_for_user_image).await
+}
+
 pub fn spawn_model_warmup(app: AppHandle) {
     let sidecar = app.state::<SidecarState>().inner().clone();
     tauri::async_runtime::spawn(async move {
@@ -85,7 +106,7 @@ pub fn spawn_model_warmup(app: AppHandle) {
             return;
         }
         tokio::time::sleep(Duration::from_secs(5)).await;
-        if let Err(error) = warmup_model_inner(&app, &sidecar, WarmupTrigger::Launch).await {
+        if let Err(error) = warmup_model_on_launch(&app, &sidecar).await {
             eprintln!("模型预热: {error}");
             let _ = app.emit("warmup-failed", serde_json::json!({ "message": error }));
         }
@@ -94,7 +115,9 @@ pub fn spawn_model_warmup(app: AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{should_warmup, WarmupTrigger};
+    use super::{
+        should_warmup, should_warmup_for_launch, should_warmup_for_user_image, WarmupTrigger,
+    };
 
     #[test]
     fn user_image_warmup_ignores_launch_preload_setting() {
@@ -106,5 +129,12 @@ mod tests {
     fn launch_warmup_respects_preload_setting() {
         assert!(!should_warmup(WarmupTrigger::Launch, false, true));
         assert!(should_warmup(WarmupTrigger::Launch, true, true));
+        assert!(!should_warmup(WarmupTrigger::Launch, true, false));
+    }
+
+    #[test]
+    fn warmup_entrypoints_keep_their_trigger_policies() {
+        assert!(!should_warmup_for_launch(false, true));
+        assert!(should_warmup_for_user_image(false, true));
     }
 }

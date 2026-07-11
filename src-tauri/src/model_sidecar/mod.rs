@@ -6,7 +6,7 @@ use crate::inference_backend::{backend_label, mlx_runtime_ready, resolve_active_
 use crate::model_cache::ModelCache;
 use crate::runtime_installer::resolve_llama_server;
 use crate::settings::{load_settings, GgufModelVariant, InferenceBackend};
-use crate::sidecar::lifecycle::{warmup_model_inner, WarmupTrigger};
+use crate::sidecar::lifecycle::warmup_model_for_user_image;
 use crate::sidecar::{init_sidecar_state as sidecar_init, lock_sidecar, SidecarState};
 use serde::Serialize;
 use std::sync::atomic::Ordering;
@@ -122,7 +122,7 @@ pub async fn warmup_model(
     app: AppHandle,
     sidecar: tauri::State<'_, SidecarState>,
 ) -> Result<(), String> {
-    warmup_model_inner(&app, sidecar.inner(), WarmupTrigger::UserImage).await
+    warmup_model_for_user_image(&app, sidecar.inner()).await
 }
 
 #[tauri::command]

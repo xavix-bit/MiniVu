@@ -1,7 +1,7 @@
 use crate::inference::backends::{backend_for, port_for};
-use crate::inference_backend::{resolve_active_backend, sidecar_port};
-use crate::model_cache::ModelCache;
-use crate::settings::{load_settings, InferenceBackend};
+use crate::inference::context::ActiveInferenceContext;
+use crate::inference_backend::sidecar_port;
+use crate::settings::InferenceBackend;
 use std::net::TcpListener;
 use std::process::{Child, Command};
 use std::sync::Mutex;
@@ -89,9 +89,12 @@ impl ModelSidecar {
         self.set_active_backend(None);
     }
 
-    pub fn ensure_started(&mut self, app: &AppHandle) -> Result<(), String> {
-        let settings = load_settings(app)?;
-        let backend = resolve_active_backend(settings.inference_backend, app)?;
+    pub fn ensure_started(
+        &mut self,
+        app: &AppHandle,
+        context: &ActiveInferenceContext,
+    ) -> Result<(), String> {
+        let backend = context.backend;
         let desired_port = sidecar_port(backend);
 
         if self.is_running() {
@@ -112,11 +115,7 @@ impl ModelSidecar {
             }
         }
 
-        let cache = ModelCache::new(app)?;
-        let paths = cache.resolve(settings.gguf_model_variant);
-        let mlx = cache.resolve_mlx(Some(settings.mlx_model_id.as_str()));
-
-        let launcher = backend_for(backend, paths, mlx);
+        let launcher = backend_for(backend, context.paths.clone(), context.mlx.clone());
         let child = launcher.spawn(app, self.port)?;
         self.child = Some(child);
 
@@ -158,4 +157,21 @@ fn terminate_listeners_on_port(port: u16) -> Result<(), String> {
 
 pub fn default_sidecar_port() -> u16 {
     port_for(InferenceBackend::Llama)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ModelSidecar;
+    use crate::inference::context::ActiveInferenceContext;
+    use tauri::AppHandle;
+
+    #[test]
+    fn startup_requires_a_resolved_inference_context() {
+        fn assert_signature(
+            _: fn(&mut ModelSidecar, &AppHandle, &ActiveInferenceContext) -> Result<(), String>,
+        ) {
+        }
+
+        assert_signature(ModelSidecar::ensure_started);
+    }
 }
