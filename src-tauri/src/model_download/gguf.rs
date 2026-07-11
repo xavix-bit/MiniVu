@@ -26,6 +26,8 @@ enum DownloadError {
 
 type DownloadResult<T> = Result<T, DownloadError>;
 
+fn no_op_promotion_hook() {}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct SourceMetadata {
     url: String,
@@ -255,6 +257,7 @@ async fn download_file_with_fallback(
             expected_bytes,
             force && index == 0,
             terminal_artifact,
+            &no_op_promotion_hook,
         )
         .await
         {
@@ -421,6 +424,7 @@ async fn finalize_part_file(
     dest: &Path,
     expected_bytes: u64,
     terminal_artifact: bool,
+    before_promotion: &(dyn Fn() + Send + Sync),
 ) -> DownloadResult<u64> {
     if !managed_file_is_valid(part_path, expected_bytes) {
         let should_remove = tokio::fs::symlink_metadata(part_path)
@@ -434,6 +438,7 @@ async fn finalize_part_file(
             "文件无效（需要常规文件、精确大小和 GGUF 文件头）".to_string(),
         ));
     }
+    before_promotion();
     let finalization = task
         .begin_finalization()
         .map_err(|_| DownloadError::Cancelled)?;
@@ -464,6 +469,7 @@ async fn download_file(
     expected_bytes: u64,
     force: bool,
     terminal_artifact: bool,
+    before_promotion: &(dyn Fn() + Send + Sync),
 ) -> DownloadResult<u64> {
     let part_path = dest.with_extension("part");
 
@@ -499,7 +505,15 @@ async fn download_file(
         return Err(DownloadError::Cancelled);
     }
     if resume_from == expected_bytes {
-        return finalize_part_file(task, &part_path, dest, expected_bytes, terminal_artifact).await;
+        return finalize_part_file(
+            task,
+            &part_path,
+            dest,
+            expected_bytes,
+            terminal_artifact,
+            before_promotion,
+        )
+        .await;
     }
     if resume_from > 0 {
         if let Some(app) = app {
@@ -537,8 +551,15 @@ async fn download_file(
 
     if status == StatusCode::RANGE_NOT_SATISFIABLE {
         if resume_from == expected_bytes && !task.is_cancelled() {
-            return finalize_part_file(task, &part_path, dest, expected_bytes, terminal_artifact)
-                .await;
+            return finalize_part_file(
+                task,
+                &part_path,
+                dest,
+                expected_bytes,
+                terminal_artifact,
+                before_promotion,
+            )
+            .await;
         }
         reset_partial_checked(task, &part_path).await?;
         return Err(DownloadError::Failed(
@@ -657,7 +678,15 @@ async fn download_file(
         .await
         .map_err(DownloadError::Failed)?;
     drop(file);
-    finalize_part_file(task, &part_path, dest, expected_bytes, terminal_artifact).await
+    finalize_part_file(
+        task,
+        &part_path,
+        dest,
+        expected_bytes,
+        terminal_artifact,
+        before_promotion,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -708,7 +737,15 @@ mod tests {
             .expect("part file should have exact expected size");
         drop(part);
 
-        let result = finalize_part_file(&task, &part_path, &dest, expected_bytes, false).await;
+        let result = finalize_part_file(
+            &task,
+            &part_path,
+            &dest,
+            expected_bytes,
+            false,
+            &no_op_promotion_hook,
+        )
+        .await;
         let invalid_part_removed = !part_path.exists();
         let invalid_dest_absent = !dest.exists();
         let retry_promoted = if invalid_part_removed {
@@ -720,9 +757,16 @@ mod tests {
                 .set_len(expected_bytes)
                 .expect("retry part should have exact expected size");
             drop(retry_part);
-            finalize_part_file(&task, &part_path, &dest, expected_bytes, false)
-                .await
-                .is_ok()
+            finalize_part_file(
+                &task,
+                &part_path,
+                &dest,
+                expected_bytes,
+                false,
+                &no_op_promotion_hook,
+            )
+            .await
+            .is_ok()
                 && managed_file_is_valid(&dest, expected_bytes)
         } else {
             false
@@ -748,7 +792,8 @@ mod tests {
             .expect("part file should remain incomplete");
         drop(part);
 
-        let result = finalize_part_file(&task, &part_path, &dest, 64, false).await;
+        let result =
+            finalize_part_file(&task, &part_path, &dest, 64, false, &no_op_promotion_hook).await;
         let part_preserved = part_path.exists();
         let dest_absent = !dest.exists();
         fs::remove_dir_all(root).expect("temp directory should be removed");
@@ -1119,7 +1164,8 @@ mod tests {
         let (state, task) = test_task();
         state.cancel(task.task_id()).unwrap();
 
-        let result = finalize_part_file(&task, &part_path, &dest, 8, false).await;
+        let result =
+            finalize_part_file(&task, &part_path, &dest, 8, false, &no_op_promotion_hook).await;
 
         assert!(matches!(result, Err(DownloadError::Cancelled)));
         assert_eq!(fs::read(&part_path).unwrap(), b"GGUFNEW!");
@@ -1164,7 +1210,17 @@ mod tests {
         let (_state, task) = test_task();
         let client = build_http_client().unwrap();
         let result = download_file(
-            None, &task, &client, url, &dest, "model", "local", 8, false, false,
+            None,
+            &task,
+            &client,
+            url,
+            &dest,
+            "model",
+            "local",
+            8,
+            false,
+            false,
+            &no_op_promotion_hook,
         )
         .await;
         server.join().unwrap();
@@ -1173,6 +1229,79 @@ mod tests {
         assert_eq!(fs::read(&dest).unwrap(), b"GGUFNEW!");
         assert!(!part_path.exists());
         assert!(!source_metadata_path(&part_path).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn actual_downloader_cancel_and_finalization_have_exactly_one_winner() {
+        let root = temp_dir("downloader-finalization-race");
+        let dest = root.join("model.gguf");
+        let part_path = dest.with_extension("part");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = leak(format!(
+            "http://{}/model.gguf",
+            listener.local_addr().unwrap()
+        ));
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 2048];
+            let _ = stream.read(&mut request).unwrap();
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nETag: race-etag\r\n\r\nGGUFRACE",
+                )
+                .unwrap();
+        });
+
+        let state = DownloadTaskState::default();
+        let task = state.begin(GgufModelVariant::Q4KM).unwrap();
+        let task_id = task.task_id();
+        let race = Arc::new(std::sync::Barrier::new(2));
+        let cancel_race = race.clone();
+        let cancel_state = state.clone();
+        let cancel = std::thread::spawn(move || {
+            cancel_race.wait();
+            cancel_state.cancel(task_id)
+        });
+        let promotion_race = race.clone();
+        let before_promotion = move || {
+            promotion_race.wait();
+        };
+
+        let client = build_http_client().unwrap();
+        let download = download_file(
+            None,
+            &task,
+            &client,
+            url,
+            &dest,
+            "model",
+            "local",
+            8,
+            false,
+            true,
+            &before_promotion,
+        )
+        .await;
+        let cancellation = cancel.join().unwrap();
+        server.join().unwrap();
+
+        match (cancellation, download) {
+            (Ok(()), Err(DownloadError::Cancelled)) => {
+                assert!(!dest.exists());
+                assert_eq!(fs::read(&part_path).unwrap(), b"GGUFRACE");
+                assert!(source_metadata_path(&part_path).exists());
+            }
+            (Err(error), Ok(bytes)) => {
+                assert!(error.contains("太晚"));
+                assert_eq!(bytes, 8);
+                assert!(managed_file_is_valid(&dest, 8));
+                assert!(!part_path.exists());
+            }
+            (cancellation, download) => panic!(
+                "expected exactly one winner, got cancellation={cancellation:?}, download={download:?}"
+            ),
+        }
         fs::remove_dir_all(root).unwrap();
     }
 }
