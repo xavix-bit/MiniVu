@@ -815,6 +815,7 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -886,6 +887,55 @@ mod tests {
                 return request;
             }
         }
+    }
+
+    #[tokio::test]
+    async fn valid_target_with_force_false_makes_zero_http_requests() {
+        let root = temp_dir("valid-target-no-request");
+        let dest = root.join("model.gguf");
+        fs::write(&dest, b"GGUFdata").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}/model.gguf", listener.local_addr().unwrap());
+        let requests = Arc::new(AtomicUsize::new(0));
+        let requests_for_server = requests.clone();
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_millis(150);
+            while Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((_stream, _)) => {
+                        requests_for_server.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("loopback accept failed: {error}"),
+                }
+            }
+        });
+        let (_state, task) = test_task();
+        let client = build_http_client().unwrap();
+
+        let downloaded = download_file(
+            None,
+            &task,
+            &client,
+            &url,
+            &dest,
+            "model",
+            "local-test",
+            8,
+            false,
+            false,
+            &no_op_promotion_hook,
+        )
+        .await
+        .unwrap();
+        server.join().unwrap();
+
+        assert_eq!(downloaded, 8);
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

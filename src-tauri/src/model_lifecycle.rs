@@ -193,8 +193,24 @@ fn remove_all_managed_with(
     remove_regular_files(paths, remove)
 }
 
-pub(crate) fn remove_all_managed_gguf(cache: &ModelCache) -> Vec<String> {
-    remove_all_managed_with(&cache.root, |path| fs::remove_file(path))
+fn remove_managed_models_with(
+    cache: &ModelCache,
+    active_variant: GgufModelVariant,
+    remove: impl FnMut(&Path) -> std::io::Result<()>,
+) -> ModelMutationResult {
+    let cleanup_errors = remove_all_managed_with(&cache.root, remove);
+    let warning = cleanup_warning("部分模型文件未能删除", cleanup_errors);
+    mutation_result(cache, active_variant, warning)
+}
+
+fn remove_models_after_confirmed_stop(
+    cache: &ModelCache,
+    active_variant: GgufModelVariant,
+    stop: impl FnOnce() -> Result<(), String>,
+    remove: impl FnMut(&Path) -> std::io::Result<()>,
+) -> Result<ModelMutationResult, String> {
+    stop()?;
+    Ok(remove_managed_models_with(cache, active_variant, remove))
 }
 
 fn mutation_result(
@@ -246,19 +262,46 @@ fn safe_force_download(requested: bool, previous_valid: bool) -> bool {
     requested && !previous_valid
 }
 
-async fn start_and_wait_for_health(
+#[derive(Clone, Copy)]
+struct PendingSidecar {
+    port: u16,
+    generation: u64,
+    backend: InferenceBackend,
+}
+
+fn start_sidecar(
     app: &AppHandle,
     sidecar: &SidecarState,
     context: &ActiveInferenceContext,
-) -> Result<(), String> {
+) -> Result<PendingSidecar, String> {
     let (port, generation) = {
         let mut guard = lock_sidecar(sidecar);
         let generation = guard.ensure_started(app, context)?;
         (guard.port, generation)
     };
+    Ok(PendingSidecar {
+        port,
+        generation,
+        backend: context.backend,
+    })
+}
+
+async fn wait_for_started_sidecar(
+    app: &AppHandle,
+    sidecar: &SidecarState,
+    pending: PendingSidecar,
+) -> Result<(), String> {
     let cancel = AtomicBool::new(false);
-    wait_for_sidecar_ready(app, port, context.backend, generation, &cancel, sidecar).await?;
-    if !lock_sidecar(sidecar).set_service_ready(generation, true) {
+    wait_for_sidecar_ready(
+        app,
+        pending.port,
+        pending.backend,
+        pending.generation,
+        &cancel,
+        sidecar,
+    )
+    .await?;
+    if !lock_sidecar(sidecar).set_service_ready(pending.generation, true) {
         return Err("模型已切换，请重试。".to_string());
     }
     Ok(())
@@ -267,7 +310,8 @@ async fn start_and_wait_for_health(
 trait SwitchOperations {
     fn stop_sidecar(&mut self) -> Result<(), String>;
     fn commit_variant(&mut self, variant: GgufModelVariant) -> Result<(), String>;
-    async fn start_and_health(&mut self, variant: GgufModelVariant) -> Result<(), String>;
+    fn spawn_sidecar(&mut self, variant: GgufModelVariant) -> Result<(), String>;
+    async fn health_sidecar(&mut self, variant: GgufModelVariant) -> Result<(), String>;
     fn cleanup_inactive(&mut self, active_variant: GgufModelVariant) -> Vec<String>;
 }
 
@@ -275,6 +319,7 @@ struct AppSwitchOperations<'a> {
     app: &'a AppHandle,
     sidecar: &'a SidecarState,
     cache: &'a ModelCache,
+    pending: Option<PendingSidecar>,
 }
 
 impl SwitchOperations for AppSwitchOperations<'_> {
@@ -286,7 +331,7 @@ impl SwitchOperations for AppSwitchOperations<'_> {
         commit_gguf_model_variant(self.app, variant)
     }
 
-    async fn start_and_health(&mut self, variant: GgufModelVariant) -> Result<(), String> {
+    fn spawn_sidecar(&mut self, variant: GgufModelVariant) -> Result<(), String> {
         let settings = load_settings(self.app)?;
         if settings.gguf_model_variant != variant {
             return Err("模型选择在启动前发生变化，请重试。".to_string());
@@ -300,7 +345,16 @@ impl SwitchOperations for AppSwitchOperations<'_> {
         if !context.models_ready {
             return Err("新模型尚未就绪。".to_string());
         }
-        start_and_wait_for_health(self.app, self.sidecar, &context).await
+        self.pending = Some(start_sidecar(self.app, self.sidecar, &context)?);
+        Ok(())
+    }
+
+    async fn health_sidecar(&mut self, _variant: GgufModelVariant) -> Result<(), String> {
+        let pending = self
+            .pending
+            .take()
+            .ok_or_else(|| "推理进程尚未启动。".to_string())?;
+        wait_for_started_sidecar(self.app, self.sidecar, pending).await
     }
 
     fn cleanup_inactive(&mut self, active_variant: GgufModelVariant) -> Vec<String> {
@@ -327,7 +381,11 @@ async fn rollback_switch<O: SwitchOperations>(
     if !previous_valid {
         return errors;
     }
-    if let Err(error) = operations.start_and_health(previous_variant).await {
+    if let Err(error) = operations.spawn_sidecar(previous_variant) {
+        errors.push(format!("恢复原模型失败：{error}"));
+        return errors;
+    }
+    if let Err(error) = operations.health_sidecar(previous_variant).await {
         errors.push(format!("恢复原模型失败：{error}"));
     }
     errors
@@ -344,7 +402,11 @@ async fn complete_switch<O: SwitchOperations>(
         let rollback = rollback_switch(operations, previous_variant, previous_valid, false).await;
         return Err(format_switch_error(error, rollback));
     }
-    if let Err(error) = operations.start_and_health(target_variant).await {
+    if let Err(error) = operations.spawn_sidecar(target_variant) {
+        let rollback = rollback_switch(operations, previous_variant, previous_valid, true).await;
+        return Err(format_switch_error(error, rollback));
+    }
+    if let Err(error) = operations.health_sidecar(target_variant).await {
         let rollback = rollback_switch(operations, previous_variant, previous_valid, true).await;
         return Err(format_switch_error(error, rollback));
     }
@@ -389,6 +451,7 @@ pub(crate) async fn install_gguf_model_inner(
         app: &app,
         sidecar,
         cache: &cache,
+        pending: None,
     };
     let cleanup_errors = complete_validated_switch(
         &cache,
@@ -441,14 +504,12 @@ pub fn remove_installed_models(
     let _mutation = lifecycle.begin_mutation()?;
     let settings = load_settings(&app)?;
     let cache = ModelCache::new(&app)?;
-    lock_sidecar(sidecar.inner()).stop_and_confirm()?;
-    let cleanup_errors = remove_all_managed_gguf(&cache);
-    let warning = cleanup_warning("部分模型文件未能删除", cleanup_errors);
-    Ok(mutation_result(
+    remove_models_after_confirmed_stop(
         &cache,
         settings.gguf_model_variant,
-        warning,
-    ))
+        || lock_sidecar(sidecar.inner()).stop_and_confirm(),
+        |path| fs::remove_file(path),
+    )
 }
 
 #[cfg(test)]
@@ -460,8 +521,10 @@ mod tests {
 
     struct FakeSwitchOperations {
         events: Vec<String>,
-        start_results: VecDeque<Result<(), String>>,
+        spawn_results: VecDeque<Result<(), String>>,
+        health_results: VecDeque<Result<(), String>>,
         commit_results: VecDeque<Result<(), String>>,
+        stop_results: VecDeque<Result<(), String>>,
         cleanup_errors: Vec<String>,
     }
 
@@ -469,8 +532,10 @@ mod tests {
         fn succeeding() -> Self {
             Self {
                 events: Vec::new(),
-                start_results: VecDeque::from([Ok(())]),
+                spawn_results: VecDeque::from([Ok(())]),
+                health_results: VecDeque::from([Ok(())]),
                 commit_results: VecDeque::from([Ok(())]),
+                stop_results: VecDeque::from([Ok(())]),
                 cleanup_errors: Vec::new(),
             }
         }
@@ -479,7 +544,7 @@ mod tests {
     impl SwitchOperations for FakeSwitchOperations {
         fn stop_sidecar(&mut self) -> Result<(), String> {
             self.events.push("stop".to_string());
-            Ok(())
+            self.stop_results.pop_front().unwrap_or(Ok(()))
         }
 
         fn commit_variant(&mut self, variant: GgufModelVariant) -> Result<(), String> {
@@ -487,9 +552,14 @@ mod tests {
             self.commit_results.pop_front().unwrap_or(Ok(()))
         }
 
-        async fn start_and_health(&mut self, variant: GgufModelVariant) -> Result<(), String> {
+        fn spawn_sidecar(&mut self, variant: GgufModelVariant) -> Result<(), String> {
+            self.events.push(format!("spawn:{variant:?}"));
+            self.spawn_results.pop_front().unwrap_or(Ok(()))
+        }
+
+        async fn health_sidecar(&mut self, variant: GgufModelVariant) -> Result<(), String> {
             self.events.push(format!("health:{variant:?}"));
-            self.start_results.pop_front().unwrap_or(Ok(()))
+            self.health_results.pop_front().unwrap_or(Ok(()))
         }
 
         fn cleanup_inactive(&mut self, active_variant: GgufModelVariant) -> Vec<String> {
@@ -599,8 +669,32 @@ mod tests {
         assert!(errors.is_empty());
         assert_eq!(
             operations.events,
-            ["stop", "commit:Q5KM", "health:Q5KM", "cleanup:Q5KM"]
+            [
+                "stop",
+                "commit:Q5KM",
+                "spawn:Q5KM",
+                "health:Q5KM",
+                "cleanup:Q5KM"
+            ]
         );
+    }
+
+    #[tokio::test]
+    async fn failed_sidecar_stop_aborts_switch_before_commit_spawn_or_cleanup() {
+        let mut operations = FakeSwitchOperations::succeeding();
+        operations.stop_results = VecDeque::from([Err("stop not confirmed".to_string())]);
+
+        let error = complete_switch(
+            &mut operations,
+            GgufModelVariant::Q4KM,
+            GgufModelVariant::Q5KM,
+            true,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.contains("stop not confirmed"));
+        assert_eq!(operations.events, ["stop"]);
     }
 
     #[tokio::test]
@@ -627,7 +721,8 @@ mod tests {
     #[tokio::test]
     async fn failed_candidate_health_rolls_back_before_restarting_old_model() {
         let mut operations = FakeSwitchOperations::succeeding();
-        operations.start_results = VecDeque::from([Err("candidate failed".to_string()), Ok(())]);
+        operations.health_results =
+            VecDeque::from([Err("candidate health failed".to_string()), Ok(())]);
         operations.commit_results = VecDeque::from([Ok(()), Ok(())]);
 
         let error = complete_switch(
@@ -639,15 +734,52 @@ mod tests {
         .await
         .unwrap_err();
 
+        assert!(error.contains("candidate health failed"));
         assert!(error.contains("已恢复原配置"));
         assert_eq!(
             operations.events,
             [
                 "stop",
                 "commit:Q6K",
+                "spawn:Q6K",
                 "health:Q6K",
                 "stop",
                 "commit:Q4KM",
+                "spawn:Q4KM",
+                "health:Q4KM"
+            ]
+        );
+        assert!(!operations
+            .events
+            .iter()
+            .any(|event| event.starts_with("cleanup")));
+    }
+
+    #[tokio::test]
+    async fn failed_candidate_spawn_restores_setting_restarts_old_and_skips_cleanup() {
+        let mut operations = FakeSwitchOperations::succeeding();
+        operations.spawn_results = VecDeque::from([Err("spawn failed".to_string()), Ok(())]);
+        operations.commit_results = VecDeque::from([Ok(()), Ok(())]);
+
+        let error = complete_switch(
+            &mut operations,
+            GgufModelVariant::Q4KM,
+            GgufModelVariant::Q5KM,
+            true,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.contains("spawn failed"));
+        assert_eq!(
+            operations.events,
+            [
+                "stop",
+                "commit:Q5KM",
+                "spawn:Q5KM",
+                "stop",
+                "commit:Q4KM",
+                "spawn:Q4KM",
                 "health:Q4KM"
             ]
         );
@@ -673,7 +805,13 @@ mod tests {
 
         assert_eq!(
             operations.events,
-            ["stop", "commit:Q5KM", "commit:Q4KM", "health:Q4KM"]
+            [
+                "stop",
+                "commit:Q5KM",
+                "commit:Q4KM",
+                "spawn:Q4KM",
+                "health:Q4KM"
+            ]
         );
     }
 
@@ -793,6 +931,73 @@ mod tests {
         assert!(inactive[0].exists());
         assert!(!inactive[1].exists());
         assert!(!inactive[2].exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn partial_removal_result_rescans_real_inventory_and_storage() {
+        let root = temp_dir("partial-removal-result");
+        let cache = ModelCache { root: root.clone() };
+        let q4 = create_artifacts(&root, GgufModelVariant::Q4KM);
+        create_artifacts(&root, GgufModelVariant::Q5KM);
+        let mmproj = mmproj_artifacts(&root);
+        for path in &mmproj {
+            fs::write(path, b"managed").unwrap();
+        }
+        let remaining_bytes = fs::metadata(&q4[0]).unwrap().len();
+
+        let result = remove_managed_models_with(&cache, GgufModelVariant::Q5KM, |path| {
+            if path == q4[0] {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "denied",
+                ))
+            } else {
+                fs::remove_file(path)
+            }
+        });
+
+        assert!(result
+            .cleanup_warning
+            .as_deref()
+            .unwrap()
+            .contains("denied"));
+        assert_eq!(result.model_storage_bytes, remaining_bytes);
+        assert_eq!(result.active_variant, GgufModelVariant::Q5KM);
+        assert_eq!(result.inventory.len(), GGUF_MODEL_SPECS.len());
+        let q4_inventory = result
+            .inventory
+            .iter()
+            .find(|item| item.variant == GgufModelVariant::Q4KM)
+            .unwrap();
+        assert!(!q4_inventory.installed);
+        assert_eq!(q4_inventory.installed_bytes, 0);
+        assert_eq!(q4_inventory.partial_bytes, 0);
+        assert!(q4[0].exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_sidecar_stop_aborts_removal_before_deleting_files() {
+        let root = temp_dir("stop-aborts-removal");
+        let cache = ModelCache { root: root.clone() };
+        let files = create_artifacts(&root, GgufModelVariant::Q4KM);
+        let removed = std::cell::Cell::new(false);
+
+        let error = remove_models_after_confirmed_stop(
+            &cache,
+            GgufModelVariant::Q4KM,
+            || Err("stop not confirmed".to_string()),
+            |path| {
+                removed.set(true);
+                fs::remove_file(path)
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.contains("stop not confirmed"));
+        assert!(!removed.get());
+        assert!(files.iter().all(|path| path.exists()));
         fs::remove_dir_all(root).unwrap();
     }
 }
