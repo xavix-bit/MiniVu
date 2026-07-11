@@ -1,7 +1,11 @@
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::PathBuf;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Manager};
+
+static SETTINGS_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -130,6 +134,10 @@ pub fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 pub fn load_settings(app: &AppHandle) -> Result<AppSettings, String> {
     let path = settings_path(app)?;
+    load_settings_at(&path)
+}
+
+fn load_settings_at(path: &Path) -> Result<AppSettings, String> {
     if !path.exists() {
         return Ok(AppSettings::default_for_device());
     }
@@ -139,9 +147,131 @@ pub fn load_settings(app: &AppHandle) -> Result<AppSettings, String> {
 
 pub fn save_settings(app: &AppHandle, settings: &AppSettings) -> Result<(), String> {
     let path = settings_path(app)?;
+    write_settings_atomically(&path, settings)
+}
+
+pub(crate) fn write_settings_atomically(path: &Path, settings: &AppSettings) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let raw = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
-    fs::write(path, raw).map_err(|e| e.to_string())
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| "settings path has no file name".to_string())?
+        .to_string_lossy();
+    let counter = SETTINGS_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temp_path = path.with_file_name(format!(
+        ".{file_name}.{}.{}.tmp",
+        std::process::id(),
+        counter
+    ));
+
+    let result = (|| -> std::io::Result<()> {
+        let mut temp = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temp_path)?;
+        temp.write_all(raw.as_bytes())?;
+        temp.flush()?;
+        temp.sync_all()?;
+        drop(temp);
+        fs::rename(&temp_path, path)
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    result.map_err(|e| e.to_string())
+}
+
+fn save_settings_preserving_gguf_variant_at(
+    path: &Path,
+    mut settings: AppSettings,
+) -> Result<AppSettings, String> {
+    settings.gguf_model_variant = load_settings_at(path)?.gguf_model_variant;
+    write_settings_atomically(path, &settings)?;
+    Ok(settings)
+}
+
+pub(crate) fn save_settings_preserving_gguf_variant(
+    app: &AppHandle,
+    settings: AppSettings,
+) -> Result<AppSettings, String> {
+    save_settings_preserving_gguf_variant_at(&settings_path(app)?, settings)
+}
+
+pub(crate) fn commit_gguf_model_variant(
+    app: &AppHandle,
+    variant: GgufModelVariant,
+) -> Result<(), String> {
+    let mut settings = load_settings(app)?;
+    settings.gguf_model_variant = variant;
+    save_settings(app, &settings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(test_name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after Unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "minivu-settings-{test_name}-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path).expect("temp directory should be created");
+        path
+    }
+
+    #[test]
+    fn atomic_writer_produces_parseable_settings_without_lingering_temp_file() {
+        let root = temp_dir("atomic-write");
+        let path = root.join("settings.json");
+        let mut settings = AppSettings::default();
+        settings.gguf_model_variant = GgufModelVariant::Q5KM;
+
+        write_settings_atomically(&path, &settings).expect("settings should be written");
+
+        let raw = fs::read_to_string(&path).expect("settings should be readable");
+        let saved: AppSettings = serde_json::from_str(&raw).expect("settings should be parseable");
+        assert_eq!(saved.gguf_model_variant, GgufModelVariant::Q5KM);
+        let entries: Vec<_> = fs::read_dir(&root)
+            .expect("temp directory should be readable")
+            .map(|entry| {
+                entry
+                    .expect("directory entry should be readable")
+                    .file_name()
+            })
+            .collect();
+        assert_eq!(entries, vec![std::ffi::OsString::from("settings.json")]);
+
+        fs::remove_dir_all(root).expect("temp directory should be removed");
+    }
+
+    #[test]
+    fn generic_settings_save_preserves_current_gguf_variant() {
+        let root = temp_dir("stale-variant");
+        let path = root.join("settings.json");
+        let mut current = AppSettings::default();
+        current.gguf_model_variant = GgufModelVariant::Q6K;
+        write_settings_atomically(&path, &current).expect("current settings should be written");
+
+        let mut stale_submission = AppSettings::default();
+        stale_submission.gguf_model_variant = GgufModelVariant::Q4KM;
+        stale_submission.shortcut = "Control+Shift+M".to_string();
+        save_settings_preserving_gguf_variant_at(&path, stale_submission)
+            .expect("generic settings should be saved");
+
+        let raw = fs::read_to_string(&path).expect("saved settings should be readable");
+        let saved: AppSettings =
+            serde_json::from_str(&raw).expect("saved settings should be parseable");
+        assert_eq!(saved.gguf_model_variant, GgufModelVariant::Q6K);
+        assert_eq!(saved.shortcut, "Control+Shift+M");
+
+        fs::remove_dir_all(root).expect("temp directory should be removed");
+    }
 }

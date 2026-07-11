@@ -3,7 +3,7 @@ use crate::inference::{
     run_ask_image, ActiveInferenceContext, AskImageRequest, GenerationFlag, HistoryMessage,
 };
 use crate::inference_backend::{backend_label, mlx_runtime_ready, resolve_active_backend};
-use crate::model_cache::ModelCache;
+use crate::model_cache::{GgufVariantInventory, ModelCache};
 use crate::runtime_installer::resolve_llama_server;
 use crate::settings::{load_settings, GgufModelVariant, InferenceBackend};
 use crate::sidecar::lifecycle::warmup_model_for_user_image;
@@ -33,6 +33,8 @@ pub struct ModelStatusResponse {
     pub llama_server_available: bool,
     pub inference_backend: InferenceBackend,
     pub gguf_model_variant: GgufModelVariant,
+    pub gguf_variants: Vec<GgufVariantInventory>,
+    pub model_storage_bytes: u64,
     pub active_backend: String,
     pub mlx_runtime_available: bool,
     pub mlx_model_id: String,
@@ -58,6 +60,7 @@ pub fn get_model_status(
     let mut guard = lock_sidecar(sidecar.inner());
     let active = resolve_active_backend(settings.inference_backend, &app).ok();
     let mlx_ready = mlx_runtime_ready(&app);
+    let inventory = cache.inventory(settings.gguf_model_variant);
 
     Ok(ModelStatusResponse {
         model_ready: active
@@ -80,6 +83,8 @@ pub fn get_model_status(
         llama_server_available: resolve_llama_server(&app).is_some(),
         inference_backend: settings.inference_backend,
         gguf_model_variant: settings.gguf_model_variant,
+        gguf_variants: inventory.gguf_variants,
+        model_storage_bytes: inventory.model_storage_bytes,
         active_backend: active
             .map(backend_label)
             .unwrap_or_else(|| backend_label(InferenceBackend::Llama))
