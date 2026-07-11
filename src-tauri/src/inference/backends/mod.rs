@@ -2,7 +2,7 @@ mod llama;
 mod mlx;
 
 use crate::inference_backend::sidecar_port;
-use crate::model_cache::{ModelPaths, MlxModelRef};
+use crate::model_cache::{MlxModelRef, ModelPaths};
 use crate::settings::InferenceBackend;
 use std::process::Child;
 use std::time::Duration;
@@ -14,7 +14,11 @@ pub trait SidecarBackend: Send {
     fn spawn(&self, app: &AppHandle, port: u16) -> Result<Child, String>;
 }
 
-pub fn backend_for(kind: InferenceBackend, paths: ModelPaths, mlx: MlxModelRef) -> Box<dyn SidecarBackend> {
+pub fn backend_for(
+    kind: InferenceBackend,
+    paths: ModelPaths,
+    mlx: MlxModelRef,
+) -> Box<dyn SidecarBackend> {
     match kind {
         InferenceBackend::Llama => Box::new(llama::LlamaBackend { paths }),
         InferenceBackend::Mlx => Box::new(mlx::MlxBackend { model: mlx }),

@@ -53,7 +53,7 @@ export function TranscriptPanel({ messages, streamingText }: TranscriptPanelProp
         >
           <div className="transcript-entry__head">
             <span className="transcript-entry__label">
-              {message.role === "user" ? "你" : "助手"}
+              {message.role === "user" ? "你" : "MiniVu"}
             </span>
             {message.role === "assistant" ? <CopyButton text={message.content} /> : null}
           </div>
@@ -69,10 +69,11 @@ export function TranscriptPanel({ messages, streamingText }: TranscriptPanelProp
       {streamingText ? (
         <article className="transcript-entry transcript-entry--assistant">
           <div className="transcript-entry__head">
-            <span className="transcript-entry__label">助手</span>
+            <span className="transcript-entry__label">MiniVu</span>
           </div>
           <div className="transcript-entry__body">
             <AssistantBody content={streamingText} />
+            <span className="transcript-entry__cursor" aria-hidden="true" />
           </div>
         </article>
       ) : null}

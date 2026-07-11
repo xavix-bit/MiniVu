@@ -4,7 +4,7 @@ import type { ImageSessionState } from "../chat/useImageSession";
 
 export async function exportCurrentSession(session: ImageSessionState): Promise<string | null> {
   if (!session.image) {
-    throw new Error("请先添加一张图片。");
+    throw new Error("先添加图片。");
   }
 
   const directory = await open({

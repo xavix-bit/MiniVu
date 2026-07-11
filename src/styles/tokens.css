@@ -1,0 +1,277 @@
+/* ── MiniVu product palette: quiet graphite, cobalt, ice surfaces ── */
+:root {
+  --background: #f6f8fb;
+  --foreground: #17202a;
+  --muted: #edf1f6;
+  --muted-foreground: #647084;
+  --accent: #3b63e6;
+  --accent-secondary: #6383f2;
+  --accent-foreground: #ffffff;
+  --border: rgba(23, 32, 42, 0.08);
+  --card: #ffffff;
+  --ring: #3b63e6;
+
+  --accent-gradient: linear-gradient(135deg, #3156d9, #6383f2);
+  --accent-gradient-h: linear-gradient(to right, #3156d9, #6383f2);
+  --accent-soft: rgba(59, 99, 230, 0.08);
+  --accent-glow: rgba(59, 99, 230, 0.12);
+  --accent-glow-lg: rgba(59, 99, 230, 0.18);
+  --shadow-accent: 0 4px 14px rgba(49, 86, 217, 0.16);
+  --shadow-accent-lg: 0 8px 24px rgba(49, 86, 217, 0.2);
+
+  --bg-app: #f6f8fb;
+  --bg-sidebar: #eef2f7;
+  --bg-panel: var(--card);
+  --bg-surface: var(--card);
+  --bg-muted: var(--muted);
+  --bg-elevated: var(--card);
+  --border-strong: rgba(23, 32, 42, 0.14);
+  --border-dashed: #c5cedb;
+  --text: var(--foreground);
+  --text-muted: var(--muted-foreground);
+  --text-subtle: #8893a5;
+  --accent-hover: #3156d9;
+  --trust: var(--accent);
+  --trust-soft: var(--accent-soft);
+  --badge-bg: rgba(59, 99, 230, 0.1);
+  --badge-border: rgba(59, 99, 230, 0.2);
+  --badge-text: #3156d9;
+  --danger-soft: rgba(255, 59, 48, 0.1);
+  --danger-text: #d70015;
+  --image-stage: #f1f4f8;
+  --input-bg: #f2f5f9;
+  --input-bg-focus: #ffffff;
+  --input-text: #17202a;
+  --input-border: rgba(23, 32, 42, 0.1);
+  --input-placeholder: #7a8597;
+  --composer-surface: #f8fafc;
+  --ease-product: cubic-bezier(0.2, 0, 0, 1);
+  --surface-blue: rgba(59, 99, 230, 0.08);
+  --surface-warm: rgba(91, 113, 146, 0.09);
+  --surface-blue-ink: #2c4ebd;
+  --surface-warm-ink: #586477;
+  --bg-hover: rgba(23, 32, 42, 0.05);
+  --font-display: system-ui, -apple-system, "SF Pro Display", "PingFang SC", sans-serif;
+  --font-ui: system-ui, -apple-system, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 16px;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.05), 0 16px 40px rgba(0, 0, 0, 0.06);
+  --shadow-xl: 0 8px 20px rgba(0, 0, 0, 0.06), 0 24px 48px rgba(0, 0, 0, 0.08);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 6px 20px rgba(0, 0, 0, 0.05);
+  --shadow-panel: var(--shadow-card);
+
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-feature-settings: "kern" 1, "liga" 1;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --background: #1c1c1e;
+    --foreground: #f5f5f7;
+    --muted: #2c2c2e;
+    --muted-foreground: #a1a1a6;
+    --border: rgba(255, 255, 255, 0.08);
+    --card: #2a2a2c;
+    --accent: #7894ff;
+    --accent-secondary: #9baeff;
+    --accent-hover: #8fa6ff;
+    --bg-app: #181b20;
+    --bg-sidebar: #12151a;
+    --bg-muted: #252a32;
+    --border-strong: rgba(255, 255, 255, 0.14);
+    --border-dashed: rgba(255, 255, 255, 0.2);
+    --text-subtle: #8e8e93;
+    --accent-soft: rgba(120, 148, 255, 0.16);
+    --surface-blue: rgba(120, 148, 255, 0.14);
+    --surface-blue-ink: #b8c5ff;
+    --surface-warm: rgba(148, 163, 184, 0.12);
+    --surface-warm-ink: #cbd5e1;
+    --badge-bg: rgba(120, 148, 255, 0.14);
+    --badge-border: rgba(120, 148, 255, 0.32);
+    --badge-text: #b8c5ff;
+    --danger-soft: rgba(255, 69, 58, 0.16);
+    --danger-text: #ff6961;
+    --image-stage: #0e0e0f;
+    --input-bg: #1f1f21;
+    --input-bg-focus: #2a2a2c;
+    --input-text: #f5f5f7;
+    --input-border: rgba(255, 255, 255, 0.1);
+    --input-placeholder: #8e8e93;
+    --composer-surface: #242426;
+    --bg-hover: rgba(255, 255, 255, 0.06);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45);
+    --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.5);
+    --shadow-xl: 0 20px 44px rgba(0, 0, 0, 0.55);
+    --shadow-card: 0 0 0 1px rgba(255, 255, 255, 0.04), 0 2px 8px rgba(0, 0, 0, 0.35);
+    --shadow-panel: 0 24px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--border);
+  }
+}
+
+[data-theme="light"] {
+  --background: #f6f8fb;
+  --foreground: #17202a;
+  --muted: #edf1f6;
+  --muted-foreground: #647084;
+  --accent: #3b63e6;
+  --accent-secondary: #6383f2;
+  --accent-soft: rgba(59, 99, 230, 0.08);
+  --border: rgba(23, 32, 42, 0.08);
+  --card: #ffffff;
+  --border-strong: rgba(23, 32, 42, 0.14);
+  --border-dashed: #c5cedb;
+  --text-subtle: #8893a5;
+  --badge-bg: rgba(59, 99, 230, 0.1);
+  --badge-border: rgba(59, 99, 230, 0.2);
+  --badge-text: #3156d9;
+  --bg-app: #f6f8fb;
+  --bg-sidebar: #eef2f7;
+  --bg-muted: var(--muted);
+  --image-stage: #f1f4f8;
+  --input-bg: #f2f5f9;
+  --input-bg-focus: #ffffff;
+  --input-text: #17202a;
+  --input-border: rgba(23, 32, 42, 0.1);
+  --input-placeholder: #7a8597;
+  --composer-surface: #f8fafc;
+  --bg-hover: rgba(23, 32, 42, 0.05);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.05), 0 16px 40px rgba(0, 0, 0, 0.06);
+  --shadow-xl: 0 8px 20px rgba(0, 0, 0, 0.06), 0 24px 48px rgba(0, 0, 0, 0.08);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 6px 20px rgba(0, 0, 0, 0.05);
+  --shadow-panel: var(--shadow-card);
+  color: var(--text);
+}
+
+html.main-window,
+html.main-window body {
+  height: 100%;
+  background: var(--bg-app);
+}
+
+[data-theme="light"] .ambient-glow--panel {
+  opacity: 0;
+}
+
+[data-theme="light"] .panel-header {
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+}
+
+
+[data-theme="light"] .transcript-entry--assistant .transcript-entry__body {
+  background: #ffffff;
+}
+
+[data-theme="dark"] {
+  --background: #1c1c1e;
+  --foreground: #f5f5f7;
+  --muted: #2c2c2e;
+  --muted-foreground: #a1a1a6;
+  --border: rgba(255, 255, 255, 0.08);
+  --card: #2a2a2c;
+    --accent: #7894ff;
+    --accent-secondary: #9baeff;
+    --accent-hover: #8fa6ff;
+    --bg-app: #181b20;
+    --bg-sidebar: #12151a;
+    --bg-muted: #252a32;
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --border-dashed: rgba(255, 255, 255, 0.2);
+  --text-subtle: #8e8e93;
+  --accent-soft: rgba(120, 148, 255, 0.16);
+  --surface-blue: rgba(120, 148, 255, 0.14);
+  --surface-blue-ink: #b8c5ff;
+  --surface-warm: rgba(148, 163, 184, 0.12);
+  --surface-warm-ink: #cbd5e1;
+  --badge-bg: rgba(120, 148, 255, 0.14);
+  --badge-border: rgba(120, 148, 255, 0.32);
+  --badge-text: #b8c5ff;
+  --danger-soft: rgba(255, 69, 58, 0.16);
+  --danger-text: #ff6961;
+  --image-stage: #0e0e0f;
+  --input-bg: #1f1f21;
+  --input-bg-focus: #2a2a2c;
+  --input-text: #f5f5f7;
+  --input-border: rgba(255, 255, 255, 0.1);
+  --input-placeholder: #8e8e93;
+  --composer-surface: #242426;
+  --bg-hover: rgba(255, 255, 255, 0.06);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.5);
+  --shadow-xl: 0 20px 44px rgba(0, 0, 0, 0.55);
+  --shadow-card: 0 0 0 1px rgba(255, 255, 255, 0.04), 0 2px 8px rgba(0, 0, 0, 0.35);
+  --shadow-panel: 0 24px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--border);
+  color: var(--text);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: transparent;
+}
+
+html.quick-panel-window,
+html.quick-panel-window body,
+html.quick-panel-window #root {
+  height: 100%;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: transparent;
+}
+
+html.quick-panel-window .panel-header {
+  background: var(--card);
+}
+
+html.quick-panel-window .model-status-bar {
+  background: var(--bg-app);
+  color: var(--text-muted);
+}
+
+html.quick-panel-window .model-status-bar__progress {
+  background: linear-gradient(90deg, transparent, rgba(0, 0, 0, 0.14), transparent);
+}
+
+html.quick-panel-window .transcript-entry--user .transcript-entry__body {
+  background: var(--bg-muted);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+html.quick-panel-window .transcript-entry--assistant .transcript-entry__body {
+  background: var(--card);
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  transition:
+    background 0.15s var(--ease-product),
+    border-color 0.15s var(--ease-product),
+    color 0.15s var(--ease-product),
+    box-shadow 0.15s var(--ease-product);
+}
+
+button:focus-visible,
+input:focus-visible,
+.settings-nav-item:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}

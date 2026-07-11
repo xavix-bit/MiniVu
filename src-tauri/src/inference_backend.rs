@@ -34,9 +34,7 @@ pub fn resolve_active_backend(
                 return Err("MLX 仅支持 Apple Silicon Mac。".to_string());
             }
             if !mlx_runtime_ready(app) {
-                return Err(
-                    "MLX 推理引擎未安装。请在「环境配置」或设置中安装 MLX 引擎。".to_string(),
-                );
+                return Err("MLX 未安装。".to_string());
             }
             Ok(InferenceBackend::Mlx)
         }

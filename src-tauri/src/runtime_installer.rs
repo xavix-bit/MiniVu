@@ -15,16 +15,79 @@ pub fn runtime_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+pub fn managed_llama_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(runtime_dir(app)?.join("llama"))
+}
+
 pub fn managed_llama_server_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(runtime_dir(app)?.join("llama-server"))
+    Ok(managed_llama_dir(app)?.join("llama-server"))
+}
+
+/// 随安装包内置的 llama 运行时目录（resource_dir/llama），含 llama-server 与全部 dylib。
+fn bundled_llama_dir(app: &AppHandle) -> Option<PathBuf> {
+    let dir = app.path().resource_dir().ok()?.join("llama");
+    if dir.join("llama-server").is_file() {
+        Some(dir)
+    } else {
+        None
+    }
+}
+
+/// 把内置运行时镜像到可写的 app_data 目录后再运行。
+/// 这样可规避：从 dmg/只读卷直接运行、App Translocation、隔离属性、资源目录丢失可执行位等问题。
+fn mirror_bundled_runtime(app: &AppHandle) -> Option<PathBuf> {
+    let src = bundled_llama_dir(app)?;
+    let dst = managed_llama_dir(app).ok()?;
+    fs::create_dir_all(&dst).ok()?;
+
+    let entries = fs::read_dir(&src).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name() else {
+            continue;
+        };
+        let target = dst.join(name);
+        // 已存在且字节数一致则跳过，避免每次冷启动重复拷贝 21MB。
+        let needs_copy = match (fs::metadata(&path), fs::metadata(&target)) {
+            (Ok(s), Ok(t)) => s.len() != t.len(),
+            _ => true,
+        };
+        if needs_copy {
+            fs::copy(&path, &target).ok()?;
+        }
+    }
+
+    let server = dst.join("llama-server");
+    let _ = make_executable(&server);
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("xattr")
+            .args(["-dr", "com.apple.quarantine"])
+            .arg(&dst)
+            .status();
+    }
+
+    server.is_file().then_some(server)
 }
 
 pub fn resolve_llama_server(app: &AppHandle) -> Option<PathBuf> {
-    let managed = managed_llama_server_path(app).ok()?;
-    if is_executable(&managed) {
-        return Some(managed);
+    // 1. 已镜像到可写目录的运行时（最稳，不受只读卷/隔离影响）
+    if let Ok(managed) = managed_llama_server_path(app) {
+        if managed.is_file() {
+            let _ = make_executable(&managed);
+            return Some(managed);
+        }
     }
 
+    // 2. 首次：把内置运行时镜像到可写目录
+    if let Some(server) = mirror_bundled_runtime(app) {
+        return Some(server);
+    }
+
+    // 3. PATH 兜底（开发者本机已自行安装 llama.cpp 时）
     for name in ["llama-server", "llama-server.exe"] {
         if Command::new(name)
             .arg("--version")
@@ -87,17 +150,11 @@ pub fn emit_setup_progress(app: &AppHandle, phase: &str, status: &str, message: 
 
 pub async fn install_llama_runtime(app: &AppHandle) -> Result<(), String> {
     if resolve_llama_server(app).is_some() {
-        emit_setup_progress(app, "runtime", "done", "推理引擎已就绪", 100);
+        emit_setup_progress(app, "runtime", "done", "内置推理引擎已安装", 100);
         return Ok(());
     }
 
-    emit_setup_progress(
-        app,
-        "runtime",
-        "running",
-        "正在从 GitHub 下载推理引擎（约 8 MB）…",
-        5,
-    );
+    emit_setup_progress(app, "runtime", "running", "正在下载推理引擎…", 5);
 
     let runtime = runtime_dir(app)?;
     let archive_path = runtime.join("llama-runtime.tar.gz");
@@ -116,12 +173,33 @@ pub async fn install_llama_runtime(app: &AppHandle) -> Result<(), String> {
 
     let discovered = find_binary_in_dir(&extract_dir, "llama-server")
         .ok_or_else(|| "解压包中未找到 llama-server".to_string())?;
+    let src_dir = discovered
+        .parent()
+        .ok_or_else(|| "无法定位解压后的运行时目录".to_string())?;
+
+    // llama-server 依赖同目录的多个 dylib（@rpath + @loader_path），必须整套平铺复制，
+    // 否则二进制无法加载、启动失败（历史 bug：只复制了单个 llama-server）。
+    let managed_dir = managed_llama_dir(app)?;
+    if managed_dir.exists() {
+        fs::remove_dir_all(&managed_dir).ok();
+    }
+    fs::create_dir_all(&managed_dir).map_err(|e| e.to_string())?;
+
+    for entry in fs::read_dir(src_dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if name == "llama-server" || name.ends_with(".dylib") {
+            fs::copy(&path, managed_dir.join(name)).map_err(|e| e.to_string())?;
+        }
+    }
 
     let managed = managed_llama_server_path(app)?;
-    if managed.exists() {
-        fs::remove_file(&managed).ok();
-    }
-    fs::copy(&discovered, &managed).map_err(|e| e.to_string())?;
     make_executable(&managed)?;
 
     #[cfg(target_os = "macos")]
@@ -144,11 +222,15 @@ pub async fn install_llama_runtime(app: &AppHandle) -> Result<(), String> {
 }
 
 fn try_brew_install(app: &AppHandle) -> Result<(), String> {
-    emit_setup_progress(app, "runtime", "running", "正在通过 Homebrew 安装推理引擎…", 60);
+    emit_setup_progress(
+        app,
+        "runtime",
+        "running",
+        "正在通过 Homebrew 安装推理引擎…",
+        60,
+    );
 
-    let brew = which_brew().ok_or_else(|| {
-        "推理引擎安装失败，请检查网络后重试".to_string()
-    })?;
+    let brew = which_brew().ok_or_else(|| "推理引擎安装失败，请检查网络后重试".to_string())?;
 
     let status = Command::new(&brew)
         .args(["install", "llama.cpp"])
@@ -220,8 +302,7 @@ async fn download_file_with_progress(
         downloaded += chunk.len() as u64;
 
         let percent = if let Some(total) = total.filter(|value| *value > 0) {
-            percent_start as u64
-                + (downloaded * (percent_end - percent_start) as u64) / total
+            percent_start as u64 + (downloaded * (percent_end - percent_start) as u64) / total
         } else {
             percent_start as u64
         };
@@ -334,25 +415,20 @@ fn resolve_system_python3() -> Option<PathBuf> {
 
 pub async fn install_mlx_runtime(app: &AppHandle) -> Result<(), String> {
     if resolve_mlx_python(app).is_some() {
-        emit_setup_progress(app, "runtime", "done", "MLX 推理引擎已就绪", 100);
+        emit_setup_progress(app, "runtime", "done", "MLX 推理引擎已安装", 100);
         return Ok(());
     }
 
-    emit_setup_progress(
-        app,
-        "runtime",
-        "running",
-        "正在创建 MLX 虚拟环境（约 300 MB）…",
-        5,
-    );
+    emit_setup_progress(app, "runtime", "running", "正在准备 MLX…", 5);
 
     let venv_dir = mlx_venv_dir(app)?;
     if venv_dir.exists() {
         fs::remove_dir_all(&venv_dir).map_err(|e| e.to_string())?;
     }
 
-    let system_python = resolve_system_python3()
-        .ok_or_else(|| "未找到 python3，请先安装 Xcode Command Line Tools 或 Homebrew Python。".to_string())?;
+    let system_python = resolve_system_python3().ok_or_else(|| {
+        "未找到 python3，请先安装 Xcode Command Line Tools 或 Homebrew Python。".to_string()
+    })?;
 
     let status = Command::new(&system_python)
         .args(["-m", "venv"])
@@ -374,7 +450,7 @@ pub async fn install_mlx_runtime(app: &AppHandle) -> Result<(), String> {
         return Err("pip 升级失败".to_string());
     }
 
-    emit_setup_progress(app, "runtime", "running", "正在下载 MLX 依赖（需联网）…", 35);
+    emit_setup_progress(app, "runtime", "running", "正在安装 MLX…", 35);
 
     let pip_install = Command::new(&venv_python)
         .args([
@@ -389,7 +465,7 @@ pub async fn install_mlx_runtime(app: &AppHandle) -> Result<(), String> {
         .status()
         .map_err(|e| format!("安装 mlx-vlm 失败: {e}"))?;
     if !pip_install.success() {
-        return Err("安装 mlx-vlm 失败，请检查网络后重试".to_string());
+        return Err("MLX 安装失败，请重试。".to_string());
     }
 
     if !mlx_python_ready(&venv_python) {

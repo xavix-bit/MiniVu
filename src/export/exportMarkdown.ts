@@ -15,7 +15,7 @@ function escapeFence(value: string): string {
 export function renderSessionMarkdown(session: SessionExport): string {
   const messages = session.messages
     .map((message) => {
-      const label = message.role === "user" ? "用户" : "助手";
+      const label = message.role === "user" ? "用户" : "MiniVu";
       return `**${label}：** ${message.content}`;
     })
     .join("\n\n");

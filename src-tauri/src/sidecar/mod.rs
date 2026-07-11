@@ -1,5 +1,7 @@
+pub mod lifecycle;
 pub mod process;
 
+pub use lifecycle::{on_settings_saved, spawn_idle_unloader, spawn_model_warmup};
 pub use process::{default_sidecar_port, ModelSidecar};
 
 use std::sync::{Arc, Mutex, MutexGuard};

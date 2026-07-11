@@ -21,9 +21,7 @@ impl SidecarBackend for LlamaBackend {
     }
 
     fn spawn(&self, app: &AppHandle, port: u16) -> Result<std::process::Child, String> {
-        let binary = resolve_llama_server(app).ok_or_else(|| {
-            "未找到 llama-server。请在环境配置中一键安装推理引擎。".to_string()
-        })?;
+        let binary = resolve_llama_server(app).ok_or_else(|| "内置 Metal 未就绪。".to_string())?;
 
         let profile = detect_inference_profile();
         let mut command = Command::new(&binary);

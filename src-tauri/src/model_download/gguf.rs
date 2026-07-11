@@ -32,17 +32,21 @@ fn source_plan_label(sources: &[crate::model_cache::DownloadSource]) -> String {
 }
 
 pub async fn download_model(app: AppHandle, force: Option<bool>) -> Result<String, String> {
-    use crate::model_cache::{mmproj_sources_for, model_sources_for};
+    use crate::model_cache::{
+        gguf_model_spec, mmproj_sources_for, model_sources_for, EXPECTED_MMPROJ_BYTES,
+    };
 
     let force = force.unwrap_or(false);
     let settings = load_settings(&app)?;
+    let variant = settings.gguf_model_variant;
+    let spec = gguf_model_spec(variant);
     let mirror = settings.download_mirror;
     let preferred = settings.preferred_mirror;
     let cache = ModelCache::new(&app)?;
     let client = build_http_client()?;
 
     let mmproj_dest = cache.default_mmproj_path();
-    let model_dest = cache.default_model_path();
+    let model_dest = cache.default_model_path(variant);
     let model_dest_return = model_dest.clone();
 
     if !crate::model_cache::file_is_valid(&mmproj_dest, "mmproj") {
@@ -51,7 +55,7 @@ pub async fn download_model(app: AppHandle, force: Option<bool>) -> Result<Strin
             .ok();
     }
 
-    let model_sources = model_sources_for(mirror, preferred);
+    let model_sources = model_sources_for(variant, mirror, preferred);
     let mirror_label = mirror_mode_label(mirror, preferred);
     let model_plan = source_plan_label(&model_sources);
 
@@ -84,6 +88,7 @@ pub async fn download_model(app: AppHandle, force: Option<bool>) -> Result<Strin
         &model_sources,
         &model_dest,
         "model",
+        spec.model_bytes,
         force,
     )
     .await?;
@@ -114,6 +119,7 @@ pub async fn download_model(app: AppHandle, force: Option<bool>) -> Result<Strin
         &mmproj_sources,
         &mmproj_dest,
         "mmproj",
+        EXPECTED_MMPROJ_BYTES,
         force,
     )
     .await?;
@@ -127,6 +133,7 @@ async fn download_file_with_fallback(
     sources: &[crate::model_cache::DownloadSource],
     dest: &Path,
     label: &str,
+    expected_bytes: u64,
     force: bool,
 ) -> Result<(), String> {
     let mut errors = Vec::new();
@@ -142,7 +149,18 @@ async fn download_file_with_fallback(
                 }),
             );
         }
-        match download_file(app, client, source.url, dest, label, source.name, force).await {
+        match download_file(
+            app,
+            client,
+            source.url,
+            dest,
+            label,
+            source.name,
+            expected_bytes,
+            force,
+        )
+        .await
+        {
             Ok(bytes) => {
                 emit_download_progress(
                     app,
@@ -167,15 +185,17 @@ fn parse_content_range_total(value: &str) -> Option<u64> {
     total.trim().parse().ok()
 }
 
-async fn finalize_part_file(part_path: &Path, dest: &Path, label: &str) -> Result<u64, String> {
+async fn finalize_part_file(
+    part_path: &Path,
+    dest: &Path,
+    expected_bytes: u64,
+) -> Result<u64, String> {
     let part_bytes = tokio::fs::metadata(part_path)
         .await
         .map_err(|e| e.to_string())?
         .len();
-    if !crate::model_cache::is_download_complete(label, part_bytes) {
-        let expected = crate::model_cache::expected_bytes_for_label(label)
-            .map(crate::model_cache::format_bytes)
-            .unwrap_or_else(|| "未知".to_string());
+    if !crate::model_cache::is_complete_size(expected_bytes, part_bytes) {
+        let expected = crate::model_cache::format_bytes(expected_bytes);
         return Err(format!(
             "文件不完整（{} / 预期 {}）",
             crate::model_cache::format_bytes(part_bytes),
@@ -198,6 +218,7 @@ async fn download_file(
     dest: &Path,
     label: &str,
     source_name: &str,
+    expected_bytes: u64,
     force: bool,
 ) -> Result<u64, String> {
     let part_path = dest.with_extension("part");
@@ -210,7 +231,7 @@ async fn download_file(
             .await
             .map_err(|e| e.to_string())?
             .len();
-        if crate::model_cache::is_download_complete(label, final_bytes) {
+        if crate::model_cache::is_complete_size(expected_bytes, final_bytes) {
             tokio::fs::remove_file(&part_path).await.ok();
             emit_download_progress(
                 app,
@@ -231,7 +252,7 @@ async fn download_file(
             label,
             source_name,
             0,
-            crate::model_cache::expected_bytes_for_label(label),
+            Some(expected_bytes),
             None,
             "running",
             Some("检测到不完整文件，重新下载…"),
@@ -249,8 +270,8 @@ async fn download_file(
     };
 
     if is_modelscope && resume_from > 0 {
-        if crate::model_cache::is_download_complete(label, resume_from) {
-            let final_bytes = finalize_part_file(&part_path, dest, label).await?;
+        if crate::model_cache::is_complete_size(expected_bytes, resume_from) {
+            let final_bytes = finalize_part_file(&part_path, dest, expected_bytes).await?;
             emit_download_progress(
                 app,
                 label,
@@ -270,7 +291,7 @@ async fn download_file(
             label,
             source_name,
             0,
-            crate::model_cache::expected_bytes_for_label(label),
+            Some(expected_bytes),
             None,
             "running",
             Some("ModelScope 不支持断点续传，从头下载…"),
@@ -296,16 +317,13 @@ async fn download_file(
         request = request.header("Range", format!("bytes={resume_from}-"));
     }
 
-    let response = request
-        .send()
-        .await
-        .map_err(|e| format!("连接失败: {e}"))?;
+    let response = request.send().await.map_err(|e| format!("连接失败: {e}"))?;
 
     let status = response.status();
 
     if status == StatusCode::RANGE_NOT_SATISFIABLE {
-        if resume_from > 0 && crate::model_cache::is_download_complete(label, resume_from) {
-            let final_bytes = finalize_part_file(&part_path, dest, label).await?;
+        if resume_from > 0 && crate::model_cache::is_complete_size(expected_bytes, resume_from) {
+            let final_bytes = finalize_part_file(&part_path, dest, expected_bytes).await?;
             return Ok(final_bytes);
         }
         if resume_from > 0 {
@@ -336,7 +354,7 @@ async fn download_file(
 
     if let (Some(total_bytes), current) = (total, resume_from) {
         if current >= total_bytes && part_path.exists() {
-            let final_bytes = finalize_part_file(&part_path, dest, label).await?;
+            let final_bytes = finalize_part_file(&part_path, dest, expected_bytes).await?;
             return Ok(final_bytes);
         }
     }
@@ -378,8 +396,7 @@ async fn download_file(
             });
             let session_elapsed = stream_started.elapsed().as_secs_f64().max(1.0);
             let session_bytes = downloaded.saturating_sub(stream_base_bytes);
-            let session_speed =
-                (session_bytes as f64 / session_elapsed) / (1024.0 * 1024.0);
+            let session_speed = (session_bytes as f64 / session_elapsed) / (1024.0 * 1024.0);
             let ema_speed = ema_speed_mbps.unwrap_or(window_speed);
             let speed_mbps = 0.7 * session_speed + 0.3 * ema_speed;
             emit_download_progress(
@@ -400,7 +417,7 @@ async fn download_file(
     file.flush().await.map_err(|e| e.to_string())?;
     drop(file);
 
-    let final_bytes = finalize_part_file(&part_path, dest, label).await?;
+    let final_bytes = finalize_part_file(&part_path, dest, expected_bytes).await?;
     emit_download_progress(
         app,
         label,

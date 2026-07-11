@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import appIconUrl from "../../app-icon.png";
 
 export type SettingsSection = "home" | "setup" | "model" | "settings" | "privacy";
 
@@ -11,30 +12,22 @@ type SettingsSidebarProps = {
   onOpenSetup: () => void;
 };
 
-type NavGroup = {
+type NavIconName =
+  | SettingsSection
+  | "template";
+
+type NavItem = {
+  key: SettingsSection;
   label: string;
-  items: { id: SettingsSection; label: string; icon: SettingsSection }[];
+  icon: NavIconName;
 };
 
-const NAV_GROUPS: NavGroup[] = [
-  {
-    label: "概览",
-    items: [{ id: "home", label: "首页", icon: "home" }],
-  },
-  {
-    label: "配置",
-    items: [
-      { id: "setup", label: "环境配置", icon: "setup" },
-      { id: "model", label: "模型文件", icon: "model" },
-    ],
-  },
-  {
-    label: "应用",
-    items: [
-      { id: "settings", label: "偏好设置", icon: "settings" },
-      { id: "privacy", label: "隐私说明", icon: "privacy" },
-    ],
-  },
+const NAV_ITEMS: NavItem[] = [
+  { key: "home", label: "首页", icon: "home" },
+  { key: "setup", label: "环境配置", icon: "template" },
+  { key: "model", label: "模型文件", icon: "model" },
+  { key: "settings", label: "偏好设置", icon: "settings" },
+  { key: "privacy", label: "隐私", icon: "privacy" },
 ];
 
 function formatShortcut(shortcut: string) {
@@ -46,8 +39,8 @@ function formatShortcut(shortcut: string) {
     .replace(/\+/g, " ");
 }
 
-function NavIcon({ name }: { name: SettingsSection }) {
-  const paths: Record<SettingsSection, ReactNode> = {
+function NavIcon({ name }: { name: NavIconName }) {
+  const paths: Record<NavIconName, ReactNode> = {
     home: (
       <path
         d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1v-9.5Z"
@@ -87,6 +80,14 @@ function NavIcon({ name }: { name: SettingsSection }) {
         <path d="M9.5 12 11 13.8 15 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
       </>
     ),
+    template: (
+      <>
+        <rect x="4" y="4" width="6" height="6" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+        <rect x="14" y="4" width="6" height="6" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+        <rect x="4" y="14" width="6" height="6" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+        <rect x="14" y="14" width="6" height="6" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      </>
+    ),
   };
 
   return (
@@ -108,65 +109,57 @@ export function SettingsSidebar({
     <aside className="settings-sidebar" aria-label="主导航">
       <div className="settings-sidebar__brand">
         <span className="settings-sidebar__logo" aria-hidden="true">
-          <span className="settings-sidebar__logo-mark" />
+          <img src={appIconUrl} alt="" className="settings-sidebar__logo-img" width={36} height={36} />
         </span>
         <div>
           <strong>MiniVu</strong>
-          <span className="settings-sidebar__badge">
-            <span className="settings-sidebar__badge-dot" aria-hidden="true" />
-            仅本地
-          </span>
         </div>
       </div>
 
       <nav className="settings-sidebar__nav" aria-label="设置导航">
-        {NAV_GROUPS.map((group) => (
-          <div key={group.label} className="settings-nav-group">
-            <p className="settings-sidebar__nav-label">{group.label}</p>
-            {group.items.map((item) => {
-              const locked = setupOnly && item.id !== "setup";
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={`settings-nav-item${active === item.id ? " is-active" : ""}${locked ? " is-locked" : ""}`}
-                  disabled={locked}
-                  aria-disabled={locked}
-                  aria-current={active === item.id ? "page" : undefined}
-                  onClick={() => onNavigate(item.id)}
-                >
-                  <span className="settings-nav-item__icon" aria-hidden="true">
-                    <NavIcon name={item.icon} />
-                  </span>
-                  {item.label}
-                </button>
-              );
-            })}
-          </div>
-        ))}
+        {NAV_ITEMS.map((item) => {
+          const locked = setupOnly && item.key !== "home" && item.key !== "setup";
+          const isActive = item.key === active;
+          return (
+            <button
+              key={item.key}
+              type="button"
+              className={`settings-nav-item${isActive ? " is-active" : ""}${locked ? " is-locked" : ""}`}
+              disabled={locked}
+              aria-disabled={locked}
+              aria-current={isActive ? "page" : undefined}
+              onClick={() => onNavigate(item.key)}
+            >
+              <span className="settings-nav-item__icon" aria-hidden="true">
+                <NavIcon name={item.icon} />
+              </span>
+              {item.label}
+            </button>
+          );
+        })}
       </nav>
 
       <div className="settings-sidebar__footer">
         <div className="settings-sidebar__card">
           {modelReady ? (
             <>
-              <p className="settings-sidebar__card-label">快捷唤起识图</p>
+              <p className="settings-sidebar__card-label">快捷键</p>
               <p className="settings-sidebar__card-kbd">
                 <kbd>{formatShortcut(shortcut)}</kbd>
               </p>
-              <p className="settings-sidebar__card-note">任意应用中按下即可打开面板</p>
+              <p className="settings-sidebar__card-note">任意应用中按下即可</p>
             </>
           ) : (
             <>
-              <p className="settings-sidebar__card-label">尚未就绪</p>
-              <p className="settings-sidebar__card-note">完成环境配置后即可使用识图功能</p>
+              <p className="settings-sidebar__card-label">还没配置好</p>
+              <p className="settings-sidebar__card-note">下载模型后即可使用</p>
               <button type="button" className="settings-sidebar__card-btn" onClick={onOpenSetup}>
                 去配置
               </button>
             </>
           )}
         </div>
-        <p className="settings-sidebar__version">MiniVu v0.1.0</p>
+        <p className="settings-sidebar__version">版本 v0.1.0</p>
       </div>
     </aside>
   );

@@ -5,6 +5,7 @@ type ComposerProps = {
   disabled: boolean;
   isAnswering: boolean;
   canSubmit: boolean;
+  focusSignal?: number;
   onChange: (value: string) => void;
   onSubmit: () => void;
   onStop: () => void;
@@ -31,6 +32,7 @@ export function Composer({
   disabled,
   isAnswering,
   canSubmit,
+  focusSignal = 0,
   onChange,
   onSubmit,
   onStop,
@@ -52,6 +54,19 @@ export function Composer({
   useEffect(() => {
     autoSizeInput();
   }, [value]);
+
+  // 图片就绪（disabled 变 false）后立即聚焦，省去一次点击 —— 截屏即答的核心摩擦点。
+  useEffect(() => {
+    if (!disabled) {
+      inputRef.current?.focus();
+    }
+  }, [disabled]);
+
+  useEffect(() => {
+    if (!disabled && focusSignal > 0) {
+      inputRef.current?.focus();
+    }
+  }, [disabled, focusSignal]);
 
   useEffect(() => {
     function handleResize() {
@@ -113,17 +128,16 @@ export function Composer({
           composingRef.current = false;
           compositionEndedAtRef.current = performance.now();
         }}
-        placeholder="输入问题，Enter 发送"
+        placeholder="问这张图…"
       />
       <div className="composer__footer">
-        <span className="composer__hint">Enter 发送 · Shift+Enter 换行</span>
         {isAnswering ? (
           <button type="button" className="composer__stop" onClick={onStop}>
             停止
           </button>
         ) : (
           <button type="submit" className="composer__submit" disabled={!canSubmit || !value.trim()}>
-            提问
+            发送
           </button>
         )}
       </div>

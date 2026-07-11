@@ -53,9 +53,7 @@ pub fn build_standalone_follow_up_prompt(
     if summary.is_empty() {
         format_user_text(ocr_text, prompt, true)
     } else {
-        format!(
-            "以下是刚才的对话摘要：\n{summary}\n\n请结合图片继续回答：{prompt}"
-        )
+        format!("以下是刚才的对话摘要：\n{summary}\n\n请结合图片继续回答：{prompt}")
     }
 }
 
@@ -98,4 +96,43 @@ pub fn build_chat_messages(
     messages.push(user_message_with_image(&current_text, image_data_url));
 
     messages
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trim_history_keeps_last_four_messages() {
+        let history: Vec<HistoryMessage> = (0..6)
+            .map(|index| HistoryMessage {
+                role: "user".to_string(),
+                content: format!("message-{index}"),
+            })
+            .collect();
+        let trimmed = trim_history(&history);
+        assert_eq!(trimmed.len(), 4);
+        assert_eq!(trimmed[0].content, "message-2");
+        assert_eq!(trimmed[3].content, "message-5");
+    }
+
+    #[test]
+    fn build_chat_messages_includes_ocr_only_on_first_turn() {
+        let first = build_chat_messages(&[], "data:image/png;base64,abc", "OCR", "prompt");
+        let text = first[0]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("OCR"));
+
+        let follow_up = build_chat_messages(
+            &[HistoryMessage {
+                role: "user".to_string(),
+                content: "hi".to_string(),
+            }],
+            "data:image/png;base64,abc",
+            "OCR",
+            "prompt",
+        );
+        let follow_text = follow_up[1]["content"][0]["text"].as_str().unwrap();
+        assert!(!follow_text.contains("OCR"));
+        assert_eq!(follow_text, "prompt");
+    }
 }

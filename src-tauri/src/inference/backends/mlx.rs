@@ -47,9 +47,7 @@ impl SidecarBackend for MlxBackend {
     }
 
     fn spawn(&self, app: &AppHandle, port: u16) -> Result<std::process::Child, String> {
-        let python = resolve_mlx_python(app).ok_or_else(|| {
-            "未找到 MLX 推理环境。请在环境配置中安装 MLX 引擎。".to_string()
-        })?;
+        let python = resolve_mlx_python(app).ok_or_else(|| "MLX 未安装。".to_string())?;
 
         let log_path = mlx_sidecar_log_path(app)?;
         if let Some(parent) = log_path.parent() {

@@ -1,0 +1,77 @@
+/* ── UI polish (home, modal, streaming) ── */
+.ui-card--banner-static {
+  display: block;
+}
+
+.ui-card--feature-ready .ui-card__feature-value--ready {
+  font-size: 28px;
+  color: var(--accent);
+}
+
+.settings-section__lead {
+  margin: 0 0 12px;
+}
+
+.replace-image-modal {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.replace-image-modal__backdrop {
+  position: absolute;
+  inset: 0;
+  border: none;
+  background: rgba(0, 0, 0, 0.28);
+  cursor: default;
+}
+
+.replace-image-modal__card {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 320px);
+  padding: 18px 18px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: var(--shadow-lg);
+}
+
+.replace-image-modal__title {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.replace-image-modal__desc {
+  margin: 0 0 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.replace-image-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.transcript-entry__cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  animation: transcript-cursor 1s step-end infinite;
+}
+
+@keyframes transcript-cursor {
+  50% {
+    opacity: 0;
+  }
+}

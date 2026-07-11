@@ -1,9 +1,6 @@
-use crate::platform_caps::{is_apple_silicon, system_memory_gb};
 use crate::settings::{load_settings, save_settings, AppSettings};
+use crate::sidecar::on_settings_saved;
 use serde::Serialize;
-use tauri::Manager;
-
-use crate::sidecar::lock_sidecar;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,19 +21,20 @@ pub fn load_app_settings(app: tauri::AppHandle) -> Result<AppSettings, String> {
 pub fn save_app_settings(app: tauri::AppHandle, settings: AppSettings) -> Result<(), String> {
     save_settings(&app, &settings)?;
     crate::shortcut::register_shortcut(&app, &settings.shortcut)?;
-    lock_sidecar(app.state::<crate::sidecar::SidecarState>().inner()).stop();
+    on_settings_saved(&app);
     Ok(())
 }
 
 #[tauri::command]
 pub fn get_device_info() -> DeviceInfo {
+    use crate::platform_caps::{is_apple_silicon, system_memory_gb};
     let platform = std::env::consts::OS.to_string();
     let apple_silicon = is_apple_silicon();
     let memory_gb = system_memory_gb();
     let recommended = apple_silicon && memory_gb >= 16.0;
 
     let message = if recommended {
-        "你的设备满足 MiniVu 推荐配置。".to_string()
+        "设备可用。".to_string()
     } else if apple_silicon {
         "可以运行，但 16GB 内存体验更稳定。".to_string()
     } else {

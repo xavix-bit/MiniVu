@@ -77,9 +77,7 @@ pub async fn stream_from_sidecar(
         }
     }
 
-    let response = response.ok_or_else(|| {
-        "推理服务繁忙（模型可能仍在加载），请稍候再试".to_string()
-    })?;
+    let response = response.ok_or_else(|| "处理中，请稍后再试。".to_string())?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -112,7 +110,7 @@ pub async fn stream_from_sidecar(
             };
             if payload == "[DONE]" {
                 if !emitted_any {
-                    return Err("模型未返回内容，请重试或缩短问题".to_string());
+                    return Err("没有生成结果，请重试。".to_string());
                 }
                 emit_chunk(app, "", true)?;
                 return Ok(());
@@ -129,7 +127,7 @@ pub async fn stream_from_sidecar(
     }
 
     if !emitted_any {
-        return Err("模型未返回内容，请重试或缩短问题".to_string());
+        return Err("没有生成结果，请重试。".to_string());
     }
 
     emit_chunk(app, "", true)?;

@@ -15,10 +15,10 @@
       {
         "label": "quick-panel",
         "title": "MiniVu",
-        "width": 480,
-        "height": 680,
+        "width": 380,
+        "height": 620,
         "resizable": true,
-        "minWidth": 400,
+        "minWidth": 340,
         "minHeight": 520,
         "decorations": false,
         "transparent": true,
@@ -30,8 +30,8 @@
         "title": "MiniVu · 设置",
         "width": 1200,
         "height": 800,
-        "minWidth": 1024,
-        "minHeight": 680,
+        "minWidth": 720,
+        "minHeight": 600,
         "center": true,
         "resizable": true,
         "visible": false
@@ -44,6 +44,12 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "macOS": {
+      "infoPlist": "macos/Info.plist"
+    },
+    "resources": {
+      "resources/llama/*": "llama/"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

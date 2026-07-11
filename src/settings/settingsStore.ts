@@ -2,6 +2,7 @@ export type DownloadMirror = "auto" | "modelscope" | "huggingface";
 export type MirrorId = "modelscope" | "huggingface";
 export type AppTheme = "system" | "light" | "dark";
 export type InferenceBackend = "llama" | "mlx";
+export type GgufModelVariant = "q4_k_m" | "q5_k_m" | "q6_k";
 
 export type AppSettings = {
   shortcut: string;
@@ -10,7 +11,7 @@ export type AppSettings = {
   saveHistoryByDefault: boolean;
   allowCloudFallback: boolean;
   onboardingComplete: boolean;
-  modelPath: string | null;
+  ggufModelVariant: GgufModelVariant;
   downloadMirror: DownloadMirror;
   preferredMirror: MirrorId | null;
   lastSpeedTestAt: string | null;
@@ -18,7 +19,6 @@ export type AppSettings = {
   preloadModel: boolean;
   inferenceBackend: InferenceBackend;
   mlxModelId: string;
-  mlxModelPath: string | null;
 };
 
 export type MirrorProbeResult = {
@@ -44,15 +44,14 @@ export function createDefaultSettings(): AppSettings {
     saveHistoryByDefault: false,
     allowCloudFallback: false,
     onboardingComplete: false,
-    modelPath: null,
+    ggufModelVariant: "q4_k_m",
     downloadMirror: "auto",
     preferredMirror: null,
     lastSpeedTestAt: null,
     theme: "system",
     preloadModel: false,
-    inferenceBackend: "mlx",
+    inferenceBackend: "llama",
     mlxModelId: "mlx-community/MiniCPM-V-4.6-4bit",
-    mlxModelPath: null,
   };
 }
 

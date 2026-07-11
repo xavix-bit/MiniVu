@@ -92,8 +92,8 @@ async fn probe_mirror(client: &Client, mirror: MirrorId) -> MirrorProbeResult {
             }
 
             let elapsed = body_start.elapsed().as_secs_f64().max(0.001);
-            let speed_mbps = ((downloaded as f64 / elapsed) / (1024.0 * 1024.0) * 100.0).round()
-                / 100.0;
+            let speed_mbps =
+                ((downloaded as f64 / elapsed) / (1024.0 * 1024.0) * 100.0).round() / 100.0;
 
             MirrorProbeResult {
                 mirror: mirror_id.to_string(),

@@ -37,18 +37,30 @@ pub enum InferenceBackend {
 
 impl Default for InferenceBackend {
     fn default() -> Self {
-        #[cfg(target_os = "macos")]
-        {
-            if crate::platform_caps::is_apple_silicon() {
-                return Self::Mlx;
-            }
-        }
+        // llama.cpp 单二进制约 8 MB，经 -ngl 走 Metal；MLX 需 Python venv（约 300 MB+）。
+        // 默认精简路径：引擎更小，MiniCPM-V 4.6 GGUF + mmproj 约 1.6 GB。
         Self::Llama
     }
 }
 
 fn default_mlx_model_id() -> String {
     crate::model_cache::DEFAULT_MLX_MODEL_ID.to_string()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GgufModelVariant {
+    #[serde(rename = "q4_k_m")]
+    Q4KM,
+    #[serde(rename = "q5_k_m")]
+    Q5KM,
+    #[serde(rename = "q6_k")]
+    Q6K,
+}
+
+impl Default for GgufModelVariant {
+    fn default() -> Self {
+        Self::Q4KM
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,7 +72,8 @@ pub struct AppSettings {
     pub save_history_by_default: bool,
     pub allow_cloud_fallback: bool,
     pub onboarding_complete: bool,
-    pub model_path: Option<String>,
+    #[serde(default)]
+    pub gguf_model_variant: GgufModelVariant,
     #[serde(default)]
     pub download_mirror: DownloadMirror,
     pub preferred_mirror: Option<MirrorId>,
@@ -73,7 +86,6 @@ pub struct AppSettings {
     pub inference_backend: InferenceBackend,
     #[serde(default = "default_mlx_model_id")]
     pub mlx_model_id: String,
-    pub mlx_model_path: Option<String>,
 }
 
 fn default_preload_model() -> bool {
@@ -99,7 +111,7 @@ impl Default for AppSettings {
             save_history_by_default: false,
             allow_cloud_fallback: false,
             onboarding_complete: false,
-            model_path: None,
+            gguf_model_variant: GgufModelVariant::default(),
             download_mirror: DownloadMirror::Auto,
             preferred_mirror: None,
             last_speed_test_at: None,
@@ -107,16 +119,12 @@ impl Default for AppSettings {
             preload_model: default_preload_model(),
             inference_backend: InferenceBackend::default(),
             mlx_model_id: default_mlx_model_id(),
-            mlx_model_path: None,
         }
     }
 }
 
 pub fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?;
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     Ok(dir.join("settings.json"))
 }
 

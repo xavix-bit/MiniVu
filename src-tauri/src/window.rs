@@ -1,23 +1,120 @@
 use crate::environment::is_environment_ready;
 use crate::settings::load_settings;
+use serde::Serialize;
+use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewWindow};
 
 const QUICK_PANEL_LABEL: &str = "quick-panel";
 const MAIN_WINDOW_LABEL: &str = "main";
-const PANEL_WIDTH: f64 = 480.0;
-const PANEL_HEIGHT: f64 = 680.0;
+const PANEL_WIDTH: f64 = 380.0;
+const PANEL_HEIGHT: f64 = 620.0;
+const PET_SIZE: f64 = 56.0;
 const MAIN_WIDTH: f64 = 1200.0;
 const MAIN_HEIGHT: f64 = 800.0;
 
-/// 将窗口带到前台：macOS 最小化后仅 `show()` 无效，必须先 `unminimize()`。
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QuickPanelMode {
+    Expanded,
+    Pet,
+    Hidden,
+}
+
+pub struct QuickPanelState {
+    pub expanded_size: LogicalSize<f64>,
+    pub mode: QuickPanelMode,
+}
+
+impl Default for QuickPanelState {
+    fn default() -> Self {
+        Self {
+            expanded_size: LogicalSize::new(PANEL_WIDTH, PANEL_HEIGHT),
+            mode: QuickPanelMode::Hidden,
+        }
+    }
+}
+
+fn read_panel_state<R>(app: &AppHandle, read: impl FnOnce(&QuickPanelState) -> R) -> R {
+    let state = app.state::<Mutex<QuickPanelState>>();
+    let guard = state.lock().expect("窗口状态锁失败");
+    read(&guard)
+}
+
+fn with_panel_state<R>(
+    app: &AppHandle,
+    update: impl FnOnce(&mut QuickPanelState) -> Result<R, String>,
+) -> Result<R, String> {
+    let state = app.state::<Mutex<QuickPanelState>>();
+    let mut guard = state.lock().map_err(|_| "窗口状态锁失败".to_string())?;
+    update(&mut guard)
+}
+
+fn emit_panel_mode(app: &AppHandle, mode: QuickPanelMode) -> Result<(), String> {
+    app.emit_to(QUICK_PANEL_LABEL, "quick-panel-mode", mode)
+        .map_err(|error| error.to_string())
+}
+
+fn remember_expanded_size(app: &AppHandle, window: &WebviewWindow) -> Result<(), String> {
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let size = window.inner_size().map_err(|error| error.to_string())?;
+    let width = size.width as f64 / scale;
+    let height = size.height as f64 / scale;
+    if width > PET_SIZE + 8.0 && height > PET_SIZE + 8.0 {
+        with_panel_state(app, |state| {
+            state.expanded_size = LogicalSize::new(width, height);
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
+
 fn present_window(window: &WebviewWindow, app: &AppHandle) -> Result<(), String> {
     if window.is_minimized().unwrap_or(false) {
-        window.unminimize().map_err(|e| e.to_string())?;
+        window.unminimize().map_err(|error| error.to_string())?;
     }
-    window.show().map_err(|e| e.to_string())?;
-    window.set_focus().map_err(|e| e.to_string())?;
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())?;
     activate_app(app)?;
     Ok(())
+}
+
+pub fn expand_quick_panel(app: &AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window(QUICK_PANEL_LABEL)
+        .ok_or_else(|| "quick panel window not found".to_string())?;
+
+    let expanded_size = read_panel_state(app, |state| state.expanded_size);
+
+    window
+        .set_size(expanded_size)
+        .map_err(|error| error.to_string())?;
+    let _ = window.set_always_on_top(true);
+    present_window(&window, app)?;
+
+    with_panel_state(app, |state| {
+        state.mode = QuickPanelMode::Expanded;
+        Ok(())
+    })?;
+    emit_panel_mode(app, QuickPanelMode::Expanded)
+}
+
+pub fn collapse_quick_panel_to_pet(app: &AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window(QUICK_PANEL_LABEL)
+        .ok_or_else(|| "quick panel window not found".to_string())?;
+
+    remember_expanded_size(app, &window)?;
+    window
+        .set_size(LogicalSize::new(PET_SIZE, PET_SIZE))
+        .map_err(|error| error.to_string())?;
+    let _ = window.set_always_on_top(true);
+    present_window(&window, app)?;
+
+    with_panel_state(app, |state| {
+        state.mode = QuickPanelMode::Pet;
+        Ok(())
+    })?;
+    emit_panel_mode(app, QuickPanelMode::Pet)
 }
 
 pub fn show_quick_panel_near_cursor(app: &AppHandle) -> Result<(), String> {
@@ -25,42 +122,53 @@ pub fn show_quick_panel_near_cursor(app: &AppHandle) -> Result<(), String> {
         .get_webview_window(QUICK_PANEL_LABEL)
         .ok_or_else(|| "quick panel window not found".to_string())?;
 
-    let scale = window.scale_factor().unwrap_or(1.0);
-    let size = window.inner_size().map_err(|e| e.to_string())?;
-    let panel_w = (size.width as f64 / scale).max(PANEL_WIDTH);
-    let panel_h = (size.height as f64 / scale).max(PANEL_HEIGHT);
+    let mode = read_panel_state(app, |state| state.mode);
 
-    // 仅在面板从隐藏状态打开时定位到光标旁，保留用户调整过的尺寸。
-    if !window.is_visible().unwrap_or(false) {
+    if mode == QuickPanelMode::Pet {
+        expand_quick_panel(app)?;
+        return Ok(());
+    }
+
+    let expanded_size = read_panel_state(app, |state| state.expanded_size);
+
+    if !window.is_visible().unwrap_or(false) || mode == QuickPanelMode::Hidden {
         let (cursor_x, cursor_y) = cursor_position()?;
         let (screen_w, screen_h) = primary_screen_size()?;
+        let panel_w = expanded_size.width;
+        let panel_h = expanded_size.height;
 
-        let mut x = cursor_x + 16;
-        let mut y = cursor_y + 16;
+        let mut x = cursor_x as f64 + 16.0;
+        let mut y = cursor_y as f64 + 16.0;
 
-        if x as f64 + panel_w > screen_w as f64 {
-            x = (screen_w as f64 - panel_w - 16.0).max(0.0) as i32;
+        if x + panel_w > screen_w as f64 {
+            x = (screen_w as f64 - panel_w - 16.0).max(0.0);
         }
-        if y as f64 + panel_h > screen_h as f64 {
-            y = (screen_h as f64 - panel_h - 16.0).max(0.0) as i32;
+        if y + panel_h > screen_h as f64 {
+            y = (screen_h as f64 - panel_h - 16.0).max(0.0);
         }
 
         window
-            .set_position(LogicalPosition::new(x as f64, y as f64))
-            .map_err(|e| e.to_string())?;
+            .set_size(expanded_size)
+            .map_err(|error| error.to_string())?;
+        window
+            .set_position(LogicalPosition::new(x, y))
+            .map_err(|error| error.to_string())?;
+
+        with_panel_state(app, |state| {
+            state.mode = QuickPanelMode::Expanded;
+            Ok(())
+        })?;
+        emit_panel_mode(app, QuickPanelMode::Expanded)?;
     }
 
     let _ = window.set_always_on_top(true);
-    present_window(&window, app)?;
-    Ok(())
+    present_window(&window, app)
 }
 
-/// 应用启动、Dock 点击、托盘点击时打开主窗口。
 pub fn show_entry_window(app: &AppHandle) -> Result<(), String> {
     show_main_window(app)
 }
 
-/// 全局快捷键：环境就绪时打开识图小面板，否则打开主窗口引导配置。
 pub fn show_quick_panel_via_shortcut(app: &AppHandle) -> Result<(), String> {
     let settings = load_settings(app)?;
     let environment_ready = is_environment_ready(app).unwrap_or(false);
@@ -72,12 +180,10 @@ pub fn show_quick_panel_via_shortcut(app: &AppHandle) -> Result<(), String> {
     }
 }
 
-/// 从主窗口主动打开识图小面板（首页按钮等）。
 pub fn show_quick_panel_from_main(app: &AppHandle) -> Result<(), String> {
     show_quick_panel_via_shortcut(app)
 }
 
-/// 点击 Dock 图标时始终打开主窗口。
 pub fn reopen_from_dock(app: &AppHandle) -> Result<(), String> {
     show_main_window(app)
 }
@@ -95,10 +201,10 @@ pub fn show_main_window(app: &AppHandle) -> Result<(), String> {
 
     window
         .set_size(LogicalSize::new(MAIN_WIDTH, MAIN_HEIGHT))
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| error.to_string())?;
     window
         .set_position(LogicalPosition::new(x, y))
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| error.to_string())?;
     present_window(&window, app)
 }
 
@@ -107,34 +213,37 @@ fn activate_app(app: &AppHandle) -> Result<(), String> {
     {
         use tauri::ActivationPolicy;
         app.set_activation_policy(ActivationPolicy::Regular)
-            .map_err(|e| e.to_string())?;
+            .map_err(|error| error.to_string())?;
     }
     Ok(())
 }
 
 pub fn close_quick_panel(app: &AppHandle) -> Result<(), String> {
+    collapse_quick_panel_to_pet(app)
+}
+
+pub fn hide_quick_panel(app: &AppHandle) -> Result<(), String> {
     let _ = app.emit_to(QUICK_PANEL_LABEL, "quick-panel-closing", ());
     hide_quick_panel_silent(app)
 }
 
-/// 仅隐藏识图面板，不重置前端会话（截图等场景使用）。
 pub fn hide_quick_panel_silent(app: &AppHandle) -> Result<(), String> {
     let Some(window) = app.get_webview_window(QUICK_PANEL_LABEL) else {
         return Ok(());
     };
     if window.is_visible().unwrap_or(false) {
-        window.hide().map_err(|e| e.to_string())?;
+        window.hide().map_err(|error| error.to_string())?;
     }
+    let _ = with_panel_state(app, |state| {
+        state.mode = QuickPanelMode::Hidden;
+        Ok(())
+    });
+    let _ = emit_panel_mode(app, QuickPanelMode::Hidden);
     Ok(())
 }
 
-/// 截图等流程结束后恢复识图面板。
 pub fn restore_quick_panel(app: &AppHandle) -> Result<(), String> {
-    let window = app
-        .get_webview_window(QUICK_PANEL_LABEL)
-        .ok_or_else(|| "quick panel window not found".to_string())?;
-    let _ = window.set_always_on_top(true);
-    present_window(&window, app)
+    expand_quick_panel(app)
 }
 
 #[cfg(target_os = "macos")]
@@ -161,7 +270,10 @@ fn cursor_position() -> Result<(i32, i32), String> {
 fn primary_screen_size() -> Result<(i32, i32), String> {
     use core_graphics::display::CGDisplay;
     let bounds = CGDisplay::main().bounds();
-    Ok((bounds.size.width.round() as i32, bounds.size.height.round() as i32))
+    Ok((
+        bounds.size.width.round() as i32,
+        bounds.size.height.round() as i32,
+    ))
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -187,4 +299,26 @@ pub fn show_main(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn close_quick_panel_command(app: AppHandle) -> Result<(), String> {
     close_quick_panel(&app)
+}
+
+#[tauri::command]
+pub fn hide_quick_panel_command(app: AppHandle) -> Result<(), String> {
+    hide_quick_panel(&app)
+}
+
+#[tauri::command]
+pub fn expand_quick_panel_command(app: AppHandle) -> Result<(), String> {
+    expand_quick_panel(&app)
+}
+
+#[tauri::command]
+pub fn open_screen_recording_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+            .spawn()
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }

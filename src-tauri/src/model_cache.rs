@@ -1,10 +1,9 @@
-use crate::settings::{DownloadMirror, MirrorId};
+use crate::settings::{DownloadMirror, GgufModelVariant, MirrorId};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 
-pub const DEFAULT_MODEL_FILENAME: &str = "minicpm-v-4_5-Q4_K_M.gguf";
-pub const DEFAULT_MMPROJ_FILENAME: &str = "minicpm-v-4_5-mmproj-f16.gguf";
+pub const DEFAULT_MMPROJ_FILENAME: &str = "minicpm-v-4_6-mmproj-f16.gguf";
 
 /// HuggingFace mlx-community 量化权重，首次推理时由 mlx-vlm 自动缓存到本机。
 pub const DEFAULT_MLX_MODEL_ID: &str = "mlx-community/MiniCPM-V-4.6-4bit";
@@ -12,31 +11,21 @@ pub const DEFAULT_MLX_MODEL_ID: &str = "mlx-community/MiniCPM-V-4.6-4bit";
 pub const ESTIMATED_MLX_BYTES: u64 = 2_300_000_000;
 
 pub const DEFAULT_MODEL_URL: &str =
-    "https://huggingface.co/openbmb/MiniCPM-V-4_5-gguf/resolve/main/ggml-model-Q4_K_M.gguf";
+    "https://huggingface.co/openbmb/MiniCPM-V-4.6-gguf/resolve/main/MiniCPM-V-4_6-Q4_K_M.gguf";
 pub const DEFAULT_MMPROJ_URL: &str =
-    "https://huggingface.co/openbmb/MiniCPM-V-4_5-gguf/resolve/main/mmproj-model-f16.gguf";
+    "https://huggingface.co/openbmb/MiniCPM-V-4.6-gguf/resolve/main/mmproj-model-f16.gguf";
 
 /// OpenBMB 官方 ModelScope 仓库，国内访问通常比 HuggingFace 快很多。
 pub const MODELSCOPE_MODEL_URL: &str =
-    "https://modelscope.cn/models/OpenBMB/MiniCPM-V-4_5-gguf/resolve/master/ggml-model-Q4_K_M.gguf";
+    "https://modelscope.cn/models/OpenBMB/MiniCPM-V-4.6-gguf/resolve/master/MiniCPM-V-4_6-Q4_K_M.gguf";
 pub const MODELSCOPE_MMPROJ_URL: &str =
-    "https://modelscope.cn/models/OpenBMB/MiniCPM-V-4_5-gguf/resolve/master/mmproj-model-f16.gguf";
+    "https://modelscope.cn/models/OpenBMB/MiniCPM-V-4.6-gguf/resolve/master/mmproj-model-f16.gguf";
 
 #[derive(Clone, Copy)]
 pub struct DownloadSource {
     pub name: &'static str,
     pub url: &'static str,
 }
-
-const MODELSCOPE_SOURCE: DownloadSource = DownloadSource {
-    name: "ModelScope（国内镜像）",
-    url: MODELSCOPE_MODEL_URL,
-};
-
-const HUGGINGFACE_MODEL_SOURCE: DownloadSource = DownloadSource {
-    name: "HuggingFace（海外源）",
-    url: DEFAULT_MODEL_URL,
-};
 
 const MODELSCOPE_MMPROJ_SOURCE: DownloadSource = DownloadSource {
     name: "ModelScope（国内镜像）",
@@ -47,6 +36,64 @@ const HUGGINGFACE_MMPROJ_SOURCE: DownloadSource = DownloadSource {
     name: "HuggingFace（海外源）",
     url: DEFAULT_MMPROJ_URL,
 };
+
+#[derive(Clone, Copy)]
+pub struct GgufModelSpec {
+    pub variant: GgufModelVariant,
+    pub filename: &'static str,
+    pub model_bytes: u64,
+    pub huggingface_url: &'static str,
+    pub modelscope_url: &'static str,
+}
+
+pub const GGUF_MODEL_SPECS: &[GgufModelSpec] = &[
+    GgufModelSpec {
+        variant: GgufModelVariant::Q4KM,
+        filename: "minicpm-v-4_6-Q4_K_M.gguf",
+        model_bytes: 529_101_504,
+        huggingface_url: DEFAULT_MODEL_URL,
+        modelscope_url: MODELSCOPE_MODEL_URL,
+    },
+    GgufModelSpec {
+        variant: GgufModelVariant::Q5KM,
+        filename: "minicpm-v-4_6-Q5_K_M.gguf",
+        model_bytes: 577_802_944,
+        huggingface_url:
+            "https://huggingface.co/openbmb/MiniCPM-V-4.6-gguf/resolve/main/MiniCPM-V-4_6-Q5_K_M.gguf",
+        modelscope_url:
+            "https://modelscope.cn/models/OpenBMB/MiniCPM-V-4.6-gguf/resolve/master/MiniCPM-V-4_6-Q5_K_M.gguf",
+    },
+    GgufModelSpec {
+        variant: GgufModelVariant::Q6K,
+        filename: "minicpm-v-4_6-Q6_K.gguf",
+        model_bytes: 629_548_224,
+        huggingface_url:
+            "https://huggingface.co/openbmb/MiniCPM-V-4.6-gguf/resolve/main/MiniCPM-V-4_6-Q6_K.gguf",
+        modelscope_url:
+            "https://modelscope.cn/models/OpenBMB/MiniCPM-V-4.6-gguf/resolve/master/MiniCPM-V-4_6-Q6_K.gguf",
+    },
+];
+
+pub fn gguf_model_spec(variant: GgufModelVariant) -> &'static GgufModelSpec {
+    GGUF_MODEL_SPECS
+        .iter()
+        .find(|spec| spec.variant == variant)
+        .unwrap_or(&GGUF_MODEL_SPECS[0])
+}
+
+fn modelscope_model_source(variant: GgufModelVariant) -> DownloadSource {
+    DownloadSource {
+        name: "ModelScope（国内镜像）",
+        url: gguf_model_spec(variant).modelscope_url,
+    }
+}
+
+fn huggingface_model_source(variant: GgufModelVariant) -> DownloadSource {
+    DownloadSource {
+        name: "HuggingFace（海外源）",
+        url: gguf_model_spec(variant).huggingface_url,
+    }
+}
 
 fn order_sources(
     primary: DownloadSource,
@@ -64,19 +111,34 @@ fn order_sources(
     }
 }
 
-pub fn model_sources() -> Vec<DownloadSource> {
-    vec![MODELSCOPE_SOURCE, HUGGINGFACE_MODEL_SOURCE]
+pub fn model_sources(variant: GgufModelVariant) -> Vec<DownloadSource> {
+    vec![
+        modelscope_model_source(variant),
+        huggingface_model_source(variant),
+    ]
 }
 
 pub fn mmproj_sources() -> Vec<DownloadSource> {
     vec![MODELSCOPE_MMPROJ_SOURCE, HUGGINGFACE_MMPROJ_SOURCE]
 }
 
-pub fn model_sources_for(mirror: DownloadMirror, preferred: Option<MirrorId>) -> Vec<DownloadSource> {
-    order_sources(MODELSCOPE_SOURCE, HUGGINGFACE_MODEL_SOURCE, mirror, preferred)
+pub fn model_sources_for(
+    variant: GgufModelVariant,
+    mirror: DownloadMirror,
+    preferred: Option<MirrorId>,
+) -> Vec<DownloadSource> {
+    order_sources(
+        modelscope_model_source(variant),
+        huggingface_model_source(variant),
+        mirror,
+        preferred,
+    )
 }
 
-pub fn mmproj_sources_for(mirror: DownloadMirror, preferred: Option<MirrorId>) -> Vec<DownloadSource> {
+pub fn mmproj_sources_for(
+    mirror: DownloadMirror,
+    preferred: Option<MirrorId>,
+) -> Vec<DownloadSource> {
     order_sources(
         MODELSCOPE_MMPROJ_SOURCE,
         HUGGINGFACE_MMPROJ_SOURCE,
@@ -85,9 +147,9 @@ pub fn mmproj_sources_for(mirror: DownloadMirror, preferred: Option<MirrorId>) -
     )
 }
 
-/// 官方 GGUF 体积（用于完整性校验与引导页提示）。
-pub const EXPECTED_MODEL_BYTES: u64 = 5_026_714_304;
-pub const EXPECTED_MMPROJ_BYTES: u64 = 1_095_113_184;
+/// 默认 GGUF 体积（用于兼容旧的进度估算；实际下载按所选档位校验）。
+pub const EXPECTED_MODEL_BYTES: u64 = 529_101_504;
+pub const EXPECTED_MMPROJ_BYTES: u64 = 1_108_746_944;
 pub const ESTIMATED_DOWNLOAD_BYTES: u64 = EXPECTED_MODEL_BYTES + EXPECTED_MMPROJ_BYTES;
 
 const COMPLETE_RATIO_PERCENT: u64 = 99;
@@ -111,10 +173,33 @@ pub fn is_download_complete(label: &str, bytes: u64) -> bool {
         .unwrap_or(bytes > 0)
 }
 
+fn expected_bytes_for_path(path: &std::path::Path, label: &str) -> Option<u64> {
+    match label {
+        "model" => {
+            let filename = path.file_name()?.to_string_lossy().to_lowercase();
+            GGUF_MODEL_SPECS
+                .iter()
+                .find(|spec| filename == spec.filename.to_lowercase())
+                .map(|spec| spec.model_bytes)
+                .or(Some(EXPECTED_MODEL_BYTES))
+        }
+        "mmproj" => Some(EXPECTED_MMPROJ_BYTES),
+        _ => None,
+    }
+}
+
+pub fn is_complete_size(expected: u64, bytes: u64) -> bool {
+    bytes >= expected.saturating_mul(COMPLETE_RATIO_PERCENT) / 100
+}
+
 pub fn file_is_valid(path: &std::path::Path, label: &str) -> bool {
     fs::metadata(path)
         .ok()
-        .map(|meta| is_download_complete(label, meta.len()))
+        .map(|meta| {
+            expected_bytes_for_path(path, label)
+                .map(|expected| is_complete_size(expected, meta.len()))
+                .unwrap_or(meta.len() > 0)
+        })
         .unwrap_or(false)
 }
 
@@ -146,39 +231,23 @@ impl ModelCache {
         Ok(Self { root })
     }
 
-    pub fn default_model_path(&self) -> PathBuf {
-        self.root.join(DEFAULT_MODEL_FILENAME)
+    pub fn default_model_path(&self, variant: GgufModelVariant) -> PathBuf {
+        self.root.join(gguf_model_spec(variant).filename)
     }
 
     pub fn default_mmproj_path(&self) -> PathBuf {
         self.root.join(DEFAULT_MMPROJ_FILENAME)
     }
 
-    /// Resolve the model + mmproj pair. If `configured` points to a directory,
-    /// auto-detect the two GGUF files inside it. If it points to a file, treat it
-    /// as the main model and look for an mmproj sibling. Otherwise use the cache.
-    pub fn resolve(&self, configured: Option<&str>) -> ModelPaths {
-        if let Some(raw) = configured.filter(|p| !p.trim().is_empty()) {
-            let path = PathBuf::from(raw);
-            if path.is_dir() {
-                if let Some(pair) = detect_pair_in_dir(&path) {
-                    return pair;
-                }
-            } else if path.is_file() {
-                let mmproj = find_mmproj_sibling(&path)
-                    .unwrap_or_else(|| self.default_mmproj_path());
-                return ModelPaths { model: path, mmproj };
-            }
-        }
-
+    pub fn resolve(&self, variant: GgufModelVariant) -> ModelPaths {
         ModelPaths {
-            model: self.default_model_path(),
+            model: self.default_model_path(variant),
             mmproj: self.default_mmproj_path(),
         }
     }
 
-    pub fn model_size_bytes(&self, configured: Option<&str>) -> Option<u64> {
-        let paths = self.resolve(configured);
+    pub fn model_size_bytes(&self, variant: GgufModelVariant) -> Option<u64> {
+        let paths = self.resolve(variant);
         let model = fs::metadata(&paths.model).ok().map(|m| m.len());
         let mmproj = fs::metadata(&paths.mmproj).ok().map(|m| m.len());
         match (model, mmproj) {
@@ -188,33 +257,7 @@ impl ModelCache {
         }
     }
 
-    pub fn default_mlx_local_dir(&self) -> PathBuf {
-        self.root.join("mlx").join("MiniCPM-V-4.6-4bit")
-    }
-
-    pub fn resolve_mlx(
-        &self,
-        configured_path: Option<&str>,
-        configured_id: Option<&str>,
-    ) -> MlxModelRef {
-        if let Some(raw) = configured_path.filter(|value| !value.trim().is_empty()) {
-            let path = PathBuf::from(raw);
-            if path.is_dir() && path.join("config.json").exists() {
-                return MlxModelRef {
-                    spec: path.to_string_lossy().to_string(),
-                    is_local: true,
-                };
-            }
-        }
-
-        let local = self.default_mlx_local_dir();
-        if local.join("config.json").exists() {
-            return MlxModelRef {
-                spec: local.to_string_lossy().to_string(),
-                is_local: true,
-            };
-        }
-
+    pub fn resolve_mlx(&self, configured_id: Option<&str>) -> MlxModelRef {
         let hub_id = configured_id
             .filter(|value| !value.trim().is_empty())
             .unwrap_or(DEFAULT_MLX_MODEL_ID);
@@ -234,16 +277,15 @@ pub struct MlxModelRef {
 impl MlxModelRef {
     pub fn is_ready(&self) -> bool {
         if self.is_local {
-            PathBuf::from(&self.spec)
-                .join("config.json")
-                .is_file()
+            PathBuf::from(&self.spec).join("config.json").is_file()
         } else {
             mlx_hub_model_cached(&self.spec)
+                || mlx_hub_cache_bytes(&self.spec) >= ESTIMATED_MLX_BYTES * 3 / 4
         }
     }
 
     pub fn requires_network_on_first_run(&self) -> bool {
-        !self.is_local && !mlx_hub_model_cached(&self.spec)
+        !self.is_local && !self.is_ready()
     }
 }
 
@@ -319,52 +361,15 @@ fn huggingface_hub_dir() -> Option<PathBuf> {
 }
 
 fn dirs_home_cache() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from).map(|home| {
-        home.join(".cache").join("huggingface")
-    })
-}
-
-fn detect_pair_in_dir(dir: &PathBuf) -> Option<ModelPaths> {
-    let entries = fs::read_dir(dir).ok()?;
-    let mut model: Option<PathBuf> = None;
-    let mut mmproj: Option<PathBuf> = None;
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = path.file_name()?.to_string_lossy().to_lowercase();
-        if !name.ends_with(".gguf") {
-            continue;
-        }
-        if name.contains("mmproj") {
-            mmproj = Some(path);
-        } else {
-            model = Some(path);
-        }
-    }
-
-    match (model, mmproj) {
-        (Some(model), Some(mmproj)) => Some(ModelPaths { model, mmproj }),
-        _ => None,
-    }
-}
-
-fn find_mmproj_sibling(model: &PathBuf) -> Option<PathBuf> {
-    let dir = model.parent()?;
-    let entries = fs::read_dir(dir).ok()?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = path.file_name()?.to_string_lossy().to_lowercase();
-        if name.ends_with(".gguf") && name.contains("mmproj") {
-            return Some(path);
-        }
-    }
-    None
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join(".cache").join("huggingface"))
 }
 
 pub fn is_model_ready(app: &AppHandle) -> Result<bool, String> {
     let settings = crate::settings::load_settings(app)?;
     let cache = ModelCache::new(app)?;
-    Ok(cache.resolve(settings.model_path.as_deref()).is_complete())
+    Ok(cache.resolve(settings.gguf_model_variant).is_complete())
 }
 
 pub fn format_bytes(bytes: u64) -> String {

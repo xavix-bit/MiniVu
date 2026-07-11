@@ -1,25 +1,13 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { resolveGgufPercent } from "../shared/downloadProgress";
-import { EXPECTED_GGUF_BYTES } from "../shared/modelConstants";
+import { modelClient } from "../model/modelClient";
+import type { ModelStatusResponse } from "../model/types";
+import { resolveGgufPercent, resolveMlxPercent } from "../shared/downloadProgress";
+import { expectedGgufBytesForVariant, GGUF_MODEL_VARIANTS } from "../shared/modelConstants";
+import { loadSettings, saveSettings, type GgufModelVariant } from "./settingsStore";
 
-type ModelStatus = {
-  modelReady: boolean;
-  modelDownloaded: boolean;
-  mmprojDownloaded: boolean;
-  modelPath: string;
-  mmprojPath: string;
-  modelSize: string | null;
-  sidecarRunning: boolean;
-  llamaServerAvailable: boolean;
-  inferenceBackend: "llama" | "mlx";
-  activeBackend: string;
-  mlxRuntimeAvailable: boolean;
-  mlxModelId: string;
-  mlxModelReady: boolean;
-  mlxRequiresNetwork: boolean;
-};
+type ModelStatus = ModelStatusResponse;
 
 type ModelPanelProps = {
   onOpenSetup?: () => void;
@@ -64,6 +52,8 @@ function shortenPath(path: string) {
 export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
   const [status, setStatus] = useState<ModelStatus | null>(null);
   const [downloading, setDownloading] = useState(false);
+  const [selectedVariant, setSelectedVariant] = useState<GgufModelVariant>("q4_k_m");
+  const [savingVariant, setSavingVariant] = useState<GgufModelVariant | null>(null);
   const [downloadError, setDownloadError] = useState("");
   const [fileProgress, setFileProgress] = useState<Record<FileKey, FileProgressState>>(createIdleProgress);
   const [mlxProgress, setMlxProgress] = useState<MlxProgressState>({
@@ -73,8 +63,9 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
   });
 
   async function refresh() {
-    const next = await invoke<ModelStatus>("get_model_status");
+    const next = await modelClient.getModelStatus();
     setStatus(next);
+    setSelectedVariant(next.ggufModelVariant);
   }
 
   useEffect(() => {
@@ -94,11 +85,16 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
         event.payload;
       const fileKey: FileKey = file === "mmproj" ? "mmproj" : "model";
       if (file === "mlx") {
-        const percent = event.payload.percent ?? 0;
-        setMlxProgress({
-          status: downloadStatus === "done" ? "done" : "running",
-          percent: downloadStatus === "done" ? 100 : percent,
-          detail: message ?? "正在下载 MLX 权重…",
+        setMlxProgress((current) => {
+          const percent =
+            downloadStatus === "done"
+              ? 100
+              : resolveMlxPercent(current.percent, downloaded);
+          return {
+            status: downloadStatus === "done" ? "done" : "running",
+            percent,
+            detail: message ?? "正在下载 MLX 权重…",
+          };
         });
         return;
       }
@@ -198,10 +194,13 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
       mmproj: { status: "waiting", percent: 0, downloaded: 0, speedMbps: null, detail: "等待主模型完成…" },
     });
     try {
+      const settings = await loadSettings();
+      await saveSettings({ ...settings, ggufModelVariant: selectedVariant });
       await invoke<string>("download_model", { force: true });
+      const expectedBytes = expectedGgufBytesForVariant(selectedVariant);
       setFileProgress({
-        model: { status: "done", percent: 100, downloaded: EXPECTED_GGUF_BYTES.model, speedMbps: null, detail: "下载完成" },
-        mmproj: { status: "done", percent: 100, downloaded: EXPECTED_GGUF_BYTES.mmproj, speedMbps: null, detail: "下载完成" },
+        model: { status: "done", percent: 100, downloaded: expectedBytes.model, speedMbps: null, detail: "下载完成" },
+        mmproj: { status: "done", percent: 100, downloaded: expectedBytes.mmproj, speedMbps: null, detail: "下载完成" },
       });
       await refresh();
       onStatusChange?.();
@@ -213,14 +212,35 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
     }
   }
 
+  async function selectVariant(variant: GgufModelVariant) {
+    if (variant === selectedVariant || downloading) {
+      return;
+    }
+    setSelectedVariant(variant);
+    setSavingVariant(variant);
+    setDownloadError("");
+    try {
+      const settings = await loadSettings();
+      await saveSettings({ ...settings, ggufModelVariant: variant });
+      setFileProgress(createIdleProgress());
+      await refresh();
+      onStatusChange?.();
+    } catch (error) {
+      setDownloadError(String(error));
+    } finally {
+      setSavingVariant(null);
+    }
+  }
+
   const isMlx = status?.inferenceBackend === "mlx";
   const runtimeReady = isMlx ? status?.mlxRuntimeAvailable : status?.llamaServerAvailable;
+  const selectedVariantSpec = GGUF_MODEL_VARIANTS[selectedVariant];
 
   const fileItems = status
     ? isMlx
       ? [
           {
-            label: "推理引擎",
+            label: "实验加速包",
             value: status.mlxRuntimeAvailable ? "MLX 已安装" : "未安装",
             ok: status.mlxRuntimeAvailable,
             meta: status.activeBackend ?? "MLX",
@@ -240,7 +260,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
         ]
       : [
           {
-            label: "主模型",
+            label: `主模型 · ${selectedVariantSpec.label}`,
             value: status.modelDownloaded ? "已下载" : "未下载",
             ok: status.modelDownloaded,
             meta: status.modelPath ? shortenPath(status.modelPath) : "—",
@@ -264,13 +284,41 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
     <div className="model-panel">
       {!runtimeReady ? (
         <div className="callout callout--attention" role="status">
-          <p>{isMlx ? "MLX 推理引擎未安装，请先在环境配置或设置中安装。" : "推理引擎未安装，请先在环境配置中完成一键安装。"}</p>
+          <p>{isMlx ? "MLX 未安装。" : "内置 Metal 未就绪。"}</p>
           {onOpenSetup ? (
             <button type="button" className="callout__action" onClick={onOpenSetup}>
               去环境配置
             </button>
           ) : null}
         </div>
+      ) : null}
+
+      {!isMlx ? (
+        <section className="surface model-variant-picker" aria-label="模型档位">
+          {(Object.entries(GGUF_MODEL_VARIANTS) as Array<
+            [GgufModelVariant, (typeof GGUF_MODEL_VARIANTS)[GgufModelVariant]]
+          >).map(([variant, spec]) => {
+            const selected = variant === selectedVariant;
+            return (
+              <button
+                key={variant}
+                type="button"
+                className={`model-variant-option${selected ? " is-selected" : ""}`}
+                disabled={downloading || savingVariant !== null}
+                onClick={() => void selectVariant(variant)}
+              >
+                <span className="model-variant-option__head">
+                  <strong>{spec.label}</strong>
+                  <span>{spec.badge}</span>
+                </span>
+                <span className="model-variant-option__desc">{spec.description}</span>
+                <span className="model-variant-option__meta">
+                  {formatBytes(spec.modelBytes)} · {spec.memoryHint}
+                </span>
+              </button>
+            );
+          })}
+        </section>
       ) : null}
 
       <section className="surface model-panel__files" aria-label="模型文件">
@@ -294,8 +342,8 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
       <section className="surface model-panel__actions-card">
         <p className="setup-panel__lead">
           {isMlx
-            ? "下载 MLX 权重（约 2 GB）后即可识图。引擎安装请在「偏好设置 → 推理引擎」完成。"
-            : "重新下载 GGUF 主模型与 mmproj。下载镜像可在「偏好设置 → GGUF 模型与下载」中配置。"}
+            ? "下载 MLX 权重。"
+            : "下载或更新本地视觉模型。"}
         </p>
         <div className="model-actions">
           <button
@@ -304,7 +352,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
             disabled={downloading || !runtimeReady}
             onClick={() => void downloadModel()}
           >
-            {downloading ? "下载中…" : isMlx ? "下载 MLX 权重" : "重新下载模型"}
+            {downloading ? "下载中…" : isMlx ? "下载 MLX 权重" : "下载 / 更新模型"}
           </button>
           <button type="button" className="settings-btn settings-btn--secondary" onClick={() => void refresh()}>
             刷新状态
@@ -360,9 +408,17 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
           </div>
         ) : null}
         <p className="field-hint">
-          {isMlx ? "MLX 模型 ID 与路径请在「偏好设置 → 推理引擎」中配置。" : "手动指定 GGUF 路径请在「偏好设置」中配置。"}
+          {isMlx ? "模型 ID 在「偏好设置 → 本地推理」。" : "视觉投影器会自动下载并复用。"}
         </p>
       </section>
     </div>
   );
+}
+
+function formatBytes(bytes: number) {
+  const gb = bytes / (1024 * 1024 * 1024);
+  if (gb >= 1) {
+    return `${gb.toFixed(1)} GB`;
+  }
+  return `${Math.round(bytes / (1024 * 1024))} MB`;
 }

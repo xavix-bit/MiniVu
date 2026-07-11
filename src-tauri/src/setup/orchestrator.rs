@@ -43,11 +43,8 @@ pub async fn setup_environment(app: AppHandle) -> Result<SetupEnvironmentResult,
 
     let settings = load_settings(&app)?;
     let cache = ModelCache::new(&app)?;
-    let paths = cache.resolve(settings.model_path.as_deref());
-    let mlx = cache.resolve_mlx(
-        settings.mlx_model_path.as_deref(),
-        Some(settings.mlx_model_id.as_str()),
-    );
+    let paths = cache.resolve(settings.gguf_model_variant);
+    let mlx = cache.resolve_mlx(Some(settings.mlx_model_id.as_str()));
 
     if backend == InferenceBackend::Llama && !paths.is_complete() {
         emit_setup_progress(
@@ -59,20 +56,20 @@ pub async fn setup_environment(app: AppHandle) -> Result<SetupEnvironmentResult,
         );
         emit_setup_progress(&app, "mmproj", "waiting", "等待主模型完成后开始…", 0);
         download_model(app.clone(), None).await?;
-        emit_setup_progress(&app, "mmproj", "done", "视觉投影器已就绪", 100);
-        emit_setup_progress(&app, "model", "done", "主模型已就绪", 100);
+        emit_setup_progress(&app, "mmproj", "done", "视觉投影已下载", 100);
+        emit_setup_progress(&app, "model", "done", "主模型已下载", 100);
     } else if backend == InferenceBackend::Mlx {
         if !mlx.is_ready() {
             emit_setup_progress(&app, "model", "running", "正在下载 MLX 模型权重…", 0);
             emit_setup_progress(&app, "mmproj", "waiting", "MLX 模式无需 mmproj", 0);
             download_mlx_model(app.clone(), None).await?;
         } else {
-            emit_setup_progress(&app, "model", "done", "MLX 模型权重已就绪", 100);
+            emit_setup_progress(&app, "model", "done", "MLX 模型已下载", 100);
             emit_setup_progress(&app, "mmproj", "done", "MLX 模式无需 mmproj", 100);
         }
     } else {
-        emit_setup_progress(&app, "mmproj", "done", "视觉投影器已就绪", 100);
-        emit_setup_progress(&app, "model", "done", "主模型已就绪", 100);
+        emit_setup_progress(&app, "mmproj", "done", "视觉投影已下载", 100);
+        emit_setup_progress(&app, "model", "done", "主模型已下载", 100);
     }
 
     let mut settings = load_settings(&app)?;
@@ -91,11 +88,8 @@ pub async fn setup_environment(app: AppHandle) -> Result<SetupEnvironmentResult,
 
     let refreshed = load_settings(&app)?;
     let cache = ModelCache::new(&app)?;
-    let paths = cache.resolve(refreshed.model_path.as_deref());
-    let mlx = cache.resolve_mlx(
-        refreshed.mlx_model_path.as_deref(),
-        Some(refreshed.mlx_model_id.as_str()),
-    );
+    let paths = cache.resolve(refreshed.gguf_model_variant);
+    let mlx = cache.resolve_mlx(Some(refreshed.mlx_model_id.as_str()));
     let active = resolve_active_backend(refreshed.inference_backend, &app).ok();
 
     emit_setup_progress(&app, "done", "done", "环境配置完成", 100);

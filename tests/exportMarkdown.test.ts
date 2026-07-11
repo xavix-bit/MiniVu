@@ -18,7 +18,7 @@ describe("renderSessionMarkdown", () => {
     expect(markdown).toContain("![当前图片](session.png)");
     expect(markdown).toContain("Error: connection refused");
     expect(markdown).toContain("**用户：** 哪里出了问题？");
-    expect(markdown).toContain("**助手：** 服务拒绝了连接。");
+    expect(markdown).toContain("**MiniVu：** 服务拒绝了连接。");
     expect(markdown).toContain("模型：`minicpm-v-gguf`");
   });
 });

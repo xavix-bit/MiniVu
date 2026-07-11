@@ -14,7 +14,10 @@ pub fn build_http_client() -> Result<Client, String> {
         .map_err(|e| e.to_string())
 }
 
-pub fn with_download_headers(builder: reqwest::RequestBuilder, url: &str) -> reqwest::RequestBuilder {
+pub fn with_download_headers(
+    builder: reqwest::RequestBuilder,
+    url: &str,
+) -> reqwest::RequestBuilder {
     let builder = builder
         .header(reqwest::header::ACCEPT, "*/*")
         .header(reqwest::header::ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9,en;q=0.8");

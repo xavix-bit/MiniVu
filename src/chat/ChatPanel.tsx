@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { Composer } from "./Composer";
 import { ImagePreviewStrip } from "./ImagePreviewStrip";
 import { ModelStatusBar } from "./ModelStatusBar";
 import { PanelHeader } from "./PanelHeader";
 import { QuickActions } from "./QuickActions";
 import { RecognizedTextPanel } from "./RecognizedTextPanel";
+import { ReplaceImageConfirm } from "./ReplaceImageConfirm";
 import { TranscriptPanel } from "./TranscriptPanel";
-import { useImageSession } from "./useImageSessionHook";
+import { useImageSession } from "./useImageSession";
 import { exportCurrentSession } from "../export/exportSession";
 import { captureScreenRegion } from "../image/captureScreen";
 import {
@@ -15,23 +17,47 @@ import {
   readClipboardImage,
   readFileAsDataUrl,
 } from "../image/imageIntake";
+import { loadSettings } from "../settings/settingsStore";
 
-export function ChatPanel() {
+function formatShortcut(raw: string): string {
+  return raw
+    .split("+")
+    .map((part) => {
+      switch (part) {
+        case "Control":
+          return "⌃";
+        case "Option":
+        case "Alt":
+          return "⌥";
+        case "Command":
+        case "Cmd":
+        case "Super":
+          return "⌘";
+        case "Shift":
+          return "⇧";
+        case "Space":
+          return "Space";
+        default:
+          return part;
+      }
+    })
+    .join("");
+}
+
+export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
   const [input, setInput] = useState("");
   const [notice, setNotice] = useState("");
   const [capturing, setCapturing] = useState(false);
-  const [loadProgress, setLoadProgress] = useState("");
-  const [inferenceBackend, setInferenceBackend] = useState<"llama" | "mlx">("mlx");
-  const [mlxWeightsReady, setMlxWeightsReady] = useState(true);
-  const [elapsed, setElapsed] = useState(0);
+  const [dragOver, setDragOver] = useState(false);
+  const [shortcutHint, setShortcutHint] = useState("");
+  const [focusComposerSignal, setFocusComposerSignal] = useState(0);
   const {
     state,
     streamingText,
     isAnswering,
-    modelLoading,
-    inferPhase,
     ocrLoading,
     error,
+    statusBar,
     clearError,
     setImage,
     pendingReplaceImage,
@@ -46,52 +72,23 @@ export function ChatPanel() {
 
   const hasConversation = state.messages.length > 0 || Boolean(streamingText);
   const showQuickActions = Boolean(state.image) && !hasConversation;
-  const waitingForModel = modelLoading && !streamingText && inferPhase === "loading";
-  const statusMessage =
-    loadProgress ||
-    (streamingText
-      ? "正在生成回答…"
-      : inferPhase === "thinking"
-        ? "正在理解图片并思考…"
-        : inferenceBackend === "mlx"
-          ? "正在准备 MLX 模型…"
-          : "正在加载模型到内存…");
   const banner = error || notice;
 
   useEffect(() => {
-    void invoke<{ inferenceBackend: "llama" | "mlx"; mlxModelReady: boolean }>("get_model_status").then(
-      (status) => {
-        setInferenceBackend(status.inferenceBackend ?? "mlx");
-        setMlxWeightsReady(status.mlxModelReady ?? false);
-      },
-    );
-  }, []);
-
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void (async () => {
-      const { listen } = await import("@tauri-apps/api/event");
-      unlisten = await listen<{ message: string }>("sidecar-load-progress", (event) => {
-        setLoadProgress(event.payload.message);
+    let active = true;
+    void loadSettings()
+      .then((settings) => {
+        if (active && settings.shortcut) {
+          setShortcutHint(formatShortcut(settings.shortcut));
+        }
+      })
+      .catch(() => {
+        /* 读取失败时不展示提示即可 */
       });
-    })();
     return () => {
-      unlisten?.();
+      active = false;
     };
   }, []);
-
-  useEffect(() => {
-    if (!waitingForModel) {
-      setElapsed(0);
-      setLoadProgress("");
-      return;
-    }
-    const startedAt = Date.now();
-    const timer = window.setInterval(() => {
-      setElapsed(Math.round((Date.now() - startedAt) / 1000));
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, [waitingForModel]);
 
   useEffect(() => {
     function handlePaste(event: ClipboardEvent) {
@@ -122,13 +119,17 @@ export function ChatPanel() {
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        void invoke("close_quick_panel_command");
+      if (event.key !== "Escape") {
+        return;
       }
+      if (pendingReplaceImage) {
+        return;
+      }
+      void invoke("hide_quick_panel_command");
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  }, [pendingReplaceImage]);
 
   useEffect(() => {
     const element = dropRef.current;
@@ -136,12 +137,25 @@ export function ChatPanel() {
       return;
     }
 
+    function handleDragEnter(event: DragEvent) {
+      event.preventDefault();
+      setDragOver(true);
+    }
+
+    function handleDragLeave(event: DragEvent) {
+      if (!element?.contains(event.relatedTarget as Node)) {
+        setDragOver(false);
+      }
+    }
+
     function handleDragOver(event: DragEvent) {
       event.preventDefault();
+      setDragOver(true);
     }
 
     function handleDrop(event: DragEvent) {
       event.preventDefault();
+      setDragOver(false);
       const files = filterAcceptedFiles(event.dataTransfer?.files ?? []);
       const file = files[0];
       if (file) {
@@ -149,13 +163,17 @@ export function ChatPanel() {
       }
     }
 
+    element.addEventListener("dragenter", handleDragEnter);
+    element.addEventListener("dragleave", handleDragLeave);
     element.addEventListener("dragover", handleDragOver);
     element.addEventListener("drop", handleDrop);
     return () => {
+      element.removeEventListener("dragenter", handleDragEnter);
+      element.removeEventListener("dragleave", handleDragLeave);
       element.removeEventListener("dragover", handleDragOver);
       element.removeEventListener("drop", handleDrop);
     };
-  }, [setImage]);
+  }, [setImage, state.image, hasConversation]);
 
   async function handleExport() {
     try {
@@ -173,6 +191,10 @@ export function ChatPanel() {
   }
 
   async function handleClose() {
+    if (onCollapse) {
+      onCollapse();
+      return;
+    }
     await invoke("close_quick_panel_command");
   }
 
@@ -186,16 +208,70 @@ export function ChatPanel() {
     void ask(prompt);
   }
 
-  function handleQuickAction(prompt: string) {
+  function handleQuickAction(prompt: string, displayText: string) {
     if (isAnswering) {
       return;
     }
     setNotice("");
-    void ask(prompt);
+    void ask(prompt, displayText);
+  }
+
+  async function handleCopyText() {
+    if (ocrLoading) {
+      setNotice("识别中…");
+      return;
+    }
+    const text = state.ocrText.trim();
+    if (!text) {
+      setNotice("没识别到文字。");
+      return;
+    }
+    try {
+      await writeText(text);
+      setNotice("已复制文字");
+    } catch (err) {
+      setNotice(`复制失败：${String(err)}`);
+    }
+  }
+
+  function handleTranslateImage() {
+    if (!state.image || isAnswering) {
+      return;
+    }
+    if (ocrLoading) {
+      setNotice("识别中…");
+      return;
+    }
+    handleQuickAction(
+      [
+        "翻译图片里的所有可见文字。",
+        "保留原有顺序和换行。",
+        "如果文字已经是中文，就整理成可复制的原文。",
+        "不要只摘一句，不要解释。",
+      ].join("\n"),
+      "翻译图片文字",
+    );
+  }
+
+  function handleAskImage() {
+    if (!state.image) {
+      return;
+    }
+    setNotice("");
+    setFocusComposerSignal((value) => value + 1);
   }
 
   function triggerReplaceImage() {
     fileInputRef.current?.click();
+  }
+
+  async function handlePasteImage() {
+    const image = await readClipboardImage();
+    if (image) {
+      await setImage(image);
+    } else {
+      setNotice("剪贴板没有图片。");
+    }
   }
 
   async function handleCaptureScreen() {
@@ -238,20 +314,30 @@ export function ChatPanel() {
       />
 
       <ModelStatusBar
-        visible={modelLoading}
-        message={statusMessage}
-        detail={
-          waitingForModel
-            ? inferenceBackend === "mlx"
-              ? mlxWeightsReady
-                ? `已等待 ${elapsed}s · 正在载入模型到内存（约 30–90 秒）`
-                : `已等待 ${elapsed}s · 正在下载 MLX 权重（约 2GB，仅首次），请保持联网`
-              : `已等待 ${elapsed}s · 正在载入 GGUF 模型到内存（约 30–90 秒）`
-            : inferPhase === "thinking" && !streamingText
-              ? "模型已在内存，视觉推理需要几秒"
-              : undefined
-        }
+        visible={statusBar.visible}
+        message={statusBar.message}
+        detail={statusBar.detail}
+        onStop={() => void stopGeneration()}
       />
+
+      <div className="image2-panel-tabs" aria-label="识别模式">
+        <button type="button" className="is-active" onClick={() => void handleCaptureScreen()} disabled={capturing || isAnswering}>
+          <span>⌗</span>
+          截图
+        </button>
+        <button type="button" onClick={() => void handleCopyText()} disabled={!state.image || isAnswering}>
+          <span>≡</span>
+          文字
+        </button>
+        <button type="button" onClick={handleTranslateImage} disabled={!state.image || isAnswering}>
+          <span>⇄</span>
+          翻译
+        </button>
+        <button type="button" onClick={handleAskImage} disabled={!state.image || isAnswering}>
+          <span>◎</span>
+          问图
+        </button>
+      </div>
 
       {banner ? (
         <div
@@ -262,6 +348,7 @@ export function ChatPanel() {
           <button
             type="button"
             className="chat-banner__close"
+            aria-label="关闭提示"
             onClick={() => {
               clearError();
               setNotice("");
@@ -273,21 +360,10 @@ export function ChatPanel() {
       ) : null}
 
       {pendingReplaceImage ? (
-        <div className="chat-banner chat-banner--confirm" role="dialog" aria-label="确认替换图片">
-          <span>替换图片将清空当前对话，是否继续？</span>
-          <div className="chat-banner__actions">
-            <button type="button" className="ghost-btn" onClick={() => cancelReplaceImage()}>
-              取消
-            </button>
-            <button
-              type="button"
-              className="settings-btn settings-btn--primary"
-              onClick={() => void confirmReplaceImage()}
-            >
-              继续
-            </button>
-          </div>
-        </div>
+        <ReplaceImageConfirm
+          onCancel={() => cancelReplaceImage()}
+          onConfirm={() => void confirmReplaceImage()}
+        />
       ) : null}
 
       <input
@@ -300,34 +376,49 @@ export function ChatPanel() {
 
       <div className="chat-panel__body">
         {!state.image ? (
-          <div ref={dropRef} className="drop-zone">
-            <span className="drop-zone__icon" aria-hidden="true" />
-            <strong>添加一张图片开始</strong>
-            <button
-              type="button"
-              className="drop-zone__capture"
-              disabled={capturing || isAnswering}
-              onClick={() => void handleCaptureScreen()}
+          <div className="image2-empty-flow">
+            <div
+              ref={dropRef}
+              className={`drop-zone${dragOver ? " drop-zone--drag-over" : ""}`}
             >
-              {capturing ? "请在屏幕上框选区域…" : "框选截图"}
-            </button>
-            <span className="drop-zone__hint">或粘贴截图 · 拖入文件 · ⌘V</span>
-            <span className="drop-zone__step">1. 截图/添加图片 → 2. 输入问题 → 3. 本地回答</span>
+              <span className="drop-zone__icon" aria-hidden="true">
+                <span />
+              </span>
+              <div className="drop-zone__copy">
+                <strong>拖入图片</strong>
+                <span>{shortcutHint ? `${shortcutHint} 截图` : "粘贴或截图"}</span>
+              </div>
+            </div>
+
+            <div className="drop-zone__actions image2-start-actions">
+              <button
+                type="button"
+                className="drop-zone__capture"
+                disabled={capturing || isAnswering}
+                onClick={() => void handleCaptureScreen()}
+              >
+                {capturing ? "截图中…" : "截图"}
+              </button>
+              <button
+                type="button"
+                className="drop-zone__secondary"
+                disabled={isAnswering}
+                onClick={() => void handlePasteImage()}
+              >
+                粘贴
+              </button>
+            </div>
           </div>
         ) : (
           <>
-            {hasConversation ? (
-              <TranscriptPanel messages={state.messages} streamingText={streamingText} />
-            ) : null}
-
-            <div ref={dropRef} className="chat-panel__meta">
-              <div className="chat-panel__image-row">
+            <div ref={dropRef} className={`chat-panel__meta${hasConversation ? " chat-panel__meta--compact" : ""}`}>
+              <div className={`chat-panel__image-row${hasConversation ? " chat-panel__image-row--compact" : ""}`}>
                 <ImagePreviewStrip
                   dataUrl={state.image.dataUrl}
                   name={state.image.name}
                   compact={hasConversation}
                 />
-                <div className="chat-panel__image-actions">
+                <div className={`chat-panel__image-actions${hasConversation ? " chat-panel__image-actions--row" : ""}`}>
                   <button
                     type="button"
                     className="ghost-btn"
@@ -341,19 +432,28 @@ export function ChatPanel() {
                   </button>
                   {hasConversation ? (
                     <button type="button" className="ghost-btn" onClick={clearConversation}>
-                      清空对话
+                      清空
                     </button>
                   ) : null}
                 </div>
               </div>
-              {showQuickActions ? <QuickActions onSelect={handleQuickAction} /> : null}
-              {!hasConversation && state.ocrText ? (
+              {showQuickActions ? (
+                <QuickActions
+                  onCopyText={() => void handleCopyText()}
+                  onTranslate={handleTranslateImage}
+                  onAsk={handleAskImage}
+                  textReady={Boolean(state.ocrText.trim())}
+                  disabled={isAnswering || ocrLoading}
+                />
+              ) : null}
+              {!hasConversation && (state.ocrText || ocrLoading) ? (
                 <RecognizedTextPanel text={state.ocrText} loading={ocrLoading} />
               ) : null}
-              {!hasConversation ? (
-                <TranscriptPanel messages={state.messages} streamingText={streamingText} />
-              ) : null}
             </div>
+
+            {hasConversation ? (
+              <TranscriptPanel messages={state.messages} streamingText={streamingText} />
+            ) : null}
 
             {hasConversation && (state.ocrText || ocrLoading) ? (
               <RecognizedTextPanel text={state.ocrText} loading={ocrLoading} compact />
@@ -364,9 +464,10 @@ export function ChatPanel() {
 
       <Composer
         value={input}
-        disabled={!state.image}
+        disabled={false}
         isAnswering={isAnswering}
         canSubmit={Boolean(state.image)}
+        focusSignal={focusComposerSignal}
         onChange={setInput}
         onSubmit={submit}
         onStop={() => void stopGeneration()}

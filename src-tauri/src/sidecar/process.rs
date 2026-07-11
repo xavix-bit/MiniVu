@@ -107,17 +107,14 @@ impl ModelSidecar {
             terminate_listeners_on_port(desired_port)?;
             if is_port_in_use(desired_port) {
                 return Err(format!(
-                    "推理端口 {desired_port} 仍被占用。请退出其他 MiniVu 实例，或在终端执行：lsof -ti :{desired_port} | xargs kill"
+                    "推理端口 {desired_port} 被占用，请关闭其他 MiniVu 窗口后重试。"
                 ));
             }
         }
 
         let cache = ModelCache::new(app)?;
-        let paths = cache.resolve(settings.model_path.as_deref());
-        let mlx = cache.resolve_mlx(
-            settings.mlx_model_path.as_deref(),
-            Some(settings.mlx_model_id.as_str()),
-        );
+        let paths = cache.resolve(settings.gguf_model_variant);
+        let mlx = cache.resolve_mlx(Some(settings.mlx_model_id.as_str()));
 
         let launcher = backend_for(backend, paths, mlx);
         let child = launcher.spawn(app, self.port)?;

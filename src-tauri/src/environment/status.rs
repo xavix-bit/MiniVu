@@ -1,5 +1,5 @@
 use crate::inference_backend::{mlx_runtime_ready, resolve_active_backend};
-use crate::model_cache::{ModelCache, ModelPaths, MlxModelRef};
+use crate::model_cache::{MlxModelRef, ModelCache, ModelPaths};
 use crate::runtime_installer::resolve_llama_server;
 use crate::settings::{load_settings, InferenceBackend};
 use serde::Serialize;
@@ -27,11 +27,8 @@ pub struct EnvironmentSnapshot {
 pub fn evaluate_environment(app: &AppHandle) -> Result<EnvironmentSnapshot, String> {
     let settings = load_settings(app)?;
     let cache = ModelCache::new(app)?;
-    let gguf = cache.resolve(settings.model_path.as_deref());
-    let mlx = cache.resolve_mlx(
-        settings.mlx_model_path.as_deref(),
-        Some(settings.mlx_model_id.as_str()),
-    );
+    let gguf = cache.resolve(settings.gguf_model_variant);
+    let mlx = cache.resolve_mlx(Some(settings.mlx_model_id.as_str()));
     let backend = resolve_active_backend(settings.inference_backend, app).ok();
 
     Ok(EnvironmentSnapshot {
@@ -84,10 +81,8 @@ pub fn is_environment_ready(app: &AppHandle) -> Result<bool, String> {
         return Ok(false);
     };
 
-    Ok(
-        runtime_ready_for_backend(backend, app)
-            && model_ready_for_backend(backend, app, &snapshot.gguf, &snapshot.mlx),
-    )
+    Ok(runtime_ready_for_backend(backend, app)
+        && model_ready_for_backend(backend, app, &snapshot.gguf, &snapshot.mlx))
 }
 
 impl EnvironmentSnapshot {

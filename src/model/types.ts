@@ -1,4 +1,6 @@
-/** 与 Rust `ModelStatusResponse` 对齐。 */
+/** 与 Rust `ModelStatusResponse` 对齐；运维/调试详情（侧车、路径、后端细项）。 */
+import type { GgufModelVariant } from "../settings/settingsStore";
+
 export type ModelStatusResponse = {
   modelReady: boolean;
   modelDownloaded: boolean;
@@ -9,6 +11,7 @@ export type ModelStatusResponse = {
   sidecarRunning: boolean;
   llamaServerAvailable: boolean;
   inferenceBackend: "llama" | "mlx";
+  ggufModelVariant: GgufModelVariant;
   activeBackend: string;
   mlxRuntimeAvailable: boolean;
   mlxModelId: string;
@@ -16,7 +19,7 @@ export type ModelStatusResponse = {
   mlxRequiresNetwork: boolean;
 };
 
-/** 与 Rust `EnvironmentStatus` 对齐。 */
+/** 与 Rust `EnvironmentStatus` 对齐；环境是否可正常使用的单一判定来源。 */
 export type EnvironmentStatus = {
   onboardingComplete: boolean;
   inferenceBackend: "llama" | "mlx";
@@ -25,23 +28,12 @@ export type EnvironmentStatus = {
   environmentReady: boolean;
 };
 
-export type ModelRuntimeState =
-  | { kind: "not_downloaded" }
-  | { kind: "downloaded"; modelPath: string }
-  | { kind: "loading" }
-  | { kind: "ready"; modelVersion: string }
-  | { kind: "answering" }
-  | { kind: "error"; message: string };
-
-export function modelStatusToRuntimeState(status: ModelStatusResponse): ModelRuntimeState {
-  if (status.modelReady) {
-    return {
-      kind: "ready",
-      modelVersion: status.inferenceBackend === "mlx" ? status.mlxModelId : status.modelPath,
-    };
+/** 根据 EnvironmentStatus 计算首页就绪度环（runtime + model，不含 onboarding）。 */
+export function environmentReadinessPercent(status: EnvironmentStatus): number {
+  if (status.environmentReady) {
+    return 100;
   }
-  if (status.modelDownloaded || status.mlxModelReady) {
-    return { kind: "downloaded", modelPath: status.modelPath };
-  }
-  return { kind: "not_downloaded" };
+  const items = [status.runtimeReady, status.modelReady];
+  const done = items.filter(Boolean).length;
+  return Math.round((done / items.length) * 100);
 }

@@ -5,8 +5,18 @@ type ShortcutRecorderProps = {
   onChange: (value: string) => void;
 };
 
+function formatKeyLabel(part: string) {
+  return part
+    .replace("Control", "⌃")
+    .replace("Option", "⌥")
+    .replace("Command", "⌘")
+    .replace("Shift", "⇧")
+    .replace("Space", "Space");
+}
+
 export function ShortcutRecorder({ value, onChange }: ShortcutRecorderProps) {
   const [recording, setRecording] = useState(false);
+  const parts = value.split("+").filter(Boolean);
 
   useEffect(() => {
     if (!recording) {
@@ -17,19 +27,19 @@ export function ShortcutRecorder({ value, onChange }: ShortcutRecorderProps) {
       event.preventDefault();
       event.stopPropagation();
 
-      const parts: string[] = [];
-      if (event.metaKey) parts.push("Command");
-      if (event.ctrlKey) parts.push("Control");
-      if (event.altKey) parts.push("Option");
-      if (event.shiftKey) parts.push("Shift");
+      const next: string[] = [];
+      if (event.metaKey) next.push("Command");
+      if (event.ctrlKey) next.push("Control");
+      if (event.altKey) next.push("Option");
+      if (event.shiftKey) next.push("Shift");
 
       const key = event.key;
       if (!["Meta", "Control", "Alt", "Shift"].includes(key)) {
-        parts.push(key.length === 1 ? key.toUpperCase() : key);
+        next.push(key.length === 1 ? key.toUpperCase() : key);
       }
 
-      if (parts.length > 1) {
-        onChange(parts.join("+"));
+      if (next.length > 1) {
+        onChange(next.join("+"));
         setRecording(false);
       }
     }
@@ -40,9 +50,15 @@ export function ShortcutRecorder({ value, onChange }: ShortcutRecorderProps) {
 
   return (
     <div className="shortcut-recorder">
-      <input readOnly value={value} />
-      <button type="button" onClick={() => setRecording(true)}>
-        {recording ? "请按下快捷键…" : "录制"}
+      <div className="shortcut-pills" aria-label="当前快捷键">
+        {parts.map((part) => (
+          <span key={part} className="shortcut-pill">
+            {formatKeyLabel(part)}
+          </span>
+        ))}
+      </div>
+      <button type="button" className="shortcut-recorder__btn" onClick={() => setRecording(true)}>
+        {recording ? "请按下快捷键…" : "重新录制"}
       </button>
     </div>
   );

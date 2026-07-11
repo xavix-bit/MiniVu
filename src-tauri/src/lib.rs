@@ -21,8 +21,9 @@ mod sidecar;
 mod tray;
 mod window;
 
-use model_sidecar::{init_generation_flag, init_sidecar_state, spawn_idle_unloader, spawn_model_warmup};
-use sidecar::lock_sidecar;
+use model_sidecar::{init_generation_flag, init_sidecar_state};
+use sidecar::{lock_sidecar, spawn_idle_unloader, spawn_model_warmup};
+use std::sync::Mutex;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -36,6 +37,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(init_sidecar_state())
         .manage(init_generation_flag())
+        .manage(Mutex::new(window::QuickPanelState::default()))
         .setup(|app| {
             tray::create_tray(app.handle())?;
             window::show_entry_window(app.handle())?;
@@ -69,6 +71,7 @@ pub fn run() {
             mirror_benchmark::benchmark_download_mirrors,
             model_sidecar::ask_image,
             model_sidecar::cancel_generation,
+            model_sidecar::warmup_model,
             model_sidecar::unload_model_if_idle,
             setup::setup_environment,
             runtime_installer::install_llama_runtime_command,
@@ -77,6 +80,9 @@ pub fn run() {
             window::show_quick_panel,
             window::show_main,
             window::close_quick_panel_command,
+            window::hide_quick_panel_command,
+            window::expand_quick_panel_command,
+            window::open_screen_recording_settings,
             screenshot::capture_screen_region,
         ])
         .build(tauri::generate_context!())

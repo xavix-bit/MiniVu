@@ -10,6 +10,7 @@ import {
   type MirrorBenchmarkResponse,
   type MirrorId,
 } from "./settingsStore";
+import { resolveMlxPercent } from "../shared/downloadProgress";
 import { ShortcutRecorder } from "./shortcutRecorder";
 import { applyTheme } from "../theme/applyTheme";
 import { settingsThemeToMode } from "../theme/useAppTheme";
@@ -27,13 +28,13 @@ type SettingsPanelProps = {
 };
 
 function backendLabel(backend: InferenceBackend) {
-  return backend === "mlx" ? "MLX" : "llama.cpp";
+  return backend === "mlx" ? "MLX 实验加速" : "内置 Metal 本地推理";
 }
 
 const MIRROR_LABELS: Record<AppSettings["downloadMirror"], string> = {
-  auto: "自动（失败时切换备用源）",
-  modelscope: "仅 ModelScope（国内镜像）",
-  huggingface: "仅 HuggingFace（海外源）",
+  auto: "自动切换",
+  modelscope: "ModelScope",
+  huggingface: "HuggingFace",
 };
 
 function formatMirrorName(mirror: MirrorId | null | undefined) {
@@ -58,28 +59,32 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
   const [mlxInstallError, setMlxInstallError] = useState("");
   const [mlxDownloadError, setMlxDownloadError] = useState("");
   const [mlxDownloadPercent, setMlxDownloadPercent] = useState<number | null>(null);
-  const [savedBackend, setSavedBackend] = useState<AppSettings["inferenceBackend"]>("mlx");
+  const [savedBackend, setSavedBackend] = useState<AppSettings["inferenceBackend"]>("llama");
 
-  const isMlx = (settings.inferenceBackend ?? "mlx") === "mlx";
-  const backendDirty = (settings.inferenceBackend ?? "mlx") !== savedBackend;
+  const isMlx = (settings.inferenceBackend ?? "llama") === "mlx";
+  const backendDirty = (settings.inferenceBackend ?? "llama") !== savedBackend;
 
   useEffect(() => {
     void loadSettings().then((loaded) => {
       setSettings(loaded);
-      setSavedBackend(loaded.inferenceBackend ?? "mlx");
+      setSavedBackend(loaded.inferenceBackend ?? "llama");
     });
     void invoke<DeviceInfo>("get_device_info").then(setDeviceInfo);
 
     let unlisten: (() => void) | undefined;
-    void listen<{ file: string; percent?: number; status?: string }>("model-download-progress", (event) => {
+    void listen<{ file: string; percent?: number; status?: string; downloaded?: number }>(
+      "model-download-progress",
+      (event) => {
       if (event.payload.file !== "mlx") {
         return;
       }
       if (event.payload.status === "done") {
         setMlxDownloadPercent(100);
         setDownloadingMlx(false);
-      } else if (typeof event.payload.percent === "number") {
-        setMlxDownloadPercent(event.payload.percent);
+      } else {
+        setMlxDownloadPercent((prev) =>
+          resolveMlxPercent(prev ?? 0, event.payload.downloaded ?? 0),
+        );
       }
     }).then((cleanup) => {
       unlisten = cleanup;
@@ -94,31 +99,15 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
     event.preventDefault();
     const previousBackend = savedBackend;
     await saveSettings(settings);
-    setSavedBackend(settings.inferenceBackend ?? "mlx");
-    if (previousBackend !== (settings.inferenceBackend ?? "mlx")) {
+    setSavedBackend(settings.inferenceBackend ?? "llama");
+    if (previousBackend !== (settings.inferenceBackend ?? "llama")) {
       setSavedMessage(
-        `推理后端已切换为 ${backendLabel(settings.inferenceBackend ?? "mlx")}。首次识图前请确认对应模型权重已下载。`,
+        `已切换为 ${backendLabel(settings.inferenceBackend ?? "llama")}。`,
       );
     } else {
       setSavedMessage("设置已保存");
     }
     onSaved?.();
-  }
-
-  async function pickDirectory(kind: "gguf" | "mlx") {
-    const { open } = await import("@tauri-apps/plugin-dialog");
-    const selected = await open({
-      directory: true,
-      multiple: false,
-      title: kind === "mlx" ? "选择 MLX 模型目录" : "选择 GGUF 模型目录",
-    });
-    if (typeof selected === "string") {
-      setSettings((current) =>
-        kind === "mlx"
-          ? { ...current, mlxModelPath: selected }
-          : { ...current, modelPath: selected },
-      );
-    }
   }
 
   async function runBenchmark() {
@@ -136,7 +125,7 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
         void saveSettings(next);
         return next;
       });
-      setSavedMessage("测速完成，推荐镜像已保存");
+      setSavedMessage("测速完成");
     } catch (error) {
       setBenchmarkError(String(error));
     } finally {
@@ -174,11 +163,9 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
   }
 
   return (
-    <form className="settings-card settings-form" aria-label="设置" onSubmit={(event) => void handleSave(event)}>
+    <form className="settings-form settings-form--stack" aria-label="设置" onSubmit={(event) => void handleSave(event)}>
       {deviceInfo ? (
-        <p className="device-info">
-          {deviceInfo.message}（{deviceInfo.platform} · {deviceInfo.memoryGb.toFixed(1)} GB）
-        </p>
+        <p className="callout callout--info settings-device-info">{deviceInfo.message}（{deviceInfo.platform} · {deviceInfo.memoryGb.toFixed(1)} GB）</p>
       ) : null}
 
       <section className="settings-section">
@@ -210,24 +197,24 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
 
       {deviceInfo?.isAppleSilicon ? (
         <section className="settings-section">
-          <h2 className="settings-section__title">推理引擎</h2>
+          <h2 className="settings-section__title">本地推理</h2>
           <label className="settings-field">
-            <span>后端</span>
+            <span>推理模式</span>
             <select
-              value={settings.inferenceBackend ?? "mlx"}
+              value={settings.inferenceBackend ?? "llama"}
               onChange={(event) => {
                 const inferenceBackend = event.target.value as AppSettings["inferenceBackend"];
                 setSettings((current) => ({ ...current, inferenceBackend }));
               }}
             >
-              <option value="mlx">MLX（Apple Silicon 推荐）</option>
-              <option value="llama">llama.cpp（GGUF）</option>
+              <option value="llama">内置 Metal</option>
+              <option value="mlx">MLX 实验加速</option>
             </select>
             <span className="field-hint">
               {isMlx
-                ? "MLX 使用原生 Unified Memory，识图通常更快。需先安装引擎并下载 MLX 权重（约 2 GB）。"
-                : "使用 GGUF 主模型 + mmproj，适合已有 6 GB 模型文件或需跨平台时。"}
-              {backendDirty ? " 修改后端后请点击页面底部「保存设置」才会生效。" : ""}
+                ? "需额外安装。"
+                : "默认。"}
+              {backendDirty ? " 改完后需点底部「保存设置」。" : ""}
             </span>
           </label>
 
@@ -244,27 +231,8 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
                 />
               </label>
 
-              <label className="settings-field">
-                <span>本地 MLX 目录（可选）</span>
-                <div className="path-picker">
-                  <input
-                    value={settings.mlxModelPath ?? ""}
-                    placeholder="留空则从 HuggingFace 下载到缓存"
-                    onChange={(event) =>
-                      setSettings((current) => ({
-                        ...current,
-                        mlxModelPath: event.target.value || null,
-                      }))
-                    }
-                  />
-                  <button type="button" onClick={() => void pickDirectory("mlx")}>
-                    选择目录
-                  </button>
-                </div>
-              </label>
-
               <div className="settings-field">
-                <span>MLX 环境</span>
+                <span>MLX 实验环境</span>
                 <div className="settings-actions-row">
                   <button
                     type="button"
@@ -272,7 +240,7 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
                     disabled={installingMlx}
                     onClick={() => void installMlxRuntime()}
                   >
-                    {installingMlx ? "安装中…" : "1. 安装推理引擎"}
+                    {installingMlx ? "安装中…" : "1. 安装实验加速包"}
                   </button>
                   <button
                     type="button"
@@ -287,7 +255,6 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
                 </div>
                 {mlxInstallError ? <p className="onboarding-error">{mlxInstallError}</p> : null}
                 {mlxDownloadError ? <p className="onboarding-error">{mlxDownloadError}</p> : null}
-                <span className="field-hint">请先安装引擎，再下载权重。下载完成后识图时只需载入内存（约 30–60 秒）。</span>
               </div>
             </>
           ) : null}
@@ -310,11 +277,9 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
             <option value={5}>5</option>
             <option value={15}>15</option>
             <option value={30}>30</option>
-            <option value={-1}>永不卸载（推荐）</option>
+            <option value={-1}>永不卸载</option>
           </select>
-          <span className="field-hint">
-            卸载后下次提问需重新载入模型。内存紧张时可改为 15 或 30 分钟。
-          </span>
+          <span className="field-hint">时间越长，下次响应越快。</span>
         </label>
 
         <label className="settings-field settings-field--checkbox">
@@ -328,13 +293,13 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
               }))
             }
           />
-          <span>打开应用时后台预热模型</span>
+          <span>启动时预加载模型</span>
           <span className="field-hint">
             {deviceInfo && deviceInfo.memoryGb < 16
-              ? "检测到内存低于 16 GB，建议保持关闭以节省内存。首次提问会载入模型（约 30–90 秒）。"
+              ? "内存不足 16 GB，建议关闭。"
               : isMlx
-                ? "开启后启动时后台载入 MLX 模型，首次提问更快，但打开应用会变慢并占用约 2–3 GB 内存。"
-                : "开启后启动时后台载入 GGUF 模型，首次提问更快，但打开应用会变慢并占用约 6 GB 内存。"}
+                ? "首次提问更快，约占 2–3 GB 内存。"
+                : "首次提问更快，约占 2 GB 内存。"}
           </span>
         </label>
       </section>
@@ -362,9 +327,7 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
                 </option>
               ))}
             </select>
-            <span className="field-hint">
-              用于「模型文件」页的 GGUF 下载。测速约下载 4MB 样本，需联网。
-            </span>
+            <span className="field-hint">测速需联网。</span>
             <div className="mirror-benchmark">
               <button
                 type="button"
@@ -402,25 +365,6 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
             ) : null}
             {benchmarkError ? <p className="onboarding-error">{benchmarkError}</p> : null}
           </div>
-
-          <label className="settings-field">
-            <span>手动 GGUF 路径（可选）</span>
-            <div className="path-picker">
-              <input
-                value={settings.modelPath ?? ""}
-                placeholder="包含主模型与 mmproj 的目录，或主模型 .gguf 文件"
-                onChange={(event) =>
-                  setSettings((current) => ({
-                    ...current,
-                    modelPath: event.target.value || null,
-                  }))
-                }
-              />
-              <button type="button" onClick={() => void pickDirectory("gguf")}>
-                选择目录
-              </button>
-            </div>
-          </label>
         </section>
       ) : null}
 

@@ -11,11 +11,22 @@ export type ResizeDirection =
   | "SouthWest"
   | "West";
 
-export function startWindowDrag(event: ReactPointerEvent<HTMLElement>) {
-  if (event.button !== 0) {
+type StartWindowDragOptions = {
+  allowInteractiveTarget?: boolean;
+};
+
+export function startWindowDrag(
+  event: ReactPointerEvent<HTMLElement>,
+  options: StartWindowDragOptions = {},
+) {
+  if (event.button !== 0 && event.buttons !== 1) {
     return;
   }
-  if ((event.target as HTMLElement).closest("button, a, input, textarea, select, label")) {
+  const target = event.target as Element;
+  if (
+    !options.allowInteractiveTarget &&
+    target.closest("button, a, input, textarea, select, label")
+  ) {
     return;
   }
   event.preventDefault();
@@ -59,11 +70,13 @@ export function PanelChrome({ children }: PanelChromeProps) {
     <div className="panel-chrome">
       <div
         className="panel-chrome__drag-rail panel-chrome__drag-rail--left"
+        data-tauri-drag-region
         aria-hidden="true"
         onPointerDown={startWindowDrag}
       />
       <div
         className="panel-chrome__drag-rail panel-chrome__drag-rail--right"
+        data-tauri-drag-region
         aria-hidden="true"
         onPointerDown={startWindowDrag}
       />

@@ -1,11 +1,24 @@
 import { invoke } from "@tauri-apps/api/core";
-import { readClipboardImage } from "./imageIntake";
+import type { AcceptedImage } from "./imageInput";
 
-export async function captureScreenRegion() {
-  await invoke("capture_screen_region");
-  const image = await readClipboardImage();
-  if (!image) {
-    throw new Error("未获取到截图。请在「系统设置 → 隐私与安全性 → 屏幕录制」中允许 MiniVu。");
+type CapturedImagePayload = {
+  name: string;
+  dataUrl: string;
+};
+
+export async function captureScreenRegion(): Promise<AcceptedImage> {
+  try {
+    const image = await invoke<CapturedImagePayload>("capture_screen_region");
+    return { name: image.name, dataUrl: image.dataUrl };
+  } catch (error) {
+    const message = String(error);
+    if (message.includes("屏幕录制")) {
+      try {
+        await invoke("open_screen_recording_settings");
+      } catch {
+        /* 打开系统设置失败时不阻塞原错误 */
+      }
+    }
+    throw error;
   }
-  return { ...image, name: "screenshot.png" };
 }

@@ -1,6 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { modelClient } from "../model/modelClient";
+import type { ModelStatusResponse } from "../model/types";
+import { resolveGgufPercent, resolveMlxPercent } from "../shared/downloadProgress";
 import { loadSettings, saveSettings } from "../settings/settingsStore";
 import {
   PHASE_ORDER,
@@ -19,32 +22,24 @@ type SetupResult = {
   shortcut: string;
 };
 
-type ModelStatus = {
-  modelReady: boolean;
-  modelDownloaded: boolean;
-  mmprojDownloaded: boolean;
-  llamaServerAvailable: boolean;
-  inferenceBackend?: "llama" | "mlx";
-  activeBackend?: string;
-  mlxRuntimeAvailable?: boolean;
-  mlxModelReady?: boolean;
-};
+type ModelStatus = ModelStatusResponse;
 
 type EnvironmentSetupPanelProps = {
   showWelcome?: boolean;
   onComplete?: () => void;
+  onSetupSucceeded?: () => void;
 };
 
 const PHASE_LABELS: Record<string, string> = {
-  device: "检测设备",
-  runtime: "安装推理引擎",
-  model: "下载主模型",
-  mmproj: "下载视觉投影器",
-  shortcut: "配置快捷键",
-  done: "完成配置",
+  device: "设备检测",
+  runtime: "内置 Metal",
+  model: "主模型",
+  mmproj: "视觉投影",
+  shortcut: "快捷键",
+  done: "完成",
 };
 
-export function EnvironmentSetupPanel({ showWelcome = false, onComplete }: EnvironmentSetupPanelProps) {
+export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetupSucceeded }: EnvironmentSetupPanelProps) {
   const [phase, setPhase] = useState<"idle" | "running" | "success" | "error">("idle");
   const [installError, setInstallError] = useState("");
   const [progress, setProgress] = useState<Record<string, SetupProgress>>(createInitialProgress);
@@ -59,7 +54,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete }: Envir
   );
 
   async function refreshStatus(markReady = false) {
-    const next = await invoke<ModelStatus>("get_model_status");
+    const next = await modelClient.getModelStatus();
     setStatus(next);
     if (markReady && next.modelReady) {
       const settings = await loadSettings();
@@ -79,6 +74,30 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete }: Envir
     }, 100);
     return () => window.clearTimeout(timer);
   }, []);
+
+  // 配置成功即解锁侧栏并持久化 onboardingComplete，无需用户先点「进入首页」。
+  const successHandledRef = useRef(false);
+  useEffect(() => {
+    if (phase !== "success") {
+      successHandledRef.current = false;
+      return;
+    }
+    if (successHandledRef.current) {
+      return;
+    }
+    successHandledRef.current = true;
+    void (async () => {
+      try {
+        const latest = await loadSettings();
+        if (!latest.onboardingComplete) {
+          await saveSettings({ ...latest, onboardingComplete: true });
+        }
+      } catch {
+        /* 持久化失败不阻塞解锁 */
+      }
+      onSetupSucceeded?.();
+    })();
+  }, [phase, onSetupSucceeded]);
 
   useEffect(() => {
     const unlisteners: Array<() => void> = [];
@@ -118,6 +137,39 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete }: Envir
     }>("model-download-progress", (event) => {
       const { file, status: downloadStatus, message, downloaded, total, source, speedMbps } =
         event.payload;
+
+      if (file === "mlx") {
+        const sourceHint = source ? `（${source}）` : "";
+        const speed = speedMbps && speedMbps > 0 ? speedMbps : null;
+        if (speed) {
+          setActiveSpeedMbps(speed);
+        }
+        if (downloadStatus === "done") {
+          setProgress((current) =>
+            mergeProgress(current, {
+              phase: "model",
+              status: "done",
+              message: message ?? "下载完成",
+              percent: 100,
+              speedMbps: null,
+            }),
+          );
+          setActiveSpeedMbps(null);
+          return;
+        }
+        setProgress((current) => {
+          const resolvedPercent = resolveMlxPercent(current.model?.percent ?? 0, downloaded);
+          return mergeProgress(current, {
+            phase: "model",
+            status: "running",
+            message: `正在下载 MLX 模型 ${resolvedPercent}%${sourceHint}`,
+            percent: resolvedPercent,
+            speedMbps: speed,
+          });
+        });
+        return;
+      }
+
       const phaseKey = file === "mmproj" ? "mmproj" : "model";
       const label = file === "mmproj" ? "视觉投影器" : "主模型";
 
@@ -171,10 +223,12 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete }: Envir
 
       setDownloadBytes((current) => mergeDownloadBytes(current, phaseKey, downloaded, total));
       setProgress((current) => {
-        const expectedBytes = phaseKey === "mmproj" ? 1_095_113_184 : 5_026_714_304;
-        const basis = total && total > 0 ? total : expectedBytes;
-        const fromBytes = basis > 0 ? Math.round((downloaded / basis) * 100) : 0;
-        const resolvedPercent = Math.max(current[phaseKey]?.percent ?? 0, fromBytes);
+        const resolvedPercent = resolveGgufPercent(
+          current[phaseKey]?.percent ?? 0,
+          downloaded,
+          total,
+          phaseKey,
+        );
         return mergeProgress(current, {
           phase: phaseKey,
           status: "running",
@@ -222,10 +276,11 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete }: Envir
   }
 
   async function finishAndContinue(openPanel: boolean) {
-    const next = await invoke<ModelStatus>("get_model_status");
+    const env = await modelClient.getEnvironmentStatus();
+    const next = await modelClient.getModelStatus();
     setStatus(next);
-    if (!next.modelReady) {
-      setInstallError("模型尚未就绪，请先完成环境配置中的下载步骤。");
+    if (!env.modelReady) {
+      setInstallError("模型还在下载。");
       setPhase("error");
       return;
     }
@@ -259,7 +314,15 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete }: Envir
             return (
               <li key={step} className={`onboarding-progress-item is-${itemStatus}`}>
                 <span className="onboarding-progress-item__icon" aria-hidden="true">
-                  {itemStatus === "done" ? "✓" : itemStatus === "running" || itemStatus === "switching" ? "…" : "○"}
+                  {itemStatus === "done" ? (
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  ) : itemStatus === "running" || itemStatus === "switching" ? (
+                    <span className="onboarding-progress-item__spinner" />
+                  ) : (
+                    <span className="onboarding-progress-item__pending" />
+                  )}
                 </span>
                 <div>
                   <strong>{label}</strong>
@@ -285,15 +348,15 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete }: Envir
 
   const statusItems = [
     {
-      label: "推理引擎",
+      label: status?.inferenceBackend === "mlx" ? "MLX 实验包" : "内置 Metal",
       value:
         status?.inferenceBackend === "mlx"
           ? status?.mlxRuntimeAvailable
-            ? "MLX 已安装"
-            : "MLX 未安装"
+            ? "已安装"
+            : "未安装"
           : status?.llamaServerAvailable
-            ? "llama.cpp 已安装"
-            : "未安装",
+            ? "可用"
+            : "未完成",
       ok:
         status?.inferenceBackend === "mlx"
           ? status?.mlxRuntimeAvailable
@@ -303,7 +366,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete }: Envir
       ? [
           {
             label: "MLX 模型",
-            value: status?.mlxModelReady ? "已就绪" : "未下载",
+            value: status?.mlxModelReady ? "已下载" : "未下载",
             ok: status?.mlxModelReady,
           },
         ]
@@ -319,20 +382,14 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete }: Envir
             ok: status?.mmprojDownloaded,
           },
         ]),
-    { label: "整体就绪", value: status?.modelReady ? "可用" : "未完成", ok: status?.modelReady },
+    { label: "整体状态", value: status?.modelReady ? "可用" : "未完成", ok: status?.modelReady },
   ];
 
   return (
     <section className="surface setup-panel">
-      {showWelcome && phase === "idle" ? (
-        <div className="callout callout--info">
-          <p>首次使用会自动安装推理引擎、下载视觉模型并配置快捷键，全程在本机完成。</p>
-        </div>
-      ) : null}
-
       {phase === "idle" || phase === "error" ? (
         <>
-          <ul className="setup-panel__metrics" aria-label="当前环境状态">
+          <ul className="setup-panel__metrics" aria-label="当前状态">
             {statusItems.map((item) => (
               <li key={item.label}>
                 <span>{item.label}</span>
@@ -340,9 +397,6 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete }: Envir
               </li>
             ))}
           </ul>
-          <p className="setup-panel__lead">
-            一键完成推理引擎安装、模型下载与快捷键配置。模型文件详情可在「模型文件」中查看。
-          </p>
         </>
       ) : null}
 
@@ -350,10 +404,10 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete }: Envir
 
       {phase === "success" ? (
         <div className="setup-panel__success">
-          <p className="setup-panel__success-lead">环境已就绪，可以开始识图问答。</p>
+          <p className="setup-panel__success-lead">配置完成</p>
           <ul className="onboarding-checklist">
             <li className={result?.runtimeReady ? "is-done" : ""}>
-              推理引擎 {result?.runtimeReady ? "已安装" : "未完成"}
+              内置 Metal {result?.runtimeReady ? "已安装" : "未完成"}
             </li>
             <li className={result?.modelReady ? "is-done" : ""}>
               视觉模型 {result?.modelReady ? "已下载" : "未完成"}
@@ -368,11 +422,11 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete }: Envir
       <div className="setup-panel__actions">
         {phase === "idle" || phase === "error" ? (
           <button type="button" className="settings-btn settings-btn--primary" onClick={() => void runSetup()}>
-            一键安装并配置
+            下载模型并完成配置
           </button>
         ) : null}
 
-        {phase === "running" ? <p className="setup-panel__running-hint">正在配置，请保持窗口打开…</p> : null}
+        {phase === "running" ? <p className="setup-panel__running-hint">下载中…</p> : null}
 
         {phase === "error" ? (
           <button type="button" className="settings-btn settings-btn--secondary" onClick={() => setPhase("idle")}>
@@ -383,7 +437,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete }: Envir
         {phase === "success" && showWelcome ? (
           <>
             <button type="button" className="settings-btn settings-btn--primary" onClick={() => void finishAndContinue(true)}>
-              打开识图面板
+              打开面板
             </button>
             <button type="button" className="settings-btn settings-btn--secondary" onClick={() => void finishAndContinue(false)}>
               进入首页
