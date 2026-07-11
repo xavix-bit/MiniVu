@@ -1,15 +1,15 @@
 use crate::environment::{evaluate_environment, is_environment_ready, EnvironmentStatus};
 use crate::inference::{
-    run_ask_image, sidecar_health_ok, wait_for_sidecar_ready, ActiveInferenceContext,
-    AskImageRequest, GenerationFlag, HistoryMessage,
+    run_ask_image, ActiveInferenceContext, AskImageRequest, GenerationFlag, HistoryMessage,
 };
 use crate::inference_backend::{backend_label, mlx_runtime_ready, resolve_active_backend};
 use crate::model_cache::ModelCache;
 use crate::runtime_installer::resolve_llama_server;
 use crate::settings::{load_settings, GgufModelVariant, InferenceBackend};
+use crate::sidecar::lifecycle::{warmup_model_inner, WarmupTrigger};
 use crate::sidecar::{init_sidecar_state as sidecar_init, lock_sidecar, SidecarState};
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use tauri::AppHandle;
 
 pub use crate::environment::models_ready_for_backend;
@@ -122,29 +122,7 @@ pub async fn warmup_model(
     app: AppHandle,
     sidecar: tauri::State<'_, SidecarState>,
 ) -> Result<(), String> {
-    let ctx = ActiveInferenceContext::load(&app)?;
-    if !ctx.models_ready {
-        return Ok(());
-    }
-
-    let port = {
-        let mut guard = lock_sidecar(sidecar.inner());
-        guard.touch();
-        guard.ensure_started(&app)?;
-        guard.port
-    };
-
-    if lock_sidecar(sidecar.inner()).is_service_ready()
-        && sidecar_health_ok(port, ctx.backend).await
-    {
-        return Ok(());
-    }
-
-    let cancel = AtomicBool::new(false);
-    let sidecar_state = sidecar.inner().clone();
-    wait_for_sidecar_ready(&app, port, ctx.backend, &cancel, &sidecar_state).await?;
-    lock_sidecar(sidecar.inner()).set_service_ready(true);
-    Ok(())
+    warmup_model_inner(&app, sidecar.inner(), WarmupTrigger::UserImage).await
 }
 
 #[tauri::command]
