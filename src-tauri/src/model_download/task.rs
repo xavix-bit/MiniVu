@@ -51,6 +51,7 @@ enum DownloadTaskPhase {
 struct DownloadTaskInner {
     next_task_id: u64,
     active: Option<ActiveTask>,
+    latest_terminal: Option<DownloadTaskSnapshot>,
     last_completed_task_id: Option<u64>,
 }
 
@@ -110,12 +111,12 @@ impl DownloadTaskState {
     }
 
     pub fn snapshot(&self) -> Option<DownloadTaskSnapshot> {
-        self.inner
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
+        let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        inner
             .active
             .as_ref()
             .map(|active| active.snapshot.clone())
+            .or_else(|| inner.latest_terminal.clone())
     }
 
     pub fn cancel(&self, task_id: u64) -> Result<(), String> {
@@ -153,6 +154,13 @@ impl DownloadTaskState {
     fn clear(&self, task_id: u64) {
         let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
         if inner.active.as_ref().map(|active| active.snapshot.task_id) == Some(task_id) {
+            let terminal_snapshot = inner.active.as_ref().and_then(|active| {
+                matches!(
+                    active.snapshot.status.as_str(),
+                    "done" | "failed" | "canceled"
+                )
+                .then(|| active.snapshot.clone())
+            });
             if inner
                 .active
                 .as_ref()
@@ -162,6 +170,9 @@ impl DownloadTaskState {
                 inner.last_completed_task_id = Some(task_id);
             }
             inner.active = None;
+            if terminal_snapshot.is_some() {
+                inner.latest_terminal = terminal_snapshot;
+            }
         }
     }
 }
@@ -360,6 +371,38 @@ mod tests {
 
         let second = state.begin(GgufModelVariant::Q5KM).unwrap();
         assert!(second.task_id() > first_id);
+    }
+
+    #[test]
+    fn terminal_snapshots_remain_observable_after_guard_cleanup() {
+        for status in ["done", "failed", "canceled"] {
+            let state = DownloadTaskState::default();
+            let task = state.begin(GgufModelVariant::Q4KM).unwrap();
+            let task_id = task.task_id();
+            task.update(status, Some("model"), 42, Some(100), Some("local"));
+            drop(task);
+
+            let snapshot = state.snapshot().expect("terminal snapshot should remain");
+            assert_eq!(snapshot.task_id, task_id);
+            assert_eq!(snapshot.status, status);
+            assert_eq!(snapshot.downloaded, 42);
+        }
+    }
+
+    #[test]
+    fn active_task_supersedes_terminal_snapshot_without_stale_cancellation() {
+        let state = DownloadTaskState::default();
+        let old_task = state.begin(GgufModelVariant::Q4KM).unwrap();
+        let old_task_id = old_task.task_id();
+        old_task.update("failed", Some("model"), 42, Some(100), Some("local"));
+        drop(old_task);
+
+        let active = state.begin(GgufModelVariant::Q5KM).unwrap();
+        assert_eq!(state.snapshot().unwrap().task_id, active.task_id());
+
+        let error = state.cancel(old_task_id).unwrap_err();
+        assert!(error.contains("失效"));
+        assert!(!active.is_cancelled());
     }
 
     #[test]
