@@ -183,7 +183,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
   const [selectedVariant, setSelectedVariant] = useState<GgufModelVariant>("q4_k_m");
   const [activeTask, setActiveTaskState] = useState<DownloadTaskSnapshot | null>(null);
   const [pendingDownload, setPendingDownloadState] = useState<PendingInstall | null>(null);
-  const [operation, setOperation] = useState<"idle" | "installing" | "canceling" | "removing">("idle");
+  const [operation, setOperation] = useState<"idle" | "installing" | "switching" | "canceling" | "removing">("idle");
   const [message, setMessage] = useState("");
   const [cleanupWarning, setCleanupWarning] = useState("");
   const [removeConfirm, setRemoveConfirm] = useState(false);
@@ -271,7 +271,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
       install.taskId = task.taskId;
       install.lastFile = task.file === "mmproj" ? "mmproj" : "model";
       installTasksRef.current.set(task.taskId, install);
-      releaseOperation(install.guard);
+      if (!disposedRef.current) setOperation("idle");
     }
   }
 
@@ -303,8 +303,13 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
     if (task) {
       const install = installTasksRef.current.get(task.taskId);
       if (install) {
-        install.terminalHandled = true;
         install.lastFile = task.file === "mmproj" ? "mmproj" : install.lastFile;
+        if (task.status === "canceled" || task.status === "failed") {
+          install.terminalHandled = true;
+          releaseOperation(install.guard);
+        } else if (task.status === "done" && task.file === "mmproj") {
+          setOperation("switching");
+        }
       }
       if (task.status === "canceled" || task.status === "failed") {
         setFileProgress((current) => progressFromSnapshot(current, task));
@@ -434,13 +439,18 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
       });
       if (payload.status === "failed" || payload.status === "canceled") {
         markTerminalTask(payload.taskId, payload.file);
-        if (installOperation) installOperation.terminalHandled = true;
+        if (installOperation) {
+          installOperation.terminalHandled = true;
+          releaseOperation(installOperation.guard);
+        }
         if (operationGuardRef.current?.kind === "canceling") {
           releaseOperation(operationGuardRef.current);
         }
         void refresh().catch((error) => {
           if (!disposed) setMessage(String(error));
         });
+      } else if (payload.status === "done" && payload.file === "mmproj" && installOperation) {
+        setOperation("switching");
       }
     }).then((cleanup) => {
       if (disposed) cleanup();
@@ -462,9 +472,11 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
   }, [pendingDownload, activeTask?.taskId]);
 
   async function runPrimaryAction() {
-    if (!status || operationGuardRef.current) return;
+    if (!status) return;
+    const heldGuard = operationGuardRef.current;
     const isMlx = status.inferenceBackend === "mlx";
     if (isMlx) {
+      if (heldGuard) return;
       if (!status.mlxRuntimeAvailable) {
         onOpenSetup?.();
         return;
@@ -492,19 +504,28 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
 
     const action = resolveModelPrimaryAction(selectedVariant, status.ggufVariants, activeTask);
     if (action.kind === "cancel" && activeTask) {
-      const guard = beginOperation("canceling");
+      const claimedInstall = installTasksRef.current.get(activeTask.taskId);
+      const guard = claimedInstall && heldGuard && claimedInstall.guard.id === heldGuard.id
+        ? heldGuard
+        : beginOperation("canceling");
       if (!guard) return;
       const taskId = activeTask.taskId;
       setMessage("");
+      if (!disposedRef.current) setOperation("canceling");
       try {
         await modelClient.cancelModelDownload(taskId);
         await refreshDownloadTask();
       } catch (error) {
         if (!disposedRef.current) setMessage(String(error));
-        releaseOperation(guard);
+        if (guard.kind === "installing") {
+          if (!disposedRef.current) setOperation("idle");
+        } else {
+          releaseOperation(guard);
+        }
       }
       return;
     }
+    if (heldGuard) return;
     if (!status.llamaServerAvailable) {
       onOpenSetup?.();
       return;
@@ -613,6 +634,8 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
   const needsRuntimeSetup = Boolean(status && !runtimeReady && !hasDownloadAction);
   const primaryLabel = operation === "canceling"
     ? "正在取消…"
+    : operation === "switching"
+      ? "正在切换…"
     : operation === "installing"
       ? isMlx ? "下载中…" : "处理中…"
       : needsRuntimeSetup

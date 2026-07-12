@@ -111,6 +111,166 @@ describe("ModelPanel", () => {
     expect(await screen.findAllByText("下载完成")).toHaveLength(2);
   });
 
+  it("keeps the install locked while switching after mmproj download completes", async () => {
+    const installResult = deferred<{
+      activeVariant: "q5_k_m";
+      modelStorageBytes: number;
+      cleanupWarning: null;
+      inventory: [];
+    }>();
+    let installStarted = false;
+    let downloadDone = false;
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_model_status") return structuredClone(status);
+      if (command === "get_model_download_status") {
+        if (!installStarted) return null;
+        return {
+          ...activeDownload,
+          taskId: 42,
+          file: "mmproj",
+          status: downloadDone ? "done" : "running",
+        };
+      }
+      if (command === "install_gguf_model") {
+        installStarted = true;
+        return installResult.promise;
+      }
+      return undefined;
+    });
+    render(<ModelPanel />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /清晰/ }));
+    fireEvent.click(screen.getByRole("button", { name: "下载并切换" }));
+    await screen.findByRole("button", { name: "取消下载" }, { timeout: 1_200 });
+
+    downloadDone = true;
+
+    expect(await screen.findByRole("button", { name: "正在切换…" }, { timeout: 1_200 })).toBeDisabled();
+    expect(invokeMock.mock.calls.filter(([command]) => command === "install_gguf_model")).toHaveLength(1);
+  });
+
+  it("still cancels a claimed install task while its transaction guard is held", async () => {
+    const installResult = deferred<never>();
+    let installStarted = false;
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_model_status") return structuredClone(status);
+      if (command === "get_model_download_status") {
+        return installStarted ? { ...activeDownload, taskId: 42 } : null;
+      }
+      if (command === "install_gguf_model") {
+        installStarted = true;
+        return installResult.promise;
+      }
+      return undefined;
+    });
+    render(<ModelPanel />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /清晰/ }));
+    fireEvent.click(screen.getByRole("button", { name: "下载并切换" }));
+    fireEvent.click(await screen.findByRole("button", { name: "取消下载" }, { timeout: 1_200 }));
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("cancel_model_download", { taskId: 42 }));
+  });
+
+  it("shows a health failure after download completion and refreshes inventory", async () => {
+    const installResult = deferred<never>();
+    let installStarted = false;
+    let downloadDone = false;
+    let statusCalls = 0;
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_model_status") {
+        statusCalls += 1;
+        return structuredClone(status);
+      }
+      if (command === "get_model_download_status") {
+        if (!installStarted) return null;
+        return {
+          ...activeDownload,
+          taskId: 42,
+          file: "mmproj",
+          status: downloadDone ? "done" : "running",
+        };
+      }
+      if (command === "install_gguf_model") {
+        installStarted = true;
+        return installResult.promise;
+      }
+      return undefined;
+    });
+    render(<ModelPanel />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /清晰/ }));
+    fireEvent.click(screen.getByRole("button", { name: "下载并切换" }));
+    await screen.findByRole("button", { name: "取消下载" }, { timeout: 1_200 });
+    downloadDone = true;
+    await screen.findByRole("button", { name: "正在切换…" }, { timeout: 1_200 });
+    await waitFor(() => expect(statusCalls).toBeGreaterThanOrEqual(2));
+    const callsBeforeFailure = statusCalls;
+
+    installResult.reject(new Error("sidecar health check failed"));
+
+    expect(await screen.findByText("Error: sidecar health check failed")).toBeInTheDocument();
+    await waitFor(() => expect(statusCalls).toBeGreaterThan(callsBeforeFailure));
+  });
+
+  it("unlocks only after the completed install promise resolves", async () => {
+    const installResult = deferred<{
+      activeVariant: "q5_k_m";
+      modelStorageBytes: number;
+      cleanupWarning: null;
+      inventory: [];
+    }>();
+    let installStarted = false;
+    let downloadDone = false;
+    let installSucceeded = false;
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_model_status") {
+        if (!installSucceeded) return structuredClone(status);
+        return {
+          ...structuredClone(status),
+          ggufModelVariant: "q5_k_m",
+          ggufVariants: status.ggufVariants.map((item) => ({
+            ...item,
+            installed: item.variant === "q5_k_m",
+            active: item.variant === "q5_k_m",
+          })),
+        };
+      }
+      if (command === "get_model_download_status") {
+        if (!installStarted) return null;
+        return {
+          ...activeDownload,
+          taskId: 42,
+          file: "mmproj",
+          status: downloadDone ? "done" : "running",
+        };
+      }
+      if (command === "install_gguf_model") {
+        installStarted = true;
+        return installResult.promise;
+      }
+      return undefined;
+    });
+    render(<ModelPanel />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /清晰/ }));
+    fireEvent.click(screen.getByRole("button", { name: "下载并切换" }));
+    await screen.findByRole("button", { name: "取消下载" }, { timeout: 1_200 });
+    downloadDone = true;
+    expect(await screen.findByRole("button", { name: "正在切换…" }, { timeout: 1_200 })).toBeDisabled();
+
+    installSucceeded = true;
+    installResult.resolve({
+      activeVariant: "q5_k_m",
+      modelStorageBytes: 2_000,
+      cleanupWarning: null,
+      inventory: [],
+    });
+
+    expect(await screen.findByRole("button", { name: "当前使用" })).toBeDisabled();
+    expect(screen.getByText("模型已就绪")).toBeInTheDocument();
+  });
+
   it("cancels the exact active task id", async () => {
     invokeMock.mockImplementation(async (command) => {
       if (command === "get_model_status") return structuredClone(status);

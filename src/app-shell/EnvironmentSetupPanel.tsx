@@ -55,18 +55,21 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
   );
 
   async function refreshStatus(markReady = false) {
-    const next = await modelClient.getModelStatus();
+    const [next, environment] = await Promise.all([
+      modelClient.getModelStatus(),
+      modelClient.getEnvironmentStatus(),
+    ]);
     setStatus(next);
-    if (markReady && next.modelReady) {
+    if (markReady && environment.environmentReady) {
       const settings = await loadSettings();
       setPhase("success");
       setResult({
-        runtimeReady:
-          next.inferenceBackend === "mlx" ? !!next.mlxRuntimeAvailable : next.llamaServerAvailable,
-        modelReady: next.modelReady,
+        runtimeReady: environment.runtimeReady,
+        modelReady: environment.modelReady,
         shortcut: settings.shortcut,
       });
     }
+    return environment;
   }
 
   useEffect(() => {
@@ -267,8 +270,12 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
           percent: 100,
         }),
       );
-      setPhase("success");
-      await refreshStatus(true);
+      const environment = await refreshStatus(true);
+      if (!environment.environmentReady) {
+        setInstallError("运行环境或模型尚未就绪。");
+        setPhase("error");
+        return;
+      }
       if (!showWelcome) {
         onComplete?.();
       }
@@ -282,8 +289,8 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
     const env = await modelClient.getEnvironmentStatus();
     const next = await modelClient.getModelStatus();
     setStatus(next);
-    if (!env.modelReady) {
-      setInstallError("模型还在下载。");
+    if (!env.environmentReady) {
+      setInstallError("运行环境或模型尚未就绪。");
       setPhase("error");
       return;
     }
