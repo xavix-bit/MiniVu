@@ -46,6 +46,11 @@ const activeDownload = {
   source: "modelscope",
 };
 
+const oldTerminalDownload = {
+  ...activeDownload,
+  status: "done",
+};
+
 beforeEach(() => {
   invokeMock.mockImplementation(async (command) => {
     if (command === "get_model_status") return structuredClone(status);
@@ -170,5 +175,91 @@ describe("ModelPanel", () => {
       taskId: 41, variant: "q5_k_m", file: "model", status: "running", downloaded: 100, total: 200,
     } }));
     expect(screen.getByText("50%")).toBeInTheDocument();
+  });
+
+  it("does not accept a same-variant event before a newer task is claimed", async () => {
+    let progressHandler: ((event: { payload: Record<string, unknown> }) => void) | undefined;
+    let installStarted = false;
+    const installPending = new Promise(() => undefined);
+    const pollPending = new Promise(() => undefined);
+    listenMock.mockImplementation(async (_event, handler) => {
+      progressHandler = handler as typeof progressHandler;
+      return vi.fn();
+    });
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_model_status") return structuredClone(status);
+      if (command === "get_model_download_status") {
+        return installStarted ? pollPending : structuredClone(oldTerminalDownload);
+      }
+      if (command === "install_gguf_model") {
+        installStarted = true;
+        return installPending;
+      }
+      return undefined;
+    });
+    render(<ModelPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: /清晰/ }));
+    fireEvent.click(screen.getByRole("button", { name: "下载并切换" }));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("install_gguf_model", expect.anything()));
+
+    act(() => progressHandler?.({ payload: {
+      taskId: 41, variant: "q5_k_m", file: "model", status: "running", downloaded: 99, total: 100,
+    } }));
+
+    expect(screen.queryByText("99%")).not.toBeInTheDocument();
+  });
+
+  it("keeps polling past an old terminal snapshot until it claims a newer active task", async () => {
+    let downloadStatusCalls = 0;
+    const installPending = new Promise(() => undefined);
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_model_status") return structuredClone(status);
+      if (command === "get_model_download_status") {
+        downloadStatusCalls += 1;
+        return downloadStatusCalls >= 4
+          ? { ...activeDownload, taskId: 42 }
+          : structuredClone(oldTerminalDownload);
+      }
+      if (command === "install_gguf_model") return installPending;
+      return undefined;
+    });
+    render(<ModelPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: /清晰/ }));
+    fireEvent.click(screen.getByRole("button", { name: "下载并切换" }));
+
+    expect(await screen.findByRole("button", { name: "取消下载" }, { timeout: 1_500 })).toBeEnabled();
+  });
+
+  it("restores cancel-requested state on mount without allowing another cancel", async () => {
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_model_status") return structuredClone(status);
+      if (command === "get_model_download_status") {
+        return { ...activeDownload, status: "cancelRequested" };
+      }
+      return undefined;
+    });
+    render(<ModelPanel />);
+
+    const button = await screen.findByRole("button", { name: "正在取消…" });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(invokeMock).not.toHaveBeenCalledWith("cancel_model_download", expect.anything());
+  });
+
+  it("uses a setup action when the GGUF runtime is unavailable", async () => {
+    const onOpenSetup = vi.fn();
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_model_status") {
+        return { ...structuredClone(status), llamaServerAvailable: false };
+      }
+      if (command === "get_model_download_status") return null;
+      return undefined;
+    });
+    render(<ModelPanel onOpenSetup={onOpenSetup} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "去环境配置" }));
+
+    expect(onOpenSetup).toHaveBeenCalledTimes(1);
+    expect(invokeMock).not.toHaveBeenCalledWith("install_gguf_model", expect.anything());
   });
 });

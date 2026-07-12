@@ -2,22 +2,39 @@ import type { GgufModelVariant } from "../settings/settingsStore";
 import type { DownloadTaskSnapshot, GgufVariantInventory } from "./types";
 
 export type ModelPrimaryAction = {
-  kind: "cancel" | "current" | "switch" | "resume" | "install";
+  kind: "cancel" | "canceling" | "current" | "switch" | "resume" | "install";
   label: string;
   disabled: boolean;
 };
 
 type DownloadEventIdentity = Pick<DownloadTaskSnapshot, "taskId" | "variant">;
 
+export type PendingDownload = {
+  variant: GgufModelVariant;
+  baselineTaskId: number;
+};
+
+export function isActiveDownload(snapshot: DownloadTaskSnapshot | null): boolean {
+  return snapshot !== null && !["done", "failed", "canceled"].includes(snapshot.status);
+}
+
+export function claimPendingDownload(
+  snapshot: DownloadTaskSnapshot | null,
+  pending: PendingDownload,
+): DownloadTaskSnapshot | null {
+  if (!snapshot || !isActiveDownload(snapshot)) return null;
+  if (snapshot.taskId <= pending.baselineTaskId) return null;
+  return snapshot.variant === pending.variant ? snapshot : null;
+}
+
 export function matchesActiveDownload(
   event: DownloadEventIdentity,
   activeTask: DownloadTaskSnapshot | null,
-  pendingVariant: GgufModelVariant | null,
 ): boolean {
-  if (activeTask) {
-    return event.taskId === activeTask.taskId && event.variant === activeTask.variant;
-  }
-  return pendingVariant !== null && event.variant === pendingVariant;
+  return isActiveDownload(activeTask)
+    && activeTask !== null
+    && event.taskId === activeTask.taskId
+    && event.variant === activeTask.variant;
 }
 
 export function formatModelStorage(bytes: number): string {
@@ -34,7 +51,10 @@ export function resolveModelPrimaryAction(
   inventory: GgufVariantInventory[],
   activeTask: DownloadTaskSnapshot | null,
 ): ModelPrimaryAction {
-  if (activeTask && !["done", "failed", "canceled"].includes(activeTask.status)) {
+  if (activeTask?.status === "cancelRequested") {
+    return { kind: "canceling", label: "正在取消…", disabled: true };
+  }
+  if (isActiveDownload(activeTask)) {
     return { kind: "cancel", label: "取消下载", disabled: false };
   }
   const selected = inventory.find((item) => item.variant === selectedVariant);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  claimPendingDownload,
   formatModelStorage,
   matchesActiveDownload,
   resolveModelPrimaryAction,
@@ -37,6 +38,18 @@ describe("resolveModelPrimaryAction", () => {
     });
   });
 
+  it("disables repeated cancellation after cancellation was requested", () => {
+    expect(resolveModelPrimaryAction(
+      "q4_k_m",
+      inventory,
+      { ...activeTask, status: "cancelRequested" },
+    )).toEqual<ModelPrimaryAction>({
+      kind: "canceling",
+      label: "正在取消…",
+      disabled: true,
+    });
+  });
+
   it("disables the action for the installed active variant", () => {
     expect(resolveModelPrimaryAction("q4_k_m", inventory, null)).toEqual<ModelPrimaryAction>({
       kind: "current",
@@ -60,12 +73,34 @@ describe("resolveModelPrimaryAction", () => {
 });
 
 describe("matchesActiveDownload", () => {
-  it("accepts only the current task identity, with a pending-variant bridge", () => {
-    expect(matchesActiveDownload({ taskId: 41, variant: "q5_k_m" }, activeTask, null)).toBe(true);
-    expect(matchesActiveDownload({ taskId: 40, variant: "q5_k_m" }, activeTask, null)).toBe(false);
-    expect(matchesActiveDownload({ taskId: 41, variant: "q4_k_m" }, activeTask, null)).toBe(false);
-    expect(matchesActiveDownload({ taskId: 99, variant: "q6_k" }, null, "q6_k")).toBe(true);
-    expect(matchesActiveDownload({ taskId: 99, variant: "q5_k_m" }, null, "q6_k")).toBe(false);
+  it("accepts events only for an already claimed exact task identity", () => {
+    expect(matchesActiveDownload({ taskId: 41, variant: "q5_k_m" }, activeTask)).toBe(true);
+    expect(matchesActiveDownload({ taskId: 40, variant: "q5_k_m" }, activeTask)).toBe(false);
+    expect(matchesActiveDownload({ taskId: 41, variant: "q4_k_m" }, activeTask)).toBe(false);
+    expect(matchesActiveDownload({ taskId: 99, variant: "q6_k" }, null)).toBe(false);
+    expect(matchesActiveDownload(
+      { taskId: 41, variant: "q5_k_m" },
+      { ...activeTask, status: "done" },
+    )).toBe(false);
+  });
+});
+
+describe("claimPendingDownload", () => {
+  const pending = { variant: "q5_k_m" as const, baselineTaskId: 41 };
+
+  it("ignores old terminal and active snapshots at or below the baseline", () => {
+    expect(claimPendingDownload({ ...activeTask, status: "done" }, pending)).toBeNull();
+    expect(claimPendingDownload(activeTask, pending)).toBeNull();
+  });
+
+  it("ignores a newer task for a different variant", () => {
+    expect(claimPendingDownload({ ...activeTask, taskId: 42, variant: "q6_k" }, pending)).toBeNull();
+  });
+
+  it("claims only a newer active snapshot for the pending variant", () => {
+    const next = { ...activeTask, taskId: 42 };
+    expect(claimPendingDownload(next, pending)).toEqual(next);
+    expect(claimPendingDownload({ ...next, status: "done" }, pending)).toBeNull();
   });
 });
 

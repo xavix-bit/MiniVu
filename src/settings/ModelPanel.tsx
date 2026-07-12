@@ -2,9 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
+  claimPendingDownload,
   formatModelStorage,
+  isActiveDownload,
   matchesActiveDownload,
   resolveModelPrimaryAction,
+  type PendingDownload,
 } from "../model/modelLifecycle";
 import { modelClient } from "../model/modelClient";
 import type { DownloadTaskSnapshot, ModelStatusResponse } from "../model/types";
@@ -50,8 +53,6 @@ const FILE_LABELS: Record<FileKey, string> = {
   mmproj: "视觉投影器",
 };
 
-const TERMINAL_TASK_STATUSES = new Set(["done", "failed", "canceled"]);
-
 function createIdleProgress(): Record<FileKey, FileProgressState> {
   return {
     model: { status: "idle", percent: 0, downloaded: 0, speedMbps: null, detail: "" },
@@ -71,7 +72,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
   const [status, setStatus] = useState<ModelStatusResponse | null>(null);
   const [selectedVariant, setSelectedVariant] = useState<GgufModelVariant>("q4_k_m");
   const [activeTask, setActiveTaskState] = useState<DownloadTaskSnapshot | null>(null);
-  const [pendingVariant, setPendingVariantState] = useState<GgufModelVariant | null>(null);
+  const [pendingDownload, setPendingDownloadState] = useState<PendingDownload | null>(null);
   const [operation, setOperation] = useState<"idle" | "installing" | "canceling" | "removing">("idle");
   const [message, setMessage] = useState("");
   const [cleanupWarning, setCleanupWarning] = useState("");
@@ -79,18 +80,25 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
   const [fileProgress, setFileProgress] = useState<Record<FileKey, FileProgressState>>(createIdleProgress);
   const [mlxProgress, setMlxProgress] = useState<MlxProgressState>({ status: "idle", percent: 0, detail: "" });
   const activeTaskRef = useRef<DownloadTaskSnapshot | null>(null);
-  const pendingVariantRef = useRef<GgufModelVariant | null>(null);
+  const pendingDownloadRef = useRef<PendingDownload | null>(null);
+  const lastSeenTaskIdRef = useRef(0);
   const initializedRef = useRef(false);
 
   function setActiveTask(task: DownloadTaskSnapshot | null) {
-    const active = task && !TERMINAL_TASK_STATUSES.has(task.status) ? task : null;
+    const active = task && isActiveDownload(task) ? task : null;
     activeTaskRef.current = active;
     setActiveTaskState(active);
   }
 
-  function setPendingVariant(variant: GgufModelVariant | null) {
-    pendingVariantRef.current = variant;
-    setPendingVariantState(variant);
+  function setPendingDownload(pending: PendingDownload | null) {
+    pendingDownloadRef.current = pending;
+    setPendingDownloadState(pending);
+  }
+
+  function noteSnapshot(task: DownloadTaskSnapshot | null) {
+    if (task) {
+      lastSeenTaskIdRef.current = Math.max(lastSeenTaskIdRef.current, task.taskId);
+    }
   }
 
   async function refresh(syncSelection = false) {
@@ -99,7 +107,18 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
       modelClient.getModelDownloadStatus(),
     ]);
     setStatus(nextStatus);
-    setActiveTask(task);
+    noteSnapshot(task);
+    const pending = pendingDownloadRef.current;
+    if (pending) {
+      const claimed = claimPendingDownload(task, pending);
+      if (claimed) {
+        setActiveTask(claimed);
+        setPendingDownload(null);
+        setOperation((current) => current === "installing" ? "idle" : current);
+      }
+    } else {
+      setActiveTask(task);
+    }
     if (syncSelection || !initializedRef.current) {
       setSelectedVariant(nextStatus.ggufModelVariant);
       initializedRef.current = true;
@@ -109,12 +128,24 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
 
   async function refreshDownloadTask() {
     const task = await modelClient.getModelDownloadStatus();
+    noteSnapshot(task);
+    const pending = pendingDownloadRef.current;
+    if (pending) {
+      const claimed = claimPendingDownload(task, pending);
+      if (claimed) {
+        setActiveTask(claimed);
+        setPendingDownload(null);
+        setOperation((current) => current === "installing" ? "idle" : current);
+      }
+      return task;
+    }
+
     setActiveTask(task);
-    if (task && !TERMINAL_TASK_STATUSES.has(task.status)) {
-      setPendingVariant(null);
-      setOperation((current) => current === "installing" ? "idle" : current);
-    } else if (task && TERMINAL_TASK_STATUSES.has(task.status)) {
-      setPendingVariant(null);
+    if (task && isActiveDownload(task)) {
+      if (task.status === "cancelRequested") {
+        setOperation((current) => current === "canceling" ? "idle" : current);
+      }
+    } else if (task) {
       setOperation((current) => current === "canceling" ? "idle" : current);
       await refresh();
     }
@@ -138,10 +169,8 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
       if (!matchesActiveDownload(
         { taskId: payload.taskId, variant: payload.variant },
         activeTaskRef.current,
-        pendingVariantRef.current,
       )) return;
 
-      if (!activeTaskRef.current) void refreshDownloadTask().catch(() => undefined);
       const fileKey: FileKey = payload.file === "mmproj" ? "mmproj" : "model";
       setFileProgress((current) => {
         const previous = current[fileKey];
@@ -180,7 +209,6 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
         };
       });
       if (payload.status === "failed" || payload.status === "canceled") {
-        setPendingVariant(null);
         setOperation((current) => current === "canceling" ? "idle" : current);
         void refresh().catch((error) => setMessage(String(error)));
       }
@@ -189,12 +217,12 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
   }, []);
 
   useEffect(() => {
-    if (!pendingVariant && !activeTask) return;
+    if (!pendingDownload && !activeTask) return;
     const timer = window.setInterval(() => {
       void refreshDownloadTask().catch(() => undefined);
     }, 500);
     return () => window.clearInterval(timer);
-  }, [pendingVariant, activeTask?.taskId]);
+  }, [pendingDownload, activeTask?.taskId]);
 
   async function runPrimaryAction() {
     if (!status) return;
@@ -234,16 +262,27 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
       }
       return;
     }
-    if (action.disabled) return;
     if (!status.llamaServerAvailable) {
       onOpenSetup?.();
       return;
     }
+    if (action.disabled) return;
+
+    const baselineSnapshot = await modelClient.getModelDownloadStatus();
+    noteSnapshot(baselineSnapshot);
+    if (baselineSnapshot && isActiveDownload(baselineSnapshot)) {
+      setActiveTask(baselineSnapshot);
+      return;
+    }
+    const pending = {
+      variant: selectedVariant,
+      baselineTaskId: Math.max(lastSeenTaskIdRef.current, baselineSnapshot?.taskId ?? 0),
+    };
 
     setOperation("installing");
     setMessage("");
     setCleanupWarning("");
-    setPendingVariant(selectedVariant);
+    setPendingDownload(pending);
     setFileProgress({
       model: { status: "running", percent: 0, downloaded: 0, speedMbps: null, detail: "等待开始…" },
       mmproj: { status: "waiting", percent: 0, downloaded: 0, speedMbps: null, detail: "等待主模型完成…" },
@@ -253,13 +292,13 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
       void refreshDownloadTask().catch(() => undefined);
       const result = await install;
       setCleanupWarning(result.cleanupWarning ?? "");
-      setPendingVariant(null);
+      setPendingDownload(null);
       await refresh(true);
       setMessage("模型已就绪");
       onStatusChange?.();
     } catch (error) {
       setMessage(String(error));
-      setPendingVariant(null);
+      setPendingDownload(null);
       await refresh().catch(() => undefined);
     } finally {
       setOperation("idle");
@@ -290,18 +329,24 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
   const primaryAction = status && !isMlx
     ? resolveModelPrimaryAction(selectedVariant, status.ggufVariants, activeTask)
     : null;
+  const hasDownloadAction = primaryAction?.kind === "cancel" || primaryAction?.kind === "canceling";
+  const needsRuntimeSetup = Boolean(status && !runtimeReady && !hasDownloadAction);
   const primaryLabel = operation === "canceling"
     ? "正在取消…"
     : operation === "installing"
       ? isMlx ? "下载中…" : "处理中…"
-      : isMlx ? "下载 MLX 权重" : primaryAction?.label ?? "读取中…";
+      : needsRuntimeSetup
+        ? "去环境配置"
+        : isMlx ? "下载 MLX 权重" : primaryAction?.label ?? "读取中…";
 
   return (
     <div className="model-panel">
       {!runtimeReady && status ? (
         <div className="callout callout--attention" role="status">
           <p>{isMlx ? "MLX 未安装。" : "内置 Metal 未就绪。"}</p>
-          {onOpenSetup ? <button type="button" className="callout__action" onClick={onOpenSetup}>去环境配置</button> : null}
+          {onOpenSetup && hasDownloadAction
+            ? <button type="button" className="callout__action" onClick={onOpenSetup}>去环境配置</button>
+            : null}
         </div>
       ) : null}
 
@@ -349,7 +394,9 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
           <button
             type="button"
             className="settings-btn settings-btn--primary"
-            disabled={!status || operation !== "idle" || Boolean(primaryAction?.disabled) || (!runtimeReady && !primaryAction?.kind)}
+            disabled={!status
+              || operation !== "idle"
+              || (needsRuntimeSetup ? !onOpenSetup : Boolean(primaryAction?.disabled))}
             onClick={() => void runPrimaryAction()}
           >
             {primaryLabel}
