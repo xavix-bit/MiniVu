@@ -9,18 +9,18 @@ export function PrivacyNotice() {
       <div className="privacy-product__grid">
         <article>
           <span aria-hidden="true">OCR</span>
-          <strong>系统级文字识别</strong>
-          <p>本机读取图片文字。</p>
+          <strong>本机文字识别</strong>
+          <p>图片文字不离开这台 Mac。</p>
         </article>
         <article>
           <span aria-hidden="true">LLM</span>
-          <strong>本地视觉推理</strong>
-          <p>本机回答图片问题。</p>
+          <strong>本地识图问答</strong>
+          <p>问题、回答和对话在本机处理。</p>
         </article>
         <article>
-          <span aria-hidden="true">MD</span>
-          <strong>导出路径可控</strong>
-          <p>主动导出时才写入文件。</p>
+          <span aria-hidden="true">NET</span>
+          <strong>只在需要时联网</strong>
+          <p>下载、安装、测速或检查更新时联网。</p>
         </article>
       </div>
     </section>

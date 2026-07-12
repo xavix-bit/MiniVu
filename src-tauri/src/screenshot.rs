@@ -117,5 +117,6 @@ fn run_interactive_capture(_path: PathBuf) -> Result<CapturedImagePayload, Strin
 }
 
 fn screen_capture_permission_hint() -> String {
-    "无法截图。请在系统设置里允许屏幕录制后重启 MiniVu。".to_string()
+    "无法截图。请在系统设置 > 隐私与安全性 > 屏幕与系统音频录制中允许 MiniVu，然后重新打开应用。"
+        .to_string()
 }

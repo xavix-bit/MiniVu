@@ -1,34 +1,56 @@
 # MiniVu Desktop
 
-MiniVu is a macOS-first local image Q&A assistant built with Tauri, React, TypeScript, and Rust. It runs from the menu bar and opens a compact always-on-top quick panel for asking questions about one image at a time.
+MiniVu is a local image Q&A app for macOS Apple Silicon. It runs from the menu bar and opens a compact panel for one-image sessions.
 
-## What It Does
+## What it does
 
-- Opens a quick panel near the cursor with a global shortcut.
-- Accepts one image per temporary session from paste, drag and drop, file picker, or macOS region capture.
-- Runs OCR locally with macOS Vision.
-- Answers questions locally through a bundled Metal-enabled inference service.
-- Uses the bundled llama.cpp runtime with selectable MiniCPM-V 4.6 GGUF variants + mmproj by default, with optional MLX VLM as an advanced experimental acceleration package.
-- Streams answers into a linear transcript and supports follow-up questions about the same image.
-- Exports a session manually as Markdown plus the image attachment.
-- Keeps settings, model management, onboarding, and privacy information in the main window.
+- Opens the quick panel with `⌃⌥Space` by default.
+- Accepts an image from paste, drag and drop, file picker, or macOS region capture.
+- Runs OCR, image Q&A, and follow-up chat locally.
+- Starts loading the model in the background as soon as an image is selected.
+- Uses the bundled Metal-enabled llama.cpp runtime by default. MLX VLM remains an optional experimental backend.
+- Exports a session as Markdown with its image only when the user asks.
 
-## Privacy Model
+## First use
 
-MiniVu is local-first:
+1. Open MiniVu and choose **下载均衡模型并完成配置（约 1.6 GiB）**.
+2. Wait for the bundled runtime check and the Q4 model download to finish.
+3. Press `⌃⌥Space` to open the quick panel.
+4. Paste, drop, choose, or capture an image, then ask a question.
 
-- Images, OCR text, prompts, answers, filenames, exports, and chat history are not uploaded.
-- Network access is used only after an explicit user action, such as model download, model update, optional MLX setup, or mirror speed testing.
-- Conversation history is not saved by default.
-- Exports are written only to a user-selected local directory.
+macOS asks for screen recording access only when region capture needs it. After granting access under **System Settings > Privacy & Security > Screen & System Audio Recording**, quit MiniVu completely and reopen it.
 
-See [local-first-policy.md](../../docs/privacy/local-first-policy.md) for the detailed policy.
+## Model management
 
-## App Surfaces
+The built-in Metal backend supports three MiniCPM-V 4.6 GGUF variants:
 
-- `quick-panel`: compact 380 x 620 window, frameless, transparent, always on top, resizable. It owns image intake, OCR, chat, export, and temporary session state.
-- `main`: settings and onboarding window. The app centers it as a wider product console when presenting from Rust window commands.
-- Floating entry: closing/collapsing the quick panel turns it into a small 56 x 56 launcher that can reopen the panel.
+| Variant | Product label | Main model | Main model + shared mmproj |
+|---|---|---:|---:|
+| Q4_K_M | 均衡 | 529,101,504 bytes | about 1.53 GiB |
+| Q5_K_M | 清晰 | 577,802,944 bytes | about 1.57 GiB |
+| Q6_K | 高质量 | 629,548,224 bytes | about 1.62 GiB |
+
+Only one variant is active. A downloaded file must be a regular GGUF file with the exact expected size and header before MiniVu can use it.
+
+Switching is staged: MiniVu validates the target, starts it, and waits for a health check. If that fails, it restores the previous valid model. Old variants are removed only after a successful switch; a cleanup failure is reported without hiding the successful switch.
+
+Canceling keeps a partial download. A later download can resume only from the same source when that source returns compatible validators and byte ranges. ModelScope downloads are restarted, and changing sources may also restart the file.
+
+The model page reports total managed GGUF storage, including shared mmproj and partial files. **移除本地模型** stops the model service first, then removes all managed GGUF variants, shared mmproj, and partial download files. It does not remove the bundled runtime or optional MLX files.
+
+See [Model management](docs/model-management.md) for the full behavior and disk details.
+
+## Privacy
+
+Images, OCR, questions, answers, and chat stay on this Mac. MiniVu connects to the network only when the user starts a download or install, runs a mirror speed test, or checks for updates. Manual exports stay in the selected local directory.
+
+See [Local-first policy](docs/privacy/local-first-policy.md). Common fixes are in [Troubleshooting](docs/troubleshooting.md).
+
+## App surfaces
+
+- `quick-panel`: image intake, OCR, chat, export, and temporary session state.
+- `main`: first-use setup, settings, model management, and privacy information.
+- Floating entry: collapsing the quick panel leaves a small launcher that can reopen it.
 
 ## Development
 
@@ -38,23 +60,24 @@ npm run dev
 npm run tauri dev
 ```
 
-Useful checks:
+Checks:
 
 ```bash
-npm run build
 npm test
+npm run build
+cd src-tauri && cargo fmt --check && cargo check
 ```
 
-## Important Paths
+Important paths:
 
 - React entry: `src/App.tsx`
 - Quick panel: `src/app-shell/QuickPanelShell.tsx`, `src/chat/ChatPanel.tsx`
 - Session hook: `src/chat/useImageSession.ts`
-- Model IPC client: `src/model/modelClient.ts`
-- Tauri command registration: `src-tauri/src/lib.rs`
-- Inference session orchestration: `src-tauri/src/inference/session.rs`
-- Bundled Metal runtime: `src-tauri/resources/llama/`
+- Model lifecycle: `src-tauri/src/model_lifecycle.rs`
+- Model cache and size constants: `src-tauri/src/model_cache.rs`
+- Inference orchestration: `src-tauri/src/inference/session.rs`
+- Bundled runtime: `src-tauri/resources/llama/`
 
-## Current Product Scope
+## Current scope
 
-MiniVu v0.1 is focused on single-image local Q&A for macOS Apple Silicon. It does not include accounts, sync, cloud inference fallback, default history, mobile support, or multi-image chat.
+MiniVu v0.1 supports single-image local Q&A on macOS Apple Silicon. It has no accounts, sync, cloud inference fallback, default history, mobile support, or multi-image chat.

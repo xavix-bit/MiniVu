@@ -1,116 +1,135 @@
 # MiniVu 领域术语
 
-本地识图问答应用（Tauri + React + Rust）。以下术语在前后端共用，修改时需保持对齐。
+MiniVu 是 Tauri、React 和 Rust 实现的本地识图问答应用。前后端共用的术语和约束以本文为准。
 
 ## ImageSession
 
-快捷面板内一次识图会话：图片、OCR、对话历史、推理状态机。
+快捷面板内的一次临时会话，包含一张图片、OCR 文本、对话和推理状态。
 
-Rust: 无（纯前端）
-Hook: `chat/useImageSession.ts` — `useImageSession()` 导出会话状态、`ask`、`statusBar`（模型加载 UX）
+- Hook：`chat/useImageSession.ts`
+- 选择图片后立即并行启动本地 OCR 和模型预热。
+- 关闭快捷面板时触发 `quick-panel-closing`，清空临时会话。
+- 用户主动导出时，才把 Markdown 和图片写入所选目录。
 
 ## InferenceBackend
 
-推理后端枚举：
+| 值 | 含义 | 侧车端口 |
+|---|---|---:|
+| `llama` | 默认路径：内置 llama.cpp + Metal + MiniCPM-V 4.6 GGUF | 18765 |
+| `mlx` | 可选实验路径：MLX VLM，需另装运行时和权重 | 18766 |
 
-| 值 | 含义 | 侧车端口 | 体积与加速 |
-|---|---|---|---|
-| `llama` | 内置 Metal 路径：llama.cpp + MiniCPM-V 4.6 GGUF 档位 + mmproj | 18765 | 当前打包资源约 21 MB；模型约 1.6 GB；Apple Silicon 上通过 `-ngl` 使用 **Metal** |
-| `mlx` | 实验加速路径：MLX VLM（Apple Silicon） | 18766 | 运行时约 300 MB（Python venv）；需额外安装与独立权重 |
-
-**默认后端**：`llama`。产品文案对用户称为「内置 Metal 本地推理」：运行时随安装包提供，用户只下载模型。`mlx` 保留为高级/实验加速选项，不进入默认引导主路径。
-
-Rust: `settings::InferenceBackend`  
-前端: `"llama" | "mlx"`
+面向用户时把 `llama` 称为“内置 Metal”。运行时随应用提供，首次使用只需下载 GGUF 模型和共用的视觉组件。
 
 ## EnvironmentStatus
 
-环境是否「可正常使用」的单一判定来源（替代仅检查 GGUF 的 `is_model_ready`）。
+环境可用性的单一判定来源：
 
-- `onboardingComplete` — 用户完成引导
-- `runtimeReady` — 当前后端的推理引擎已安装（llama-server 或 MLX venv）
-- `modelReady` — 当前后端的模型权重可用
-- `environmentReady` — 以上全部满足
+- `onboardingComplete`：首次配置已完成。
+- `runtimeReady`：当前后端的运行时可用。
+- `modelReady`：当前后端的模型文件可用。
+- `environmentReady`：以上三项均满足。
 
-Rust: `environment::EnvironmentStatus`  
-命令: `get_environment_status`, `is_app_environment_ready`
+Rust：`environment::EnvironmentStatus`，命令：`get_environment_status`、`is_app_environment_ready`。
+
+## GGUF 档位
+
+三个档位共用 1,108,746,944 字节的 `mmproj`：
+
+| 值 | 产品名 | 主模型字节数 | 与 mmproj 合计 |
+|---|---|---:|---:|
+| `q4_k_m` | 均衡 | 529,101,504 | 1,637,848,448（约 1.53 GiB） |
+| `q5_k_m` | 清晰 | 577,802,944 | 1,686,549,888（约 1.57 GiB） |
+| `q6_k` | 高质量 | 629,548,224 | 1,738,295,168（约 1.62 GiB） |
+
+常量来源：Rust `model_cache::GGUF_MODEL_SPECS`、`EXPECTED_MMPROJ_BYTES`；前端镜像在 `shared/modelConstants.ts`。修改体积时两处必须同步。
+
+`ggufModelVariant` 是唯一 active 档位。切换成功后清理其他档位的正式文件、`.part` 和来源元数据，因此稳定状态只保留一个主模型。`modelStorageBytes` 统计受管目录中的正式模型、共用 mmproj 和未完成下载，显示实际占用。
+
+## 严格校验
+
+GGUF 正式文件必须同时满足：
+
+- 是常规文件，不接受符号链接；
+- 字节数与档位常量完全一致；
+- 文件头为 `GGUF`。
+
+下载先写入 `.part`。通过校验后才原子提升为正式文件；替换已有文件时先保留备份，提升失败会恢复原文件。
+
+## 下载与续传
+
+- 取消会刷新并保留 `.part`，后续可继续尝试。
+- 续传要求下载地址相同、已有 ETag 或 Last-Modified，且服务器返回匹配的 `Content-Range`。
+- ModelScope 路径当前禁用续传，不对用户承诺 ModelScope 断点续传。
+- 自动模式切换下载源前会清理旧 `.part`，新源可能从头下载。
+- 同一时间只有一个 GGUF 下载任务；任务用 `taskId + variant` 标识，旧事件不能覆盖新任务状态。
+
+## 安全切换与回滚
+
+安装或切换由 `model_lifecycle` 串行执行：
+
+1. 拒绝并发下载、并发切换和生成中的切换。
+2. 下载并严格校验目标主模型与共用 mmproj。
+3. 停止旧侧车，提交新档位，启动新侧车并等待健康检查。
+4. 新档位失败时恢复旧设置；旧档有效时重新启动旧侧车。
+5. 新档位健康后才清理旧档。清理不完整以 warning 返回，不回滚已成功的切换。
+
+`remove_installed_models` 同样受生命周期锁保护。它先确认侧车停止，再移除所有受管 GGUF 档位、共用 mmproj、`.part` 和来源元数据。它不删除内置 llama 运行时或 MLX 缓存。
 
 ## QuickPanelMode
 
-快捷面板窗口状态：
-
 | 值 | 含义 |
 |---|---|
-| `expanded` | 380 x 620 左右的完整快捷面板，靠近鼠标打开，置顶显示 |
-| `pet` | 56 x 56 的悬浮入口，点击后恢复完整面板 |
-| `hidden` | 窗口隐藏；隐藏前会发出 `quick-panel-closing` 清空临时会话 |
+| `expanded` | 完整快捷面板，靠近鼠标打开并置顶 |
+| `pet` | 56 x 56 悬浮入口 |
+| `hidden` | 隐藏窗口，并清空临时会话 |
 
-Rust: `window::QuickPanelMode`
-前端: `"expanded" | "pet" | "hidden"`
-事件: `quick-panel-mode`, `quick-panel-closing`
+Rust：`window::QuickPanelMode`，事件：`quick-panel-mode`、`quick-panel-closing`。
 
-## ModelArtifacts
+## 模型预热
 
-| 后端 | 所需文件 |
-|---|---|
-| Llama | MiniCPM-V 4.6 Q4_K_M / Q5_K_M / Q6_K 主模型 + `mmproj*.gguf` |
-| MLX | HuggingFace hub 缓存 |
+`warmup_model_for_user_image` 不受“启动时预加载”设置影响。只要模型就绪，用户选择图片后就后台启动侧车并等待健康检查；OCR 同时进行。应用启动预热仍由 `preloadModel` 控制。
 
-Rust: `ModelPaths`, `MlxModelRef`  
-就绪判断: `environment::models_ready_for_backend`
+## 首次使用流程
 
-## 内置 llama 运行时（bundled runtime）
+1. 首次配置默认选择 `q4_k_m`，按钮文案为“下载均衡模型并完成配置（约 1.6 GiB）”。
+2. 检查内置 Metal 运行时，下载主模型和 mmproj，注册默认快捷键 `⌃⌥Space`。
+3. 配置成功后写入 `onboardingComplete`。
+4. 用户用快捷键唤起面板并选择图片，MiniVu 在后台预热模型并执行本地 OCR。
+5. 首次提问复用已启动的模型；会话默认不持久化。
 
-llama-server 及其依赖 dylib 随安装包内置，用户无需下载引擎或安装 Homebrew/Python，只需下载 GGUF 模型。面向用户时优先称为「内置 Metal 引擎」，避免把新用户暴露在后端实现细节里。
+## 隐私与联网边界
 
-- 位置：`src-tauri/resources/llama/`（已提交入库，当前约 21 MB：`llama-server` + 9 个 `.0.dylib`）
-- 链接：`@rpath` + `LC_RPATH=@loader_path` → 与同目录 dylib 平铺即可运行；Metal 已内嵌进 `libggml-metal`
-- 打包：`tauri.conf.json` 的 `bundle.resources` 映射 `resources/llama/* → llama/`，落到 `<app>/Contents/Resources/llama/`
-- 解析优先级：`runtime_installer::resolve_llama_server` 先查内置资源目录（去隔离 + 补可执行位），再退回下载缓存 / PATH
-- 升级引擎：替换 `src-tauri/resources/llama/` 下文件并对齐 `LLAMA_RELEASE_TAG`
-- MLX 不内置（Python venv 体积大且依赖系统 Python），仍为运行时可选安装
+OCR、识图问答和对话在本机完成。截图临时文件和 OCR 临时文件读取后删除。联网只由用户主动下载、安装、测速或检查更新触发，可能访问 ModelScope、Hugging Face、PyPI 或 GitHub。主动导出的文件由用户自行保留。
+
+用户说明见 `docs/privacy/local-first-policy.md`。
 
 ## 进度事件
 
-| 事件名 | 用途 |
+| 事件 | 用途 |
 |---|---|
-| `model-download-progress` | GGUF / MLX 权重下载（统一 payload） |
-| `setup-progress` | 引导页各阶段（device / runtime / model / mmproj / shortcut） |
-| `sidecar-load-progress` | 侧车首次加载 / 权重载入内存 |
-| `model-stream` | 推理流式输出 chunk |
+| `model-download-progress` | GGUF / MLX 下载，包含任务身份和字节进度 |
+| `setup-progress` | 首次配置各阶段 |
+| `sidecar-load-progress` | 模型载入内存 |
+| `model-stream` | 回答流式输出 |
 
-下载进度 percent 应在前端用 `shared/downloadProgress` 按字节单调计算，避免回跳。`onboardingProgress.ts` 负责引导多 phase 加权总体进度（消费 `downloadBytes`，不重复单文件 percent 逻辑）。
+前端用 `shared/downloadProgress` 按字节计算单文件进度；`app-shell/onboardingProgress.ts` 负责首次配置的多阶段总进度。
 
-## 模块边界（Rust）
+## 模块边界
 
-```
-platform_caps/     — 硬件探测
-environment/       — EnvironmentStatus、models_ready_for_backend
-model_download/    — GGUF / MLX 下载 + progress 发射
-inference/
-  context.rs       — ActiveInferenceContext（settings + ModelCache 解析）
-  session.rs       — ask_image 编排（ensure sidecar → stream → fallback）
-  backends/        — SidecarBackend trait
-  health.rs        — 侧车就绪轮询
-  messages.rs      — 对话消息构建
-  stream.rs        — SSE 流式输出
-sidecar/
-  process.rs       — ModelSidecar 进程生命周期
-  lifecycle.rs     — 空闲卸载、预热、设置变更时 stop
-model_sidecar/     — Tauri 命令 facade（薄层，委托 inference/session）
-setup/             — 引导编排（安装运行时 + 下载权重）
+```text
+environment/          环境就绪判断
+model_cache.rs        模型规格、路径、严格校验与占用统计
+model_download/       下载任务、续传、切源和文件提升
+model_lifecycle.rs    安装、切换、回滚、清理和移除
+inference/            会话编排、后端、健康检查与流式输出
+sidecar/              进程生命周期、预热和空闲卸载
+setup/                首次配置
 ```
 
-## 前端 seam
+前端入口：
 
-- `model/modelClient.ts` — 推理与状态查询的唯一 IPC 入口：
-  - 推理：`askImage` / `cancelGeneration` / `unloadWhenIdle` + `model-stream` 事件
-  - 环境判定：`getEnvironmentStatus` / `isAppEnvironmentReady`（`EnvironmentStatus`，单一就绪来源）
-  - 运维详情：`getModelStatus`（侧车、路径、后端细项）
-  - 加载进度：`onSidecarLoadProgress`（`sidecar-load-progress` 事件）
-- `model/types.ts` — 与 Rust 响应对齐的类型；`environmentReadinessPercent` 计算首页就绪度环
-- `shared/modelConstants.ts` — 预期下载字节数
-- `shared/downloadProgress.ts` — GGUF / MLX 单文件 percent 单调计算
-- `app-shell/onboardingProgress.ts` — 引导多 phase 加权总体进度
-- `image/captureScreen.ts` — 调用 Rust `capture_screen_region`，通过 macOS 本地交互截图把图片送入当前会话
-- `image/imageIntake.ts` — 剪贴板、拖放、文件选择的图片读取与类型过滤
+- `model/modelClient.ts`：模型 IPC。
+- `model/modelLifecycle.ts`：模型页动作和任务身份判断。
+- `settings/ModelPanel.tsx`：档位安装、切换、取消和移除。
+- `app-shell/EnvironmentSetupPanel.tsx`：首次配置。
+- `chat/useImageSession.ts`：图片会话、OCR 和图片选择后的预热。

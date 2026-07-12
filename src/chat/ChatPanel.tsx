@@ -10,7 +10,7 @@ import { RecognizedTextPanel } from "./RecognizedTextPanel";
 import { ReplaceImageConfirm } from "./ReplaceImageConfirm";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { useImageSession } from "./useImageSession";
-import { exportCurrentSession } from "../export/exportSession";
+import { exportCurrentSession, modelLabelForExport } from "../export/exportSession";
 import { captureScreenRegion } from "../image/captureScreen";
 import {
   filterAcceptedFiles,
@@ -18,6 +18,7 @@ import {
   readFileAsDataUrl,
 } from "../image/imageIntake";
 import { loadSettings } from "../settings/settingsStore";
+import { modelClient } from "../model/modelClient";
 
 function formatShortcut(raw: string): string {
   return raw
@@ -177,7 +178,13 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
 
   async function handleExport() {
     try {
-      const path = await exportCurrentSession(state);
+      let modelLabel: string | undefined;
+      try {
+        modelLabel = modelLabelForExport(await modelClient.getModelStatus());
+      } catch {
+        /* 导出仍可使用中性模型名 */
+      }
+      const path = await exportCurrentSession(state, modelLabel);
       if (path) {
         setNotice(`已导出到：${path}`);
       }
@@ -386,7 +393,7 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
               </span>
               <div className="drop-zone__copy">
                 <strong>拖入图片</strong>
-                <span>{shortcutHint ? `${shortcutHint} 截图` : "粘贴或截图"}</span>
+                <span>{shortcutHint ? `${shortcutHint} 唤起面板` : "粘贴或截图"}</span>
               </div>
             </div>
 

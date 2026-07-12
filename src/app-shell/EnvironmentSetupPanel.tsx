@@ -415,7 +415,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
             <li className={result?.modelReady ? "is-done" : ""}>
               视觉模型 {result?.modelReady ? "已下载" : "未完成"}
             </li>
-            <li className="is-done">快捷键：{result?.shortcut ?? "Control+Option+Space"}</li>
+            <li className="is-done">快捷键：⌃⌥Space</li>
           </ul>
         </div>
       ) : null}
@@ -425,7 +425,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
       <div className="setup-panel__actions">
         {phase === "idle" || phase === "error" ? (
           <button type="button" className="settings-btn settings-btn--primary" onClick={() => void runSetup()}>
-            下载模型并完成配置
+            下载均衡模型并完成配置（约 1.6 GiB）
           </button>
         ) : null}
 

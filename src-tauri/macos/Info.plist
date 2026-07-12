@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict>
   <key>NSScreenCaptureUsageDescription</key>
-  <string>MiniVu 需要屏幕录制权限，以便截取你选中的区域进行识图。</string>
+  <string>仅在你点击截图时截取所选区域，图片在本机处理。</string>
 </dict>
 </plist>
