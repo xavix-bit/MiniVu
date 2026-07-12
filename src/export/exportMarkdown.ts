@@ -13,9 +13,20 @@ function escapeFence(value: string): string {
 }
 
 export function renderSessionMarkdown(session: SessionExport): string {
+  const assistantModelVersions = session.messages
+    .filter((message) => message.role === "assistant")
+    .map((message) => message.modelVersion ?? session.modelVersion);
+  const modelVersions = [...new Set(
+    assistantModelVersions.length > 0 ? assistantModelVersions : [session.modelVersion],
+  )];
+  const mixedModels = modelVersions.length > 1;
   const messages = session.messages
     .map((message) => {
-      const label = message.role === "user" ? "用户" : "MiniVu";
+      const label = message.role === "user"
+        ? "用户"
+        : mixedModels
+          ? `MiniVu（\`${message.modelVersion ?? session.modelVersion}\`）`
+          : "MiniVu";
       return `**${label}：** ${message.content}`;
     })
     .join("\n\n");
@@ -23,7 +34,7 @@ export function renderSessionMarkdown(session: SessionExport): string {
   return [
     `# ${session.title}`,
     "",
-    `模型：\`${session.modelVersion}\``,
+    `模型：${modelVersions.map((modelVersion) => `\`${modelVersion}\``).join("、")}`,
     "",
     `![当前图片](${session.imageFilename})`,
     "",

@@ -10,7 +10,7 @@ import { RecognizedTextPanel } from "./RecognizedTextPanel";
 import { ReplaceImageConfirm } from "./ReplaceImageConfirm";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { useImageSession } from "./useImageSession";
-import { exportCurrentSession, modelLabelForExport } from "../export/exportSession";
+import { exportCurrentSession } from "../export/exportSession";
 import { captureScreenRegion } from "../image/captureScreen";
 import {
   filterAcceptedFiles,
@@ -18,7 +18,6 @@ import {
   readFileAsDataUrl,
 } from "../image/imageIntake";
 import { loadSettings } from "../settings/settingsStore";
-import { modelClient } from "../model/modelClient";
 
 function formatShortcut(raw: string): string {
   return raw
@@ -178,13 +177,7 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
 
   async function handleExport() {
     try {
-      let modelLabel: string | undefined;
-      try {
-        modelLabel = modelLabelForExport(await modelClient.getModelStatus());
-      } catch {
-        /* 导出仍可使用中性模型名 */
-      }
-      const path = await exportCurrentSession(state, modelLabel);
+      const path = await exportCurrentSession(state);
       if (path) {
         setNotice(`已导出到：${path}`);
       }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { modelClient } from "../model/modelClient";
+import { modelLabelForExport } from "../export/modelLabel";
 
 export type ImageAttachment = {
   name: string;
@@ -11,6 +12,7 @@ export type ImageAttachment = {
 export type ChatMessage = {
   role: "user" | "assistant";
   content: string;
+  modelVersion?: string;
 };
 
 export type ImageSessionState = {
@@ -155,7 +157,7 @@ export function useImageSession() {
         return;
       }
 
-      await refreshModelStatus();
+      const modelVersion = modelLabelForExport(await refreshModelStatus());
 
       const history = state.messages;
       const isFollowUp = history.length > 0;
@@ -181,7 +183,7 @@ export function useImageSession() {
             imageDataUrl: state.image.dataUrl,
             ocrText: state.ocrText,
             prompt: prompt.trim(),
-            history,
+            history: history.map(({ role, content }) => ({ role, content })),
           },
           (chunk) => {
             if (chunk.text) {
@@ -212,7 +214,10 @@ export function useImageSession() {
         } else if (assistantText.trim()) {
           setState((current) => ({
             ...current,
-            messages: [...current.messages, { role: "assistant", content: assistantText.trim() }],
+            messages: [
+              ...current.messages,
+              { role: "assistant", content: assistantText.trim(), modelVersion },
+            ],
           }));
         }
         setStreamingText("");

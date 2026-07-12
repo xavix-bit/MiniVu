@@ -17,6 +17,18 @@ const session: ImageSessionState = {
   messages: [{ role: "user", content: "这是什么？" }],
 };
 
+const q4Session: ImageSessionState = {
+  ...session,
+  messages: [
+    { role: "user", content: "这是什么？" },
+    {
+      role: "assistant",
+      content: "这是本地回答。",
+      modelVersion: "MiniCPM-V 4.6 Q4_K_M (GGUF)",
+    },
+  ],
+};
+
 const status: ModelStatusResponse = {
   modelReady: true,
   modelDownloaded: true,
@@ -68,12 +80,35 @@ describe("exportCurrentSession", () => {
     });
   });
 
-  it("writes the supplied active model label", async () => {
-    await exportCurrentSession(session, modelLabelForExport(status));
+  it("writes the model recorded on the assistant turn", async () => {
+    await exportCurrentSession(q4Session);
 
     expect(invokeMock).toHaveBeenCalledWith("export_session", {
       request: expect.objectContaining({
-        markdown: expect.stringContaining("模型：`MiniCPM-V 4.6 Q5_K_M (GGUF)`"),
+        markdown: expect.stringContaining("模型：`MiniCPM-V 4.6 Q4_K_M (GGUF)`"),
+      }),
+    });
+  });
+
+  it("writes every recorded model for a mixed-model session", async () => {
+    await exportCurrentSession({
+      ...q4Session,
+      messages: [
+        ...q4Session.messages,
+        { role: "user", content: "再回答一次。" },
+        {
+          role: "assistant",
+          content: "这是清晰模型的回答。",
+          modelVersion: "MiniCPM-V 4.6 Q5_K_M (GGUF)",
+        },
+      ],
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith("export_session", {
+      request: expect.objectContaining({
+        markdown: expect.stringContaining(
+          "模型：`MiniCPM-V 4.6 Q4_K_M (GGUF)`、`MiniCPM-V 4.6 Q5_K_M (GGUF)`",
+        ),
       }),
     });
   });
