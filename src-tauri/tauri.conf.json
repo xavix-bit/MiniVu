@@ -48,7 +48,8 @@
       "infoPlist": "macos/Info.plist"
     },
     "resources": {
-      "resources/llama/*": "llama/"
+      "resources/llama/*": "llama/",
+      "resources/generated/ocr-helper": "ocr-helper"
     },
     "icon": [
       "icons/32x32.png",
