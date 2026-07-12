@@ -86,6 +86,9 @@ pub struct AppSettings {
     pub save_history_by_default: bool,
     pub allow_cloud_fallback: bool,
     pub onboarding_complete: bool,
+    /// Deprecated compatibility field from origin/main. Managed variants remain the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_path: Option<String>,
     #[serde(default)]
     pub gguf_model_variant: GgufModelVariant,
     #[serde(default)]
@@ -100,6 +103,9 @@ pub struct AppSettings {
     pub inference_backend: InferenceBackend,
     #[serde(default = "default_mlx_model_id")]
     pub mlx_model_id: String,
+    /// Deprecated compatibility field from origin/main. Hub model IDs remain the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mlx_model_path: Option<String>,
 }
 
 fn default_preload_model() -> bool {
@@ -125,6 +131,7 @@ impl Default for AppSettings {
             save_history_by_default: false,
             allow_cloud_fallback: false,
             onboarding_complete: false,
+            model_path: None,
             gguf_model_variant: GgufModelVariant::default(),
             download_mirror: DownloadMirror::Auto,
             preferred_mirror: None,
@@ -133,6 +140,7 @@ impl Default for AppSettings {
             preload_model: default_preload_model(),
             inference_backend: InferenceBackend::default(),
             mlx_model_id: default_mlx_model_id(),
+            mlx_model_path: None,
         }
     }
 }
@@ -234,8 +242,16 @@ fn save_app_settings_at(
     update_settings_at(path, move |current| match intent {
         SettingsSaveIntent::General => {
             let persisted_variant = current.gguf_model_variant;
+            let persisted_model_path = current.model_path.clone();
+            let persisted_mlx_model_path = current.mlx_model_path.clone();
             *current = incoming;
             current.gguf_model_variant = persisted_variant;
+            if current.model_path.is_none() {
+                current.model_path = persisted_model_path;
+            }
+            if current.mlx_model_path.is_none() {
+                current.mlx_model_path = persisted_mlx_model_path;
+            }
         }
         SettingsSaveIntent::ModelVariant => {
             current.gguf_model_variant = incoming.gguf_model_variant;
@@ -309,6 +325,32 @@ mod tests {
     }
 
     #[test]
+    fn legacy_model_paths_are_deserialized_without_being_discarded() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "shortcut": "Control+Option+Space",
+            "modelWarmMinutes": -1,
+            "autoCheckModelUpdates": false,
+            "saveHistoryByDefault": false,
+            "allowCloudFallback": false,
+            "onboardingComplete": true,
+            "modelPath": "/tmp/custom-gguf",
+            "downloadMirror": "auto",
+            "preferredMirror": null,
+            "lastSpeedTestAt": null,
+            "theme": "system",
+            "preloadModel": false,
+            "inferenceBackend": "mlx",
+            "mlxModelId": "mlx-community/MiniCPM-V-4.6-4bit",
+            "mlxModelPath": "/tmp/custom-mlx"
+        }))
+        .expect("origin/main settings should remain readable");
+
+        assert_eq!(settings.model_path.as_deref(), Some("/tmp/custom-gguf"));
+        assert_eq!(settings.mlx_model_path.as_deref(), Some("/tmp/custom-mlx"));
+        assert_eq!(settings.gguf_model_variant, GgufModelVariant::Q4KM);
+    }
+
+    #[test]
     fn generic_settings_save_preserves_current_gguf_variant() {
         let root = temp_dir("stale-variant");
         let path = root.join("settings.json");
@@ -326,6 +368,28 @@ mod tests {
         let saved: AppSettings =
             serde_json::from_str(&raw).expect("saved settings should be parseable");
         assert_eq!(saved.gguf_model_variant, GgufModelVariant::Q6K);
+        assert_eq!(saved.shortcut, "Control+Shift+M");
+
+        fs::remove_dir_all(root).expect("temp directory should be removed");
+    }
+
+    #[test]
+    fn generic_settings_save_preserves_legacy_paths_when_submission_omits_them() {
+        let root = temp_dir("legacy-path-save");
+        let path = root.join("settings.json");
+        let mut current = AppSettings::default();
+        current.model_path = Some("/tmp/custom-gguf".to_string());
+        current.mlx_model_path = Some("/tmp/custom-mlx".to_string());
+        write_settings_atomically(&path, &current).expect("current settings should be written");
+
+        let mut incoming = AppSettings::default();
+        incoming.shortcut = "Control+Shift+M".to_string();
+        save_app_settings_at(&path, incoming, SettingsSaveIntent::General)
+            .expect("general settings should be saved");
+
+        let saved = load_settings_at(&path).expect("saved settings should be readable");
+        assert_eq!(saved.model_path, current.model_path);
+        assert_eq!(saved.mlx_model_path, current.mlx_model_path);
         assert_eq!(saved.shortcut, "Control+Shift+M");
 
         fs::remove_dir_all(root).expect("temp directory should be removed");

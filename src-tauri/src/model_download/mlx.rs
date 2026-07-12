@@ -9,7 +9,10 @@ pub async fn download_mlx_model(app: AppHandle, force: Option<bool>) -> Result<S
     let force = force.unwrap_or(false);
     let settings = load_settings(&app)?;
     let cache = ModelCache::new(&app)?;
-    let mlx = cache.resolve_mlx(Some(settings.mlx_model_id.as_str()));
+    let mlx = cache.resolve_mlx_configured(
+        settings.mlx_model_path.as_deref(),
+        Some(settings.mlx_model_id.as_str()),
+    );
 
     if !force && mlx.is_ready() {
         emit_mlx_download_progress(&app, "done", "已存在，跳过下载", ESTIMATED_MLX_BYTES, 100);

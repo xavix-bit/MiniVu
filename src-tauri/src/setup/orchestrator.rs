@@ -72,8 +72,12 @@ pub async fn setup_environment(app: AppHandle) -> Result<SetupEnvironmentResult,
     }
 
     let cache = ModelCache::new(&app)?;
-    let paths = cache.resolve(settings.gguf_model_variant);
-    let mlx = cache.resolve_mlx(Some(settings.mlx_model_id.as_str()));
+    let paths =
+        cache.resolve_configured(settings.gguf_model_variant, settings.model_path.as_deref());
+    let mlx = cache.resolve_mlx_configured(
+        settings.mlx_model_path.as_deref(),
+        Some(settings.mlx_model_id.as_str()),
+    );
 
     if backend == InferenceBackend::Llama && !paths.is_complete() {
         emit_setup_progress(
@@ -126,8 +130,12 @@ pub async fn setup_environment(app: AppHandle) -> Result<SetupEnvironmentResult,
     );
 
     let cache = ModelCache::new(&app)?;
-    let paths = cache.resolve(settings.gguf_model_variant);
-    let mlx = cache.resolve_mlx(Some(settings.mlx_model_id.as_str()));
+    let paths =
+        cache.resolve_configured(settings.gguf_model_variant, settings.model_path.as_deref());
+    let mlx = cache.resolve_mlx_configured(
+        settings.mlx_model_path.as_deref(),
+        Some(settings.mlx_model_id.as_str()),
+    );
     let runtime_ready = match settings.inference_backend {
         InferenceBackend::Mlx => mlx_runtime_ready(&app),
         InferenceBackend::Llama => resolve_llama_server(&app).is_some(),

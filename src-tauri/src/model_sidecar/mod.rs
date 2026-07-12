@@ -73,12 +73,15 @@ pub fn get_model_status(
                 }
             })
             .unwrap_or(false),
-        model_downloaded: crate::model_cache::file_is_valid(&paths.model, "model"),
-        mmproj_downloaded: crate::model_cache::file_is_valid(&paths.mmproj, "mmproj"),
+        model_downloaded: paths.model_is_valid(),
+        mmproj_downloaded: paths.mmproj_is_valid(),
         model_path: paths.model.to_string_lossy().to_string(),
         mmproj_path: paths.mmproj.to_string_lossy().to_string(),
         model_size: cache
-            .model_size_bytes(settings.gguf_model_variant)
+            .configured_model_size_bytes(
+                settings.gguf_model_variant,
+                settings.model_path.as_deref(),
+            )
             .map(crate::model_cache::format_bytes),
         sidecar_running: guard.is_running()?,
         llama_server_available: resolve_llama_server(&app).is_some(),

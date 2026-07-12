@@ -25,9 +25,11 @@ describe("settingsStore", () => {
     expect(settings.saveHistoryByDefault).toBe(false);
     expect(settings.allowCloudFallback).toBe(false);
     expect(settings.onboardingComplete).toBe(false);
+    expect(settings.modelPath).toBeNull();
     expect(settings.downloadMirror).toBe("auto");
     expect(settings.preferredMirror).toBeNull();
     expect(settings.lastSpeedTestAt).toBeNull();
+    expect(settings.mlxModelPath).toBeNull();
   });
 
   it("uses general intent by default when saving settings", async () => {

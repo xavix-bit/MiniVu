@@ -153,7 +153,7 @@ fn remove_regular_files(
                 continue;
             }
         };
-        if !metadata.file_type().is_file() {
+        if !metadata.file_type().is_file() && !metadata.file_type().is_symlink() {
             continue;
         }
         if let Err(error) = remove(&path) {
@@ -886,10 +886,7 @@ mod tests {
         assert!(mmproj.iter().all(|path| path.exists()));
         assert!(unknown.exists());
         assert!(managed_directory.is_dir());
-        assert!(fs::symlink_metadata(&symlink_path)
-            .unwrap()
-            .file_type()
-            .is_symlink());
+        assert!(fs::symlink_metadata(&symlink_path).is_err());
         assert!(!inactive_q4[0].exists());
         assert!(!inactive_q4[2].exists());
         assert!(!inactive_q6[1].exists());
@@ -899,7 +896,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn explicit_removal_preserves_unknown_directories_and_symlinks() {
+    fn explicit_removal_unlinks_managed_symlinks_without_touching_targets() {
         use std::os::unix::fs::symlink;
 
         let root = temp_dir("removal-allowlist");
@@ -910,6 +907,8 @@ mod tests {
         }
         let unknown = root.join("other-model.gguf");
         fs::write(&unknown, b"unknown").unwrap();
+        let unknown_symlink = root.join("user-model.gguf");
+        symlink(&unknown, &unknown_symlink).unwrap();
         let mlx_cache = root.join("models--mlx-community--MiniCPM");
         fs::create_dir(&mlx_cache).unwrap();
         let symlink_path = variant_artifacts(&root, GgufModelVariant::Q6K)[0].clone();
@@ -921,11 +920,13 @@ mod tests {
         assert!(known.iter().all(|path| !path.exists()));
         assert!(mmproj.iter().all(|path| !path.exists()));
         assert!(unknown.exists());
-        assert!(mlx_cache.is_dir());
-        assert!(fs::symlink_metadata(&symlink_path)
+        assert_eq!(fs::read(&unknown).unwrap(), b"unknown");
+        assert!(fs::symlink_metadata(&unknown_symlink)
             .unwrap()
             .file_type()
             .is_symlink());
+        assert!(mlx_cache.is_dir());
+        assert!(fs::symlink_metadata(&symlink_path).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 

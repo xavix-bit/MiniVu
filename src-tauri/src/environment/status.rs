@@ -27,8 +27,12 @@ pub struct EnvironmentSnapshot {
 pub fn evaluate_environment(app: &AppHandle) -> Result<EnvironmentSnapshot, String> {
     let settings = load_settings(app)?;
     let cache = ModelCache::new(app)?;
-    let gguf = cache.resolve(settings.gguf_model_variant);
-    let mlx = cache.resolve_mlx(Some(settings.mlx_model_id.as_str()));
+    let gguf =
+        cache.resolve_configured(settings.gguf_model_variant, settings.model_path.as_deref());
+    let mlx = cache.resolve_mlx_configured(
+        settings.mlx_model_path.as_deref(),
+        Some(settings.mlx_model_id.as_str()),
+    );
     let backend = resolve_active_backend(settings.inference_backend, app).ok();
 
     Ok(EnvironmentSnapshot {

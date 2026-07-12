@@ -219,12 +219,44 @@ pub fn file_is_valid(path: &Path, label: &str) -> bool {
 pub struct ModelPaths {
     pub model: PathBuf,
     pub mmproj: PathBuf,
+    managed: bool,
 }
 
 impl ModelPaths {
     pub fn is_complete(&self) -> bool {
-        file_is_valid(&self.model, "model") && file_is_valid(&self.mmproj, "mmproj")
+        self.model_is_valid() && self.mmproj_is_valid()
     }
+
+    pub fn model_is_valid(&self) -> bool {
+        self.file_is_valid(&self.model, "model")
+    }
+
+    pub fn mmproj_is_valid(&self) -> bool {
+        self.file_is_valid(&self.mmproj, "mmproj")
+    }
+
+    fn file_is_valid(&self, path: &Path, label: &str) -> bool {
+        if self.managed {
+            file_is_valid(path, label)
+        } else {
+            legacy_custom_file_is_valid(path)
+        }
+    }
+}
+
+fn legacy_custom_file_is_valid(path: &Path) -> bool {
+    let Ok(meta) = fs::metadata(path) else {
+        return false;
+    };
+    if !meta.is_file() || meta.len() < GGUF_MAGIC.len() as u64 {
+        return false;
+    }
+
+    let mut magic = [0_u8; 4];
+    fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut magic))
+        .map(|()| magic == *GGUF_MAGIC)
+        .unwrap_or(false)
 }
 
 pub struct ModelCache {
@@ -279,18 +311,60 @@ impl ModelCache {
         ModelPaths {
             model: self.default_model_path(variant),
             mmproj: self.default_mmproj_path(),
+            managed: true,
         }
     }
 
-    pub fn model_size_bytes(&self, variant: GgufModelVariant) -> Option<u64> {
-        let paths = self.resolve(variant);
-        let model = fs::metadata(&paths.model).ok().map(|m| m.len());
-        let mmproj = fs::metadata(&paths.mmproj).ok().map(|m| m.len());
-        match (model, mmproj) {
-            (Some(a), Some(b)) => Some(a + b),
-            (Some(a), None) => Some(a),
-            _ => None,
+    pub fn resolve_configured(
+        &self,
+        variant: GgufModelVariant,
+        configured: Option<&str>,
+    ) -> ModelPaths {
+        if let Some(raw) = configured.filter(|value| !value.trim().is_empty()) {
+            let path = PathBuf::from(raw);
+            if path.is_dir() {
+                if let Some(paths) = detect_pair_in_dir(&path) {
+                    return paths;
+                }
+            } else if path.is_file() {
+                let mmproj =
+                    find_mmproj_sibling(&path).unwrap_or_else(|| self.default_mmproj_path());
+                return ModelPaths {
+                    model: path,
+                    mmproj,
+                    managed: false,
+                };
+            }
         }
+
+        self.resolve(variant)
+    }
+
+    pub fn configured_model_size_bytes(
+        &self,
+        variant: GgufModelVariant,
+        configured: Option<&str>,
+    ) -> Option<u64> {
+        let paths = self.resolve_configured(variant, configured);
+        model_paths_size_bytes(&paths)
+    }
+
+    pub fn resolve_mlx_configured(
+        &self,
+        configured_path: Option<&str>,
+        configured_id: Option<&str>,
+    ) -> MlxModelRef {
+        if let Some(raw) = configured_path.filter(|value| !value.trim().is_empty()) {
+            let path = PathBuf::from(raw);
+            if path.is_dir() && path.join("config.json").is_file() {
+                return MlxModelRef {
+                    spec: path.to_string_lossy().to_string(),
+                    is_local: true,
+                };
+            }
+        }
+
+        self.resolve_mlx(configured_id)
     }
 
     pub fn inventory(&self, active_variant: GgufModelVariant) -> ManagedModelInventory {
@@ -335,6 +409,53 @@ impl ModelCache {
             is_local: false,
         }
     }
+}
+
+fn model_paths_size_bytes(paths: &ModelPaths) -> Option<u64> {
+    let model = fs::metadata(&paths.model).ok().map(|meta| meta.len());
+    let mmproj = fs::metadata(&paths.mmproj).ok().map(|meta| meta.len());
+    match (model, mmproj) {
+        (Some(model), Some(mmproj)) => Some(model + mmproj),
+        (Some(model), None) => Some(model),
+        _ => None,
+    }
+}
+
+fn detect_pair_in_dir(dir: &Path) -> Option<ModelPaths> {
+    let entries = fs::read_dir(dir).ok()?;
+    let mut model = None;
+    let mut mmproj = None;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = path.file_name()?.to_string_lossy().to_lowercase();
+        if !name.ends_with(".gguf") {
+            continue;
+        }
+        if name.contains("mmproj") {
+            mmproj = Some(path);
+        } else {
+            model = Some(path);
+        }
+    }
+
+    match (model, mmproj) {
+        (Some(model), Some(mmproj)) => Some(ModelPaths {
+            model,
+            mmproj,
+            managed: false,
+        }),
+        _ => None,
+    }
+}
+
+fn find_mmproj_sibling(model: &Path) -> Option<PathBuf> {
+    let entries = fs::read_dir(model.parent()?).ok()?;
+    entries.flatten().find_map(|entry| {
+        let path = entry.path();
+        let name = path.file_name()?.to_string_lossy().to_lowercase();
+        (name.ends_with(".gguf") && name.contains("mmproj")).then_some(path)
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -438,7 +559,9 @@ fn dirs_home_cache() -> Option<PathBuf> {
 pub fn is_model_ready(app: &AppHandle) -> Result<bool, String> {
     let settings = crate::settings::load_settings(app)?;
     let cache = ModelCache::new(app)?;
-    Ok(cache.resolve(settings.gguf_model_variant).is_complete())
+    Ok(cache
+        .resolve_configured(settings.gguf_model_variant, settings.model_path.as_deref())
+        .is_complete())
 }
 
 pub fn format_bytes(bytes: u64) -> String {

@@ -12,6 +12,8 @@ export type AppSettings = {
   saveHistoryByDefault: boolean;
   allowCloudFallback: boolean;
   onboardingComplete: boolean;
+  /** @deprecated Read-only compatibility with pre-variant settings. */
+  modelPath?: string | null;
   ggufModelVariant: GgufModelVariant;
   downloadMirror: DownloadMirror;
   preferredMirror: MirrorId | null;
@@ -20,6 +22,8 @@ export type AppSettings = {
   preloadModel: boolean;
   inferenceBackend: InferenceBackend;
   mlxModelId: string;
+  /** @deprecated Read-only compatibility with pre-hub-ID settings. */
+  mlxModelPath?: string | null;
 };
 
 export type MirrorProbeResult = {
@@ -45,6 +49,7 @@ export function createDefaultSettings(): AppSettings {
     saveHistoryByDefault: false,
     allowCloudFallback: false,
     onboardingComplete: false,
+    modelPath: null,
     ggufModelVariant: "q4_k_m",
     downloadMirror: "auto",
     preferredMirror: null,
@@ -53,6 +58,7 @@ export function createDefaultSettings(): AppSettings {
     preloadModel: false,
     inferenceBackend: "llama",
     mlxModelId: "mlx-community/MiniCPM-V-4.6-4bit",
+    mlxModelPath: null,
   };
 }
 

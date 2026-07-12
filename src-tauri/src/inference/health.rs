@@ -98,8 +98,12 @@ async fn sidecar_health_response_ready(
 fn weights_on_disk(app: &AppHandle, backend: InferenceBackend) -> Result<bool, String> {
     let settings = load_settings(app)?;
     let cache = ModelCache::new(app)?;
-    let paths = cache.resolve(settings.gguf_model_variant);
-    let mlx = cache.resolve_mlx(Some(settings.mlx_model_id.as_str()));
+    let paths =
+        cache.resolve_configured(settings.gguf_model_variant, settings.model_path.as_deref());
+    let mlx = cache.resolve_mlx_configured(
+        settings.mlx_model_path.as_deref(),
+        Some(settings.mlx_model_id.as_str()),
+    );
     Ok(models_ready_for_backend(backend, &paths, &mlx))
 }
 
