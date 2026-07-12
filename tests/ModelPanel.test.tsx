@@ -51,6 +51,16 @@ const oldTerminalDownload = {
   status: "done",
 };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 beforeEach(() => {
   invokeMock.mockImplementation(async (command) => {
     if (command === "get_model_status") return structuredClone(status);
@@ -111,6 +121,7 @@ describe("ModelPanel", () => {
 
     const cancel = await screen.findByRole("button", { name: "取消下载" });
     expect(screen.getByRole("button", { name: /清晰/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("正在下载主模型 50% · ModelScope")).toBeInTheDocument();
     fireEvent.click(cancel);
 
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("cancel_model_download", { taskId: 41 }));
@@ -246,6 +257,8 @@ describe("ModelPanel", () => {
     const button = await screen.findByRole("button", { name: "正在取消…" });
     expect(button).toBeDisabled();
     expect(screen.getByRole("button", { name: /清晰/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("下载进度").querySelector(".model-download-progress__item"))
+      .toHaveClass("is-canceling");
     fireEvent.click(button);
     expect(invokeMock).not.toHaveBeenCalledWith("cancel_model_download", expect.anything());
   });
@@ -265,6 +278,224 @@ describe("ModelPanel", () => {
 
     expect(onOpenSetup).toHaveBeenCalledTimes(1);
     expect(invokeMock).not.toHaveBeenCalledWith("install_gguf_model", expect.anything());
+  });
+
+  it("ignores an older deferred snapshot after a newer task was restored", async () => {
+    const staleSnapshot = deferred<typeof activeDownload>();
+    let downloadStatusCalls = 0;
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_model_status") return structuredClone(status);
+      if (command === "get_model_download_status") {
+        downloadStatusCalls += 1;
+        if (downloadStatusCalls === 1) return { ...activeDownload, taskId: 42 };
+        return staleSnapshot.promise;
+      }
+      return undefined;
+    });
+    render(<ModelPanel />);
+    await screen.findByRole("button", { name: "取消下载" });
+    await waitFor(() => expect(downloadStatusCalls).toBeGreaterThanOrEqual(2), { timeout: 1_200 });
+
+    await act(async () => staleSnapshot.resolve(structuredClone(activeDownload)));
+    fireEvent.click(screen.getByRole("button", { name: "取消下载" }));
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("cancel_model_download", { taskId: 42 }));
+    expect(invokeMock).not.toHaveBeenCalledWith("cancel_model_download", { taskId: 41 });
+  });
+
+  it("guards install synchronously before awaiting the baseline snapshot", async () => {
+    const baseline = deferred<null>();
+    let downloadStatusCalls = 0;
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_model_status") return structuredClone(status);
+      if (command === "get_model_download_status") {
+        downloadStatusCalls += 1;
+        return downloadStatusCalls === 1 ? null : baseline.promise;
+      }
+      if (command === "install_gguf_model") {
+        return { activeVariant: "q5_k_m", modelStorageBytes: 2_000, cleanupWarning: null, inventory: [] };
+      }
+      return undefined;
+    });
+    render(<ModelPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: /清晰/ }));
+    const install = screen.getByRole("button", { name: "下载并切换" });
+
+    fireEvent.click(install);
+    fireEvent.click(install);
+
+    expect(downloadStatusCalls).toBe(2);
+    baseline.resolve(null);
+    await waitFor(() => expect(invokeMock.mock.calls.filter(([command]) => command === "install_gguf_model")).toHaveLength(1));
+    expect(invokeMock).toHaveBeenCalledWith("install_gguf_model", { variant: "q5_k_m", force: false });
+  });
+
+  it("does not resurrect a task when a pre-terminal snapshot resolves late", async () => {
+    let progressHandler: ((event: { payload: Record<string, unknown> }) => void) | undefined;
+    const staleRunning = deferred<typeof activeDownload>();
+    let downloadStatusCalls = 0;
+    let terminal = false;
+    listenMock.mockImplementation(async (_event, handler) => {
+      progressHandler = handler as typeof progressHandler;
+      return vi.fn();
+    });
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_model_status") {
+        return terminal
+          ? { ...structuredClone(status), ggufVariants: status.ggufVariants.map((item) => item.variant === "q5_k_m" ? { ...item, partialBytes: 100 } : item) }
+          : structuredClone(status);
+      }
+      if (command === "get_model_download_status") {
+        downloadStatusCalls += 1;
+        if (downloadStatusCalls === 1) return { ...activeDownload, taskId: 42 };
+        if (downloadStatusCalls === 2) return staleRunning.promise;
+        return { ...activeDownload, taskId: 42, status: "canceled" };
+      }
+      return undefined;
+    });
+    render(<ModelPanel />);
+    await screen.findByRole("button", { name: "取消下载" });
+    await waitFor(() => expect(downloadStatusCalls).toBeGreaterThanOrEqual(2), { timeout: 1_200 });
+
+    terminal = true;
+    await act(async () => {
+      progressHandler?.({ payload: {
+        taskId: 42, variant: "q5_k_m", file: "model", status: "canceled", downloaded: 100, total: 200,
+      } });
+      await Promise.resolve();
+    });
+    await screen.findByRole("button", { name: "继续下载并切换" });
+
+    await act(async () => staleRunning.resolve({ ...activeDownload, taskId: 42 }));
+
+    expect(screen.getByRole("button", { name: "继续下载并切换" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "取消下载" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["模型下载已取消", "is-canceled", "已暂停，可继续下载"],
+    ["网络不可用", "is-failed", "下载失败"],
+  ])("keeps terminal catch ownership on mmproj: %s", async (error, className, detail) => {
+    let installStarted = false;
+    const installResult = deferred<never>();
+    let downloadStatusCalls = 0;
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_model_status") return structuredClone(status);
+      if (command === "get_model_download_status") {
+        downloadStatusCalls += 1;
+        if (downloadStatusCalls <= 2) return null;
+        return installStarted
+          ? { ...activeDownload, taskId: 42, file: "mmproj", source: "modelscope" }
+          : null;
+      }
+      if (command === "install_gguf_model") {
+        installStarted = true;
+        return installResult.promise;
+      }
+      return undefined;
+    });
+    render(<ModelPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: /清晰/ }));
+    fireEvent.click(screen.getByRole("button", { name: "下载并切换" }));
+    await screen.findByRole("button", { name: "取消下载" }, { timeout: 1_200 });
+
+    installResult.reject(new Error(error));
+
+    const terminalDetail = await screen.findByText(detail);
+    const item = terminalDetail.closest(".model-download-progress__item");
+    expect(item).toHaveClass(className);
+    expect(item).toHaveTextContent("视觉投影器");
+  });
+
+  it("does not let an old install rejection clear a newer resume operation", async () => {
+    let progressHandler: ((event: { payload: Record<string, unknown> }) => void) | undefined;
+    const firstInstall = deferred<never>();
+    const secondInstall = deferred<never>();
+    const secondPoll = deferred<null>();
+    let installCalls = 0;
+    let downloadStatusCalls = 0;
+    let terminal = false;
+    listenMock.mockImplementation(async (_event, handler) => {
+      progressHandler = handler as typeof progressHandler;
+      return vi.fn();
+    });
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_model_status") {
+        return terminal
+          ? { ...structuredClone(status), ggufVariants: status.ggufVariants.map((item) => item.variant === "q5_k_m" ? { ...item, partialBytes: 100 } : item) }
+          : structuredClone(status);
+      }
+      if (command === "get_model_download_status") {
+        downloadStatusCalls += 1;
+        if (downloadStatusCalls <= 2) return null;
+        if (!terminal) return { ...activeDownload, taskId: 42, file: "mmproj" };
+        if (downloadStatusCalls <= 5) return { ...activeDownload, taskId: 42, file: "mmproj", status: "canceled" };
+        return secondPoll.promise;
+      }
+      if (command === "install_gguf_model") {
+        installCalls += 1;
+        return installCalls === 1 ? firstInstall.promise : secondInstall.promise;
+      }
+      return undefined;
+    });
+    render(<ModelPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: /清晰/ }));
+    fireEvent.click(screen.getByRole("button", { name: "下载并切换" }));
+    await screen.findByRole("button", { name: "取消下载" }, { timeout: 1_200 });
+
+    terminal = true;
+    await act(async () => {
+      progressHandler?.({ payload: {
+        taskId: 42, variant: "q5_k_m", file: "mmproj", status: "canceled", downloaded: 100, total: 200,
+      } });
+      await Promise.resolve();
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "继续下载并切换" }));
+    await waitFor(() => expect(installCalls).toBe(2));
+    expect(screen.getByRole("button", { name: "处理中…" })).toBeDisabled();
+
+    firstInstall.reject(new Error("模型下载已取消"));
+    await act(async () => { await Promise.resolve(); });
+
+    expect(screen.getByRole("button", { name: "处理中…" })).toBeDisabled();
+    expect(screen.queryByText("下载失败")).not.toBeInTheDocument();
+  });
+
+  it("cleans up a listener that resolves after unmount", async () => {
+    const listener = deferred<() => void>();
+    const cleanupListener = vi.fn();
+    const modelStatus = deferred<ModelStatusResponse>();
+    const downloadStatus = deferred<null>();
+    listenMock.mockReturnValue(listener.promise);
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_model_status") return modelStatus.promise;
+      if (command === "get_model_download_status") return downloadStatus.promise;
+      return undefined;
+    });
+    const view = render(<ModelPanel />);
+
+    view.unmount();
+    await act(async () => {
+      listener.resolve(cleanupListener);
+      modelStatus.resolve(structuredClone(status));
+      downloadStatus.resolve(null);
+      await Promise.resolve();
+    });
+
+    expect(cleanupListener).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an idle progress region but hides removal when storage is empty", async () => {
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_model_status") return { ...structuredClone(status), modelStorageBytes: 0 };
+      if (command === "get_model_download_status") return null;
+      return undefined;
+    });
+    render(<ModelPanel />);
+    await screen.findByRole("button", { name: "当前使用" });
+
+    expect(screen.getByLabelText("下载进度")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "移除本地模型" })).not.toBeInTheDocument();
   });
 
   it("renders a friendly source and pauses cleanly on a canceled event", async () => {

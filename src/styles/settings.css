@@ -1515,6 +1515,11 @@
   background: var(--bg-elevated);
 }
 
+.model-download-progress__item.is-canceling {
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
+}
+
 .model-download-progress__item.is-failed {
   border-color: color-mix(in srgb, var(--danger-text) 28%, transparent);
   background: var(--danger-soft);
@@ -1522,6 +1527,20 @@
 
 .model-download-progress__item.is-failed .model-download-progress__percent {
   color: var(--danger-text);
+}
+
+.model-progress-region {
+  min-height: 32px;
+}
+
+.model-progress-region:empty {
+  border-bottom: 1px solid transparent;
+}
+
+.model-panel .settings-btn--secondary,
+.model-panel .settings-btn--danger-secondary,
+.model-panel .settings-btn--danger {
+  min-height: 44px;
 }
 
 .model-download-progress__head {
