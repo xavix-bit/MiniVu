@@ -64,6 +64,61 @@ afterEach(() => {
 });
 
 describe("EnvironmentSetupPanel", () => {
+  it("persists onboarding after setup is technically ready, then waits for final readiness", async () => {
+    const onSetupSucceeded = vi.fn();
+    const environmentStatuses = [
+      environmentWithoutRuntime,
+      {
+        ...environmentWithoutRuntime,
+        runtimeReady: true,
+        modelReady: true,
+      },
+      {
+        ...environmentWithoutRuntime,
+        onboardingComplete: true,
+        runtimeReady: true,
+        modelReady: true,
+        environmentReady: true,
+      },
+    ];
+    let environmentStatusIndex = 0;
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_model_status") return structuredClone(modelOnlyStatus);
+      if (command === "get_environment_status") {
+        return structuredClone(environmentStatuses[environmentStatusIndex++]);
+      }
+      if (command === "load_app_settings") {
+        return { onboardingComplete: false, shortcut: "Control+Option+Space" };
+      }
+      if (command === "setup_environment") {
+        return { runtimeReady: true, modelReady: true, shortcut: "Control+Option+Space" };
+      }
+      return undefined;
+    });
+    render(<EnvironmentSetupPanel showWelcome onSetupSucceeded={onSetupSucceeded} />);
+
+    await waitFor(() => expect(environmentStatusIndex).toBe(1));
+    fireEvent.click(screen.getByRole("button", { name: /下载均衡模型并完成配置/ }));
+
+    await waitFor(() => expect(onSetupSucceeded).toHaveBeenCalledTimes(1));
+    expect(invokeMock).toHaveBeenCalledWith("save_app_settings", {
+      settings: expect.objectContaining({ onboardingComplete: true }),
+      intent: "general",
+    });
+    expect(environmentStatusIndex).toBe(3);
+    expect(screen.getByText("配置完成")).toBeInTheDocument();
+
+    const commands = invokeMock.mock.calls.map(([command]) => command);
+    expect(commands.filter((command) => command === "save_app_settings")).toHaveLength(1);
+    const saveIndex = commands.indexOf("save_app_settings");
+    const environmentStatusIndexes = commands.reduce<number[]>((indexes, command, index) => {
+      if (command === "get_environment_status") indexes.push(index);
+      return indexes;
+    }, []);
+    expect(saveIndex).toBeGreaterThan(environmentStatusIndexes[1]);
+    expect(saveIndex).toBeLessThan(environmentStatusIndexes[2]);
+  });
+
   it("does not auto-complete onboarding when only the model is ready", async () => {
     const onSetupSucceeded = vi.fn();
     render(<EnvironmentSetupPanel showWelcome onSetupSucceeded={onSetupSucceeded} />);
@@ -81,7 +136,7 @@ describe("EnvironmentSetupPanel", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /下载均衡模型并完成配置/ }));
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("setup_environment"));
-    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("get_environment_status"));
+    await screen.findByText("运行环境或模型尚未就绪。");
 
     expect(screen.queryByText("配置完成")).not.toBeInTheDocument();
     expect(invokeMock).not.toHaveBeenCalledWith("save_app_settings", expect.anything());

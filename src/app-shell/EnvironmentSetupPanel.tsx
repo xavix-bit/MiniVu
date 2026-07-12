@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { modelClient } from "../model/modelClient";
-import type { ModelStatusResponse } from "../model/types";
+import type { EnvironmentStatus, ModelStatusResponse } from "../model/types";
 import { resolveGgufPercent, resolveMlxPercent } from "../shared/downloadProgress";
 import type { GgufModelVariant } from "../settings/settingsStore";
 import { loadSettings, saveSettings } from "../settings/settingsStore";
@@ -48,11 +48,40 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
   const [result, setResult] = useState<SetupResult | null>(null);
   const [status, setStatus] = useState<ModelStatus | null>(null);
   const [activeSpeedMbps, setActiveSpeedMbps] = useState<number | null>(null);
+  const successHandledRef = useRef(false);
 
   const overallPercent = useMemo(
     () => computeOverallPercent(progress, downloadBytes),
     [progress, downloadBytes],
   );
+
+  function markSuccess(environment: EnvironmentStatus, shortcut: string) {
+    setPhase("success");
+    setResult({
+      runtimeReady: environment.runtimeReady,
+      modelReady: environment.modelReady,
+      shortcut,
+    });
+    if (!successHandledRef.current) {
+      successHandledRef.current = true;
+      onSetupSucceeded?.();
+    }
+  }
+
+  async function persistOnboardingAndRefresh(environment: EnvironmentStatus) {
+    if (!environment.runtimeReady || !environment.modelReady) {
+      return null;
+    }
+
+    let settings = await loadSettings();
+    if (!settings.onboardingComplete) {
+      settings = { ...settings, onboardingComplete: true };
+      await saveSettings(settings);
+    }
+
+    const finalEnvironment = await modelClient.getEnvironmentStatus();
+    return { environment: finalEnvironment, settings };
+  }
 
   async function refreshStatus(markReady = false) {
     const [next, environment] = await Promise.all([
@@ -62,12 +91,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
     setStatus(next);
     if (markReady && environment.environmentReady) {
       const settings = await loadSettings();
-      setPhase("success");
-      setResult({
-        runtimeReady: environment.runtimeReady,
-        modelReady: environment.modelReady,
-        shortcut: settings.shortcut,
-      });
+      markSuccess(environment, settings.shortcut);
     }
     return environment;
   }
@@ -78,30 +102,6 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
     }, 100);
     return () => window.clearTimeout(timer);
   }, []);
-
-  // 配置成功即解锁侧栏并持久化 onboardingComplete，无需用户先点「进入首页」。
-  const successHandledRef = useRef(false);
-  useEffect(() => {
-    if (phase !== "success") {
-      successHandledRef.current = false;
-      return;
-    }
-    if (successHandledRef.current) {
-      return;
-    }
-    successHandledRef.current = true;
-    void (async () => {
-      try {
-        const latest = await loadSettings();
-        if (!latest.onboardingComplete) {
-          await saveSettings({ ...latest, onboardingComplete: true });
-        }
-      } catch {
-        /* 持久化失败不阻塞解锁 */
-      }
-      onSetupSucceeded?.();
-    })();
-  }, [phase, onSetupSucceeded]);
 
   useEffect(() => {
     const unlisteners: Array<() => void> = [];
@@ -253,6 +253,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
   }, []);
 
   async function runSetup() {
+    successHandledRef.current = false;
     setPhase("running");
     setInstallError("");
     setProgress(createInitialProgress());
@@ -270,12 +271,14 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
           percent: 100,
         }),
       );
-      const environment = await refreshStatus(true);
-      if (!environment.environmentReady) {
+      const environment = await refreshStatus();
+      const completed = await persistOnboardingAndRefresh(environment);
+      if (!completed?.environment.environmentReady) {
         setInstallError("运行环境或模型尚未就绪。");
         setPhase("error");
         return;
       }
+      markSuccess(completed.environment, completed.settings.shortcut);
       if (!showWelcome) {
         onComplete?.();
       }
@@ -286,19 +289,23 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
   }
 
   async function finishAndContinue(openPanel: boolean) {
-    const env = await modelClient.getEnvironmentStatus();
-    const next = await modelClient.getModelStatus();
-    setStatus(next);
-    if (!env.environmentReady) {
-      setInstallError("运行环境或模型尚未就绪。");
+    try {
+      const env = await modelClient.getEnvironmentStatus();
+      const next = await modelClient.getModelStatus();
+      setStatus(next);
+      const completed = await persistOnboardingAndRefresh(env);
+      if (!completed?.environment.environmentReady) {
+        setInstallError("运行环境或模型尚未就绪。");
+        setPhase("error");
+        return;
+      }
+      onComplete?.();
+      if (openPanel) {
+        await invoke("show_entry");
+      }
+    } catch (error) {
+      setInstallError(String(error));
       setPhase("error");
-      return;
-    }
-    const latest = await loadSettings();
-    await saveSettings({ ...latest, onboardingComplete: true });
-    onComplete?.();
-    if (openPanel) {
-      await invoke("show_entry");
     }
   }
 
