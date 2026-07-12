@@ -223,6 +223,10 @@ pub struct ModelPaths {
 }
 
 impl ModelPaths {
+    pub fn is_managed(&self) -> bool {
+        self.managed
+    }
+
     pub fn is_complete(&self) -> bool {
         self.model_is_valid() && self.mmproj_is_valid()
     }

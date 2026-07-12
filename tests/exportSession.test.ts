@@ -24,7 +24,7 @@ const q4Session: ImageSessionState = {
     {
       role: "assistant",
       content: "这是本地回答。",
-      modelVersion: "MiniCPM-V 4.6 Q4_K_M (GGUF)",
+      modelVersion: "MiniCPM-V 4.6 GGUF · Q4",
     },
   ],
 };
@@ -34,6 +34,7 @@ const status: ModelStatusResponse = {
   modelDownloaded: true,
   mmprojDownloaded: true,
   modelPath: "/models/q5.gguf",
+  modelManaged: true,
   mmprojPath: "/models/mmproj.gguf",
   modelSize: "1.57 GiB",
   sidecarRunning: true,
@@ -45,6 +46,7 @@ const status: ModelStatusResponse = {
   activeBackend: "llama",
   mlxRuntimeAvailable: false,
   mlxModelId: "",
+  mlxModelLocal: false,
   mlxModelReady: false,
   mlxRequiresNetwork: false,
 };
@@ -57,7 +59,7 @@ beforeEach(() => {
 
 describe("modelLabelForExport", () => {
   it("uses the active GGUF variant", () => {
-    expect(modelLabelForExport(status)).toBe("MiniCPM-V 4.6 Q5_K_M (GGUF)");
+    expect(modelLabelForExport(status)).toBe("MiniCPM-V 4.6 GGUF · Q5");
   });
 
   it("uses the configured MLX model id", () => {
@@ -66,6 +68,32 @@ describe("modelLabelForExport", () => {
       inferenceBackend: "mlx",
       mlxModelId: "mlx-community/MiniCPM-V-4.6-4bit",
     })).toBe("mlx-community/MiniCPM-V-4.6-4bit");
+  });
+
+  it("does not disguise a legacy custom GGUF as a managed variant", () => {
+    expect(modelLabelForExport({
+      ...status,
+      modelManaged: false,
+      modelPath: "/Users/private/models/acme-vision.gguf",
+    })).toBe("Custom GGUF · acme-vision.gguf");
+  });
+
+  it("does not expose a legacy local MLX path", () => {
+    expect(modelLabelForExport({
+      ...status,
+      inferenceBackend: "mlx",
+      mlxModelId: "/Users/private/models/acme-mlx",
+      mlxModelLocal: true,
+    })).toBe("Custom MLX · acme-mlx");
+  });
+
+  it("recognizes a local MLX path from an older status payload", () => {
+    const { mlxModelLocal: _omitted, ...legacyStatus } = status;
+    expect(modelLabelForExport({
+      ...legacyStatus,
+      inferenceBackend: "mlx",
+      mlxModelId: "C:\\private\\models\\legacy-mlx",
+    })).toBe("Custom MLX · legacy-mlx");
   });
 });
 
@@ -80,12 +108,28 @@ describe("exportCurrentSession", () => {
     });
   });
 
+  it("uses the neutral fallback for assistant turns from old sessions", async () => {
+    await exportCurrentSession({
+      ...session,
+      messages: [
+        ...session.messages,
+        { role: "assistant", content: "旧会话回答。" },
+      ],
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith("export_session", {
+      request: expect.objectContaining({
+        markdown: expect.stringContaining("模型：`MiniVu local model`"),
+      }),
+    });
+  });
+
   it("writes the model recorded on the assistant turn", async () => {
     await exportCurrentSession(q4Session);
 
     expect(invokeMock).toHaveBeenCalledWith("export_session", {
       request: expect.objectContaining({
-        markdown: expect.stringContaining("模型：`MiniCPM-V 4.6 Q4_K_M (GGUF)`"),
+        markdown: expect.stringContaining("模型：`MiniCPM-V 4.6 GGUF · Q4`"),
       }),
     });
   });
@@ -99,7 +143,7 @@ describe("exportCurrentSession", () => {
         {
           role: "assistant",
           content: "这是清晰模型的回答。",
-          modelVersion: "MiniCPM-V 4.6 Q5_K_M (GGUF)",
+          modelVersion: "MiniCPM-V 4.6 GGUF · Q5",
         },
       ],
     });
@@ -107,7 +151,7 @@ describe("exportCurrentSession", () => {
     expect(invokeMock).toHaveBeenCalledWith("export_session", {
       request: expect.objectContaining({
         markdown: expect.stringContaining(
-          "模型：`MiniCPM-V 4.6 Q4_K_M (GGUF)`、`MiniCPM-V 4.6 Q5_K_M (GGUF)`",
+          "模型：`MiniCPM-V 4.6 GGUF · Q4`、`MiniCPM-V 4.6 GGUF · Q5`",
         ),
       }),
     });

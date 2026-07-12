@@ -28,6 +28,7 @@ pub struct ModelStatusResponse {
     pub model_downloaded: bool,
     pub mmproj_downloaded: bool,
     pub model_path: String,
+    pub model_managed: bool,
     pub mmproj_path: String,
     pub model_size: Option<String>,
     pub sidecar_running: bool,
@@ -39,6 +40,7 @@ pub struct ModelStatusResponse {
     pub active_backend: String,
     pub mlx_runtime_available: bool,
     pub mlx_model_id: String,
+    pub mlx_model_local: bool,
     pub mlx_model_ready: bool,
     pub mlx_requires_network: bool,
 }
@@ -76,6 +78,7 @@ pub fn get_model_status(
         model_downloaded: paths.model_is_valid(),
         mmproj_downloaded: paths.mmproj_is_valid(),
         model_path: paths.model.to_string_lossy().to_string(),
+        model_managed: paths.is_managed(),
         mmproj_path: paths.mmproj.to_string_lossy().to_string(),
         model_size: cache
             .configured_model_size_bytes(
@@ -95,6 +98,7 @@ pub fn get_model_status(
             .to_string(),
         mlx_runtime_available: mlx_ready,
         mlx_model_id: mlx.spec.clone(),
+        mlx_model_local: mlx.is_local,
         mlx_model_ready: mlx.is_ready(),
         mlx_requires_network: mlx.requires_network_on_first_run(),
     })
@@ -106,6 +110,7 @@ pub async fn ask_image(
     sidecar: tauri::State<'_, SidecarState>,
     cancel: tauri::State<'_, GenerationFlag>,
     lifecycle: tauri::State<'_, ModelLifecycleState>,
+    request_id: String,
     image_data_url: String,
     ocr_text: String,
     prompt: String,
@@ -119,6 +124,7 @@ pub async fn ask_image(
         sidecar.inner(),
         &cancel_flag,
         AskImageRequest {
+            request_id,
             image_data_url,
             ocr_text,
             prompt,

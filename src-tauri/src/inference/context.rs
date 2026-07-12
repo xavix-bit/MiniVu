@@ -1,7 +1,7 @@
 use crate::environment::models_ready_for_backend;
 use crate::inference_backend::resolve_active_backend;
 use crate::model_cache::{MlxModelRef, ModelCache, ModelPaths};
-use crate::settings::{load_settings, AppSettings, InferenceBackend};
+use crate::settings::{load_settings, AppSettings, GgufModelVariant, InferenceBackend};
 use tauri::AppHandle;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +21,7 @@ pub struct ActiveInferenceContext {
     pub paths: ModelPaths,
     pub mlx: MlxModelRef,
     pub models_ready: bool,
+    pub gguf_model_variant: GgufModelVariant,
 }
 
 pub(crate) fn resolve_model_refs(
@@ -37,6 +38,35 @@ pub(crate) fn resolve_model_refs(
 }
 
 impl ActiveInferenceContext {
+    pub fn model_label(&self) -> String {
+        match self.backend {
+            InferenceBackend::Llama if self.paths.is_managed() => {
+                let quality = match self.gguf_model_variant {
+                    GgufModelVariant::Q4KM => "Q4",
+                    GgufModelVariant::Q5KM => "Q5",
+                    GgufModelVariant::Q6K => "Q6",
+                };
+                format!("MiniCPM-V 4.6 GGUF · {quality}")
+            }
+            InferenceBackend::Llama => format!(
+                "Custom GGUF · {}",
+                path_basename(&self.paths.model, "local-model.gguf")
+            ),
+            InferenceBackend::Mlx if self.mlx.is_local => format!(
+                "Custom MLX · {}",
+                path_basename(std::path::Path::new(&self.mlx.spec), "local-model")
+            ),
+            InferenceBackend::Mlx => {
+                let model_id = self.mlx.spec.trim();
+                if model_id.is_empty() {
+                    "MiniVu local model".to_string()
+                } else {
+                    model_id.to_string()
+                }
+            }
+        }
+    }
+
     pub fn sidecar_identity(&self) -> SidecarIdentity {
         match self.backend {
             InferenceBackend::Llama => SidecarIdentity::Llama {
@@ -68,8 +98,17 @@ impl ActiveInferenceContext {
             paths,
             mlx,
             models_ready,
+            gguf_model_variant: settings.gguf_model_variant,
         })
     }
+}
+
+fn path_basename(path: &std::path::Path, fallback: &str) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(fallback)
+        .to_string()
 }
 
 #[cfg(test)]
@@ -77,6 +116,7 @@ mod tests {
     use super::*;
     use crate::environment::models_ready_for_backend;
     use crate::model_cache::{EXPECTED_MMPROJ_BYTES, GGUF_MODEL_SPECS};
+    use crate::settings::GgufModelVariant;
     use std::fs::{self, File};
     use std::io::Write;
     use std::path::{Path, PathBuf};
@@ -154,6 +194,88 @@ mod tests {
             &paths,
             &mlx
         ));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn managed_gguf_context_labels_include_the_selected_quality() {
+        let root = temp_dir("managed-labels");
+        let cache = ModelCache { root: root.clone() };
+
+        for (variant, quality) in [
+            (crate::settings::GgufModelVariant::Q4KM, "Q4"),
+            (crate::settings::GgufModelVariant::Q5KM, "Q5"),
+            (crate::settings::GgufModelVariant::Q6K, "Q6"),
+        ] {
+            let context = ActiveInferenceContext {
+                backend: InferenceBackend::Llama,
+                paths: cache.resolve(variant),
+                mlx: cache.resolve_mlx(None),
+                models_ready: false,
+                gguf_model_variant: variant,
+            };
+
+            assert_eq!(
+                context.model_label(),
+                format!("MiniCPM-V 4.6 GGUF · {quality}")
+            );
+        }
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn custom_context_labels_only_include_the_model_basename() {
+        let root = temp_dir("custom-labels");
+        let managed = root.join("managed");
+        let custom_gguf = root.join("private").join("vision-special.gguf");
+        let custom_mlx = root.join("private").join("mlx-special");
+        fs::create_dir_all(custom_gguf.parent().unwrap()).unwrap();
+        fs::create_dir_all(&custom_mlx).unwrap();
+        fs::write(&custom_gguf, b"GGUF").unwrap();
+        fs::write(custom_mlx.join("config.json"), b"{}").unwrap();
+        let cache = ModelCache { root: managed };
+
+        let gguf_context = ActiveInferenceContext {
+            backend: InferenceBackend::Llama,
+            paths: cache.resolve_configured(GgufModelVariant::Q4KM, custom_gguf.to_str()),
+            mlx: cache.resolve_mlx(None),
+            models_ready: true,
+            gguf_model_variant: GgufModelVariant::Q4KM,
+        };
+        let mlx_context = ActiveInferenceContext {
+            backend: InferenceBackend::Mlx,
+            paths: cache.resolve(GgufModelVariant::Q4KM),
+            mlx: cache.resolve_mlx_configured(custom_mlx.to_str(), None),
+            models_ready: true,
+            gguf_model_variant: GgufModelVariant::Q4KM,
+        };
+
+        assert_eq!(
+            gguf_context.model_label(),
+            "Custom GGUF · vision-special.gguf"
+        );
+        assert_eq!(mlx_context.model_label(), "Custom MLX · mlx-special");
+        assert!(!gguf_context.model_label().contains("private"));
+        assert!(!mlx_context.model_label().contains("private"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn mlx_hub_context_label_is_the_model_id() {
+        let root = temp_dir("mlx-hub-label");
+        let cache = ModelCache { root: root.clone() };
+        let context = ActiveInferenceContext {
+            backend: InferenceBackend::Mlx,
+            paths: cache.resolve(GgufModelVariant::Q4KM),
+            mlx: cache.resolve_mlx(Some("org/vision-model")),
+            models_ready: false,
+            gguf_model_variant: GgufModelVariant::Q4KM,
+        };
+
+        assert_eq!(context.model_label(), "org/vision-model");
 
         fs::remove_dir_all(root).unwrap();
     }

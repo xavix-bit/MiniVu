@@ -7,7 +7,7 @@ describe("renderSessionMarkdown", () => {
       title: "MiniVu 会话",
       imageFilename: "session.png",
       ocrText: "Error: connection refused",
-      modelVersion: "MiniCPM-V 4.6 Q4_K_M (GGUF)",
+      modelVersion: "MiniCPM-V 4.6 GGUF · Q4",
       messages: [
         { role: "user", content: "哪里出了问题？" },
         { role: "assistant", content: "服务拒绝了连接。" },
@@ -19,7 +19,7 @@ describe("renderSessionMarkdown", () => {
     expect(markdown).toContain("Error: connection refused");
     expect(markdown).toContain("**用户：** 哪里出了问题？");
     expect(markdown).toContain("**MiniVu：** 服务拒绝了连接。");
-    expect(markdown).toContain("模型：`MiniCPM-V 4.6 Q4_K_M (GGUF)`");
+    expect(markdown).toContain("模型：`MiniCPM-V 4.6 GGUF · Q4`");
   });
 
   it("identifies the model used for each assistant turn in a mixed-model session", () => {
@@ -27,31 +27,31 @@ describe("renderSessionMarkdown", () => {
       title: "MiniVu 会话",
       imageFilename: "session.png",
       ocrText: "",
-      modelVersion: "MiniCPM-V 4.6 Q4_K_M (GGUF)",
+      modelVersion: "MiniCPM-V 4.6 GGUF · Q4",
       messages: [
         { role: "user", content: "先回答这个。" },
         {
           role: "assistant",
           content: "Q4 的回答。",
-          modelVersion: "MiniCPM-V 4.6 Q4_K_M (GGUF)",
+          modelVersion: "MiniCPM-V 4.6 GGUF · Q4",
         },
         { role: "user", content: "再回答这个。" },
         {
           role: "assistant",
           content: "Q5 的回答。",
-          modelVersion: "MiniCPM-V 4.6 Q5_K_M (GGUF)",
+          modelVersion: "MiniCPM-V 4.6 GGUF · Q5",
         },
       ],
     });
 
     expect(markdown).toContain(
-      "模型：`MiniCPM-V 4.6 Q4_K_M (GGUF)`、`MiniCPM-V 4.6 Q5_K_M (GGUF)`",
+      "模型：`MiniCPM-V 4.6 GGUF · Q4`、`MiniCPM-V 4.6 GGUF · Q5`",
     );
     expect(markdown).toContain(
-      "**MiniVu（`MiniCPM-V 4.6 Q4_K_M (GGUF)`）：** Q4 的回答。",
+      "**MiniVu（`MiniCPM-V 4.6 GGUF · Q4`）：** Q4 的回答。",
     );
     expect(markdown).toContain(
-      "**MiniVu（`MiniCPM-V 4.6 Q5_K_M (GGUF)`）：** Q5 的回答。",
+      "**MiniVu（`MiniCPM-V 4.6 GGUF · Q5`）：** Q5 的回答。",
     );
   });
 });

@@ -24,6 +24,7 @@ const status: ModelStatusResponse = {
   modelDownloaded: true,
   mmprojDownloaded: true,
   modelPath: "/models/q4.gguf",
+  modelManaged: true,
   mmprojPath: "/models/mmproj.gguf",
   modelSize: "1.53 GiB",
   sidecarRunning: true,
@@ -35,22 +36,45 @@ const status: ModelStatusResponse = {
   activeBackend: "llama",
   mlxRuntimeAvailable: false,
   mlxModelId: "",
+  mlxModelLocal: false,
   mlxModelReady: false,
   mlxRequiresNetwork: false,
 };
 
 let activeStatus = status;
-let modelStreamHandler: ((event: { payload: { text: string; done: boolean } }) => void) | undefined;
+type TestStreamChunk = {
+  text: string;
+  done: boolean;
+  requestId?: string;
+  modelLabel?: string;
+};
+
+let modelStreamHandler: ((event: { payload: TestStreamChunk }) => void) | undefined;
 
 beforeEach(() => {
   activeStatus = status;
   modelStreamHandler = undefined;
-  invokeMock.mockImplementation(async (command) => {
+  invokeMock.mockImplementation(async (command, arguments_) => {
     if (command === "get_model_status") return structuredClone(activeStatus);
     if (command === "recognize_text_from_image_data_url") return { text: "本地文字" };
     if (command === "ask_image") {
-      modelStreamHandler?.({ payload: { text: "Q4 的回答。", done: false } });
-      modelStreamHandler?.({ payload: { text: "", done: true } });
+      const requestId = (arguments_ as { requestId: string }).requestId;
+      modelStreamHandler?.({
+        payload: {
+          text: "Q4 的回答。",
+          done: false,
+          requestId,
+          modelLabel: "MiniCPM-V 4.6 GGUF · Q4",
+        },
+      });
+      modelStreamHandler?.({
+        payload: {
+          text: "",
+          done: true,
+          requestId,
+          modelLabel: "MiniCPM-V 4.6 GGUF · Q4",
+        },
+      });
     }
     return undefined;
   });
@@ -91,7 +115,26 @@ describe("image session state", () => {
     expect(shouldConfirmImageReplacement(state)).toBe(false);
   });
 
-  it("keeps the model used for a completed answer after the active model changes", async () => {
+  it("uses the leased backend context instead of a status read before ask", async () => {
+    invokeMock.mockImplementation(async (command, arguments_) => {
+      if (command === "get_model_status") return structuredClone(status);
+      if (command === "recognize_text_from_image_data_url") return { text: "本地文字" };
+      if (command === "ask_image") {
+        const requestId = (arguments_ as { requestId: string }).requestId;
+        modelStreamHandler?.({
+          payload: {
+            text: "Q5 的回答。",
+            done: false,
+            requestId,
+            modelLabel: "MiniCPM-V 4.6 GGUF · Q5",
+          },
+        });
+        modelStreamHandler?.({
+          payload: { text: "", done: true, requestId, modelLabel: "MiniCPM-V 4.6 GGUF · Q5" },
+        });
+      }
+      return undefined;
+    });
     const { result } = renderHook(() => useImageSession());
 
     await act(async () => {
@@ -104,14 +147,21 @@ describe("image session state", () => {
       await result.current.ask("这是什么？");
     });
 
-    activeStatus = { ...status, ggufModelVariant: "q5_k_m" };
-
     await waitFor(() => expect(result.current.state.messages).toHaveLength(2));
     expect(result.current.state.messages[1]).toEqual({
       role: "assistant",
-      content: "Q4 的回答。",
-      modelVersion: "MiniCPM-V 4.6 Q4_K_M (GGUF)",
+      content: "Q5 的回答。",
+      modelVersion: "MiniCPM-V 4.6 GGUF · Q5",
     });
+
+    const askCall = invokeMock.mock.calls.find(([command]) => command === "ask_image");
+    const statusCall = invokeMock.mock.calls.findIndex(([command]) => command === "get_model_status");
+    const askCallIndex = invokeMock.mock.calls.findIndex(([command]) => command === "ask_image");
+    expect(askCall?.[1]).toEqual(expect.objectContaining({ requestId: expect.any(String) }));
+    expect(statusCall).toBeLessThan(askCallIndex);
+    expect(invokeMock.mock.calls.slice(statusCall + 1, askCallIndex)).not.toContainEqual([
+      "get_model_status",
+    ]);
 
     invokeMock.mockClear();
     await exportCurrentSession(result.current.state);
@@ -119,10 +169,91 @@ describe("image session state", () => {
     expect(invokeMock).not.toHaveBeenCalledWith("get_model_status");
     expect(invokeMock).toHaveBeenCalledWith("export_session", {
       request: expect.objectContaining({
-        markdown: expect.stringContaining("模型：`MiniCPM-V 4.6 Q4_K_M (GGUF)`"),
+        markdown: expect.stringContaining("模型：`MiniCPM-V 4.6 GGUF · Q5`"),
       }),
     });
     const exportRequest = invokeMock.mock.calls.find(([command]) => command === "export_session")?.[1];
-    expect(JSON.stringify(exportRequest)).not.toContain("Q5_K_M");
+    expect(JSON.stringify(exportRequest)).not.toContain("GGUF · Q4");
+  });
+
+  it("ignores a stream chunk carrying another request identity", async () => {
+    invokeMock.mockImplementation(async (command, arguments_) => {
+      if (command === "get_model_status") return structuredClone(status);
+      if (command === "recognize_text_from_image_data_url") return { text: "本地文字" };
+      if (command === "ask_image") {
+        const requestId = (arguments_ as { requestId: string }).requestId;
+        modelStreamHandler?.({
+          payload: {
+            text: "错误请求的回答。",
+            done: false,
+            requestId: "stale-request",
+            modelLabel: "MiniCPM-V 4.6 GGUF · Q6",
+          },
+        });
+        modelStreamHandler?.({
+          payload: {
+            text: "正确回答。",
+            done: false,
+            requestId,
+            modelLabel: "MiniCPM-V 4.6 GGUF · Q5",
+          },
+        });
+        modelStreamHandler?.({
+          payload: { text: "", done: true, requestId, modelLabel: "MiniCPM-V 4.6 GGUF · Q5" },
+        });
+      }
+      return undefined;
+    });
+    const { result } = renderHook(() => useImageSession());
+
+    await act(async () => {
+      await result.current.setImage({ name: "screen.png", dataUrl: "data:image/png;base64,abc" });
+    });
+    await act(async () => {
+      await result.current.ask("这是什么？");
+    });
+
+    expect(result.current.state.messages.at(-1)).toEqual({
+      role: "assistant",
+      content: "正确回答。",
+      modelVersion: "MiniCPM-V 4.6 GGUF · Q5",
+    });
+  });
+
+  it("does not attach failed generation metadata to a later answer", async () => {
+    let askCount = 0;
+    invokeMock.mockImplementation(async (command, arguments_) => {
+      if (command === "get_model_status") return structuredClone(status);
+      if (command === "recognize_text_from_image_data_url") return { text: "本地文字" };
+      if (command === "ask_image") {
+        askCount += 1;
+        const requestId = (arguments_ as { requestId: string }).requestId;
+        if (askCount === 1) {
+          modelStreamHandler?.({
+            payload: { text: "", done: true, requestId, modelLabel: "MiniCPM-V 4.6 GGUF · Q6" },
+          });
+          throw new Error("generation failed");
+        }
+        modelStreamHandler?.({
+          payload: { text: "成功。", done: false, requestId, modelLabel: "Custom MLX · local-vlm" },
+        });
+        modelStreamHandler?.({
+          payload: { text: "", done: true, requestId, modelLabel: "Custom MLX · local-vlm" },
+        });
+      }
+      return undefined;
+    });
+    const { result } = renderHook(() => useImageSession());
+    await act(async () => {
+      await result.current.setImage({ name: "screen.png", dataUrl: "data:image/png;base64,abc" });
+    });
+
+    await act(async () => { await result.current.ask("第一次"); });
+    await act(async () => { await result.current.ask("第二次"); });
+
+    expect(result.current.state.messages).toEqual([
+      { role: "user", content: "第二次" },
+      { role: "assistant", content: "成功。", modelVersion: "Custom MLX · local-vlm" },
+    ]);
   });
 });

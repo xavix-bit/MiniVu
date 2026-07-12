@@ -26,6 +26,7 @@ export type ModelStatusResponse = {
   modelDownloaded: boolean;
   mmprojDownloaded: boolean;
   modelPath: string;
+  modelManaged?: boolean;
   mmprojPath: string;
   modelSize: string | null;
   sidecarRunning: boolean;
@@ -37,6 +38,7 @@ export type ModelStatusResponse = {
   activeBackend: string;
   mlxRuntimeAvailable: boolean;
   mlxModelId: string;
+  mlxModelLocal?: boolean;
   mlxModelReady: boolean;
   mlxRequiresNetwork: boolean;
 };

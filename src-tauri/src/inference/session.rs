@@ -11,6 +11,7 @@ use std::sync::atomic::Ordering;
 use tauri::AppHandle;
 
 pub struct AskImageRequest {
+    pub request_id: String,
     pub image_data_url: String,
     pub ocr_text: String,
     pub prompt: String,
@@ -37,6 +38,8 @@ async fn ensure_sidecar_ready(
     sidecar: &SidecarState,
     context: &ActiveInferenceContext,
     cancel_flag: &GenerationFlag,
+    request_id: &str,
+    model_label: &str,
 ) -> Result<(u16, bool), String> {
     let generation = {
         let mut guard = lock_sidecar(sidecar);
@@ -67,7 +70,7 @@ async fn ensure_sidecar_ready(
     .await
     {
         if cancel_flag.load(Ordering::SeqCst) {
-            emit_chunk(app, "", true)?;
+            emit_chunk(app, request_id, model_label, "", true)?;
             return Ok((port, false));
         }
         return Err(error);
@@ -86,15 +89,24 @@ pub async fn run_ask_image(
     request: AskImageRequest,
 ) -> Result<(), String> {
     let ctx = ActiveInferenceContext::load(app)?;
+    let model_label = ctx.model_label();
     if !ctx.models_ready {
         return Err(model_not_ready_message(ctx.backend, app));
     }
 
-    let (port, sidecar_warm_for_infer) =
-        match ensure_sidecar_ready(app, sidecar, &ctx, cancel_flag).await {
-            Ok((port, warm)) => (port, warm),
-            Err(error) => return Err(error),
-        };
+    let (port, sidecar_warm_for_infer) = match ensure_sidecar_ready(
+        app,
+        sidecar,
+        &ctx,
+        cancel_flag,
+        &request.request_id,
+        &model_label,
+    )
+    .await
+    {
+        Ok((port, warm)) => (port, warm),
+        Err(error) => return Err(error),
+    };
 
     // 取消发生在加载等待阶段时 ensure_sidecar_ready 已 emit done chunk。
     if cancel_flag.load(Ordering::SeqCst) && !sidecar_warm_for_infer {
@@ -117,12 +129,14 @@ pub async fn run_ask_image(
         &messages,
         cancel_flag,
         sidecar_warm_for_infer,
+        &request.request_id,
+        &model_label,
     )
     .await;
 
     if let Err(error) = infer_result {
         if cancel_flag.load(Ordering::SeqCst) {
-            emit_chunk(app, "", true)?;
+            emit_chunk(app, &request.request_id, &model_label, "", true)?;
             return Ok(());
         }
 
@@ -141,6 +155,8 @@ pub async fn run_ask_image(
                 &fallback_messages,
                 cancel_flag,
                 sidecar_warm_for_infer,
+                &request.request_id,
+                &model_label,
             )
             .await
             .is_ok()

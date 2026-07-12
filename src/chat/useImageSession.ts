@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { modelClient } from "../model/modelClient";
-import { modelLabelForExport } from "../export/modelLabel";
 
 export type ImageAttachment = {
   name: string;
@@ -157,8 +156,6 @@ export function useImageSession() {
         return;
       }
 
-      const modelVersion = modelLabelForExport(await refreshModelStatus());
-
       const history = state.messages;
       const isFollowUp = history.length > 0;
       const userMessage: ChatMessage = {
@@ -176,6 +173,7 @@ export function useImageSession() {
       setError("");
 
       let assistantText = "";
+      let modelVersion: string | undefined;
       let failed = false;
       try {
         await modelClient.askImage(
@@ -186,6 +184,9 @@ export function useImageSession() {
             history: history.map(({ role, content }) => ({ role, content })),
           },
           (chunk) => {
+            if (chunk.modelLabel) {
+              modelVersion = chunk.modelLabel;
+            }
             if (chunk.text) {
               assistantText += chunk.text;
               setStreamingText(assistantText);
@@ -223,7 +224,7 @@ export function useImageSession() {
         setStreamingText("");
       }
     },
-    [isAnswering, refreshModelStatus, state.image, state.messages, state.ocrText],
+    [isAnswering, state.image, state.messages, state.ocrText],
   );
 
   const waitingForModel = modelLoading && !streamingText && inferPhase === "loading";

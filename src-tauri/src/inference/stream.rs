@@ -10,14 +10,24 @@ use tauri::{AppHandle, Emitter};
 pub struct StreamChunk {
     pub text: String,
     pub done: bool,
+    pub request_id: String,
+    pub model_label: String,
 }
 
-pub fn emit_chunk(app: &AppHandle, text: &str, done: bool) -> Result<(), String> {
+pub fn emit_chunk(
+    app: &AppHandle,
+    request_id: &str,
+    model_label: &str,
+    text: &str,
+    done: bool,
+) -> Result<(), String> {
     app.emit(
         "model-stream",
         StreamChunk {
             text: text.to_string(),
             done,
+            request_id: request_id.to_string(),
+            model_label: model_label.to_string(),
         },
     )
     .map_err(|e| e.to_string())
@@ -41,6 +51,8 @@ pub async fn stream_from_sidecar(
     messages: &[serde_json::Value],
     cancel: &AtomicBool,
     sidecar_warm: bool,
+    request_id: &str,
+    model_label: &str,
 ) -> Result<(), String> {
     let body = serde_json::json!({
         "model": model,
@@ -95,7 +107,7 @@ pub async fn stream_from_sidecar(
 
     while let Some(chunk) = stream.next().await {
         if cancel.load(Ordering::SeqCst) {
-            emit_chunk(app, "", true)?;
+            emit_chunk(app, request_id, model_label, "", true)?;
             return Ok(());
         }
         let chunk = chunk.map_err(|e| e.to_string())?;
@@ -112,7 +124,7 @@ pub async fn stream_from_sidecar(
                 if !emitted_any {
                     return Err("没有生成结果，请重试。".to_string());
                 }
-                emit_chunk(app, "", true)?;
+                emit_chunk(app, request_id, model_label, "", true)?;
                 return Ok(());
             }
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(payload) {
@@ -120,7 +132,7 @@ pub async fn stream_from_sidecar(
                     if !content.is_empty() {
                         emitted_any = true;
                     }
-                    emit_chunk(app, content, false)?;
+                    emit_chunk(app, request_id, model_label, content, false)?;
                 }
             }
         }
@@ -130,6 +142,25 @@ pub async fn stream_from_sidecar(
         return Err("没有生成结果，请重试。".to_string());
     }
 
-    emit_chunk(app, "", true)?;
+    emit_chunk(app, request_id, model_label, "", true)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StreamChunk;
+
+    #[test]
+    fn stream_chunk_serializes_request_identity_and_context_label() {
+        let value = serde_json::to_value(StreamChunk {
+            text: "answer".to_string(),
+            done: false,
+            request_id: "request-42".to_string(),
+            model_label: "Custom GGUF · vision.gguf".to_string(),
+        })
+        .unwrap();
+
+        assert_eq!(value["requestId"], "request-42");
+        assert_eq!(value["modelLabel"], "Custom GGUF · vision.gguf");
+    }
 }

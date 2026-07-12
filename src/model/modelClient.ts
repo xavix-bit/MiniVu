@@ -18,7 +18,17 @@ export type AskImageRequest = {
 export type StreamChunk = {
   text: string;
   done: boolean;
+  /** Optional while accepting stream events from older backends. */
+  requestId?: string;
+  modelLabel?: string;
 };
+
+let requestSequence = 0;
+
+function nextRequestId(): string {
+  requestSequence += 1;
+  return `${Date.now()}-${requestSequence}`;
+}
 
 export type ModelClient = {
   askImage(
@@ -44,11 +54,16 @@ export function createModelClient(): ModelClient {
   return {
     async askImage(request, onChunk) {
       let unlisten: UnlistenFn | undefined;
+      const requestId = nextRequestId();
       try {
         unlisten = await listen<StreamChunk>("model-stream", (event) => {
+          if (event.payload.requestId && event.payload.requestId !== requestId) {
+            return;
+          }
           onChunk(event.payload);
         });
         await invoke("ask_image", {
+          requestId,
           imageDataUrl: request.imageDataUrl,
           ocrText: request.ocrText,
           prompt: request.prompt,
