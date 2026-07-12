@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { modelClient } from "../model/modelClient";
 import type { ModelStatusResponse } from "../model/types";
 import { resolveGgufPercent, resolveMlxPercent } from "../shared/downloadProgress";
+import type { GgufModelVariant } from "../settings/settingsStore";
 import { loadSettings, saveSettings } from "../settings/settingsStore";
 import {
   PHASE_ORDER,
@@ -134,8 +135,9 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
       percent?: number;
       source?: string;
       speedMbps?: number;
+      variant?: GgufModelVariant;
     }>("model-download-progress", (event) => {
-      const { file, status: downloadStatus, message, downloaded, total, source, speedMbps } =
+      const { file, status: downloadStatus, message, downloaded, total, source, speedMbps, variant } =
         event.payload;
 
       if (file === "mlx") {
@@ -228,6 +230,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
           downloaded,
           total,
           phaseKey,
+          variant,
         );
         return mergeProgress(current, {
           phase: phaseKey,

@@ -1,6 +1,12 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import type { EnvironmentStatus, ModelStatusResponse } from "./types";
+import type {
+  DownloadTaskSnapshot,
+  EnvironmentStatus,
+  ModelMutationResult,
+  ModelStatusResponse,
+} from "./types";
+import type { GgufModelVariant } from "../settings/settingsStore";
 
 export type AskImageRequest = {
   imageDataUrl: string;
@@ -24,6 +30,10 @@ export type ModelClient = {
   unloadWhenIdle(): Promise<void>;
   /** 运维/调试详情：侧车、路径、后端细项。 */
   getModelStatus(): Promise<ModelStatusResponse>;
+  getModelDownloadStatus(): Promise<DownloadTaskSnapshot | null>;
+  cancelModelDownload(taskId: number): Promise<void>;
+  installGgufModel(variant: GgufModelVariant, force?: boolean): Promise<ModelMutationResult>;
+  removeInstalledModels(): Promise<ModelMutationResult>;
   /** 环境是否可正常使用（单一判定来源）。 */
   getEnvironmentStatus(): Promise<EnvironmentStatus>;
   isAppEnvironmentReady(): Promise<boolean>;
@@ -63,6 +73,22 @@ export function createModelClient(): ModelClient {
 
     async getModelStatus() {
       return invoke<ModelStatusResponse>("get_model_status");
+    },
+
+    async getModelDownloadStatus() {
+      return invoke<DownloadTaskSnapshot | null>("get_model_download_status");
+    },
+
+    async cancelModelDownload(taskId) {
+      await invoke("cancel_model_download", { taskId });
+    },
+
+    async installGgufModel(variant, force = false) {
+      return invoke<ModelMutationResult>("install_gguf_model", { variant, force });
+    },
+
+    async removeInstalledModels() {
+      return invoke<ModelMutationResult>("remove_installed_models");
     },
 
     async getEnvironmentStatus() {

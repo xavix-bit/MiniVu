@@ -2290,6 +2290,21 @@
   line-height: 1.45;
 }
 
+.model-variant-option__state {
+  width: fit-content;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bg-muted);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.model-variant-option__state.is-current {
+  background: var(--accent-soft);
+  color: var(--badge-text);
+}
+
 .model-variant-option__meta {
   margin-top: auto;
   color: #728094;
@@ -2299,6 +2314,84 @@
 
 .model-panel__actions-card {
   padding: 22px 24px;
+}
+
+.model-feedback:empty {
+  display: none;
+}
+
+.model-feedback p,
+.model-success,
+.model-cleanup-warning {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.model-success {
+  color: var(--badge-text);
+}
+
+.model-cleanup-warning {
+  color: var(--text-muted);
+}
+
+.model-storage-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.model-storage-row > div:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.model-storage-row span,
+.model-storage-row small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.model-storage-row strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.settings-btn--danger-secondary {
+  border: 1px solid color-mix(in srgb, var(--danger-text) 25%, transparent);
+  background: transparent;
+  color: var(--danger-text);
+}
+
+.settings-btn--danger-secondary:hover:not(:disabled) {
+  background: var(--danger-soft);
+}
+
+.settings-btn--danger {
+  border: 1px solid var(--danger-text);
+  background: var(--danger-text);
+  color: #ffffff;
+}
+
+.model-remove-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 1;
+}
+
+.model-remove-confirm p {
+  margin: 0 auto 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .settings-form--stack {
@@ -2605,6 +2698,20 @@
 
   .model-variant-picker {
     grid-template-columns: 1fr;
+  }
+
+  .model-storage-row,
+  .model-remove-confirm {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .model-storage-row > div:first-child {
+    flex-wrap: wrap;
+  }
+
+  .model-remove-confirm p {
+    margin: 0;
   }
 
   .settings-field > span:first-child {

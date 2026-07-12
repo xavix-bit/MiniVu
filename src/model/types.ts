@@ -10,6 +10,17 @@ export type GgufVariantInventory = {
   active: boolean;
 };
 
+/** 与 Rust `DownloadTaskSnapshot` 的 camelCase 序列化结果一致。 */
+export type DownloadTaskSnapshot = {
+  taskId: number;
+  variant: GgufModelVariant;
+  status: string;
+  file: string | null;
+  downloaded: number;
+  total: number | null;
+  source: string | null;
+};
+
 export type ModelStatusResponse = {
   modelReady: boolean;
   modelDownloaded: boolean;
