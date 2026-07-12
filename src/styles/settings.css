@@ -1510,6 +1510,20 @@
   opacity: 0.85;
 }
 
+.model-download-progress__item.is-canceled {
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
+}
+
+.model-download-progress__item.is-failed {
+  border-color: color-mix(in srgb, var(--danger-text) 28%, transparent);
+  background: var(--danger-soft);
+}
+
+.model-download-progress__item.is-failed .model-download-progress__percent {
+  color: var(--danger-text);
+}
+
 .model-download-progress__head {
   display: flex;
   align-items: center;

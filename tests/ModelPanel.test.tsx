@@ -98,6 +98,7 @@ describe("ModelPanel", () => {
       force: false,
     }));
     expect(invokeMock).not.toHaveBeenCalledWith("download_model", expect.anything());
+    expect(await screen.findAllByText("下载完成")).toHaveLength(2);
   });
 
   it("cancels the exact active task id", async () => {
@@ -108,7 +109,9 @@ describe("ModelPanel", () => {
     });
     render(<ModelPanel />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "取消下载" }));
+    const cancel = await screen.findByRole("button", { name: "取消下载" });
+    expect(screen.getByRole("button", { name: /清晰/ })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(cancel);
 
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("cancel_model_download", { taskId: 41 }));
   });
@@ -242,6 +245,7 @@ describe("ModelPanel", () => {
 
     const button = await screen.findByRole("button", { name: "正在取消…" });
     expect(button).toBeDisabled();
+    expect(screen.getByRole("button", { name: /清晰/ })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(button);
     expect(invokeMock).not.toHaveBeenCalledWith("cancel_model_download", expect.anything());
   });
@@ -261,5 +265,121 @@ describe("ModelPanel", () => {
 
     expect(onOpenSetup).toHaveBeenCalledTimes(1);
     expect(invokeMock).not.toHaveBeenCalledWith("install_gguf_model", expect.anything());
+  });
+
+  it("renders a friendly source and pauses cleanly on a canceled event", async () => {
+    let progressHandler: ((event: { payload: Record<string, unknown> }) => void) | undefined;
+    let terminal = false;
+    const resumableStatus = {
+      ...structuredClone(status),
+      ggufVariants: status.ggufVariants.map((item) => item.variant === "q5_k_m"
+        ? { ...item, partialBytes: 100 }
+        : item),
+    };
+    listenMock.mockImplementation(async (_event, handler) => {
+      progressHandler = handler as typeof progressHandler;
+      return vi.fn();
+    });
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_model_status") return structuredClone(terminal ? resumableStatus : status);
+      if (command === "get_model_download_status") {
+        return { ...activeDownload, status: terminal ? "canceled" : "running" };
+      }
+      return undefined;
+    });
+    render(<ModelPanel />);
+    await screen.findByRole("button", { name: "取消下载" });
+
+    act(() => progressHandler?.({ payload: {
+      taskId: 41,
+      variant: "q5_k_m",
+      file: "model",
+      status: "running",
+      downloaded: 100,
+      total: 200,
+      source: "ModelScope（国内镜像）",
+      speedMbps: 5,
+    } }));
+    expect(screen.getByText("正在下载主模型 50% · ModelScope")).toBeInTheDocument();
+    expect(screen.queryByText(/国内镜像/)).not.toBeInTheDocument();
+
+    terminal = true;
+    act(() => progressHandler?.({ payload: {
+      taskId: 41,
+      variant: "q5_k_m",
+      file: "model",
+      status: "canceled",
+      downloaded: 100,
+      total: 200,
+      source: "ModelScope（国内镜像）",
+    } }));
+
+    expect(screen.getByText("已暂停，可继续下载").closest(".model-download-progress__item"))
+      .toHaveClass("is-canceled");
+    expect(screen.queryByText("5.0 MB/s")).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "继续下载并切换" })).toBeEnabled();
+  });
+
+  it("shows failed progress instead of treating a terminal event as running", async () => {
+    let progressHandler: ((event: { payload: Record<string, unknown> }) => void) | undefined;
+    listenMock.mockImplementation(async (_event, handler) => {
+      progressHandler = handler as typeof progressHandler;
+      return vi.fn();
+    });
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_model_status") return structuredClone(status);
+      if (command === "get_model_download_status") return structuredClone(activeDownload);
+      return undefined;
+    });
+    render(<ModelPanel />);
+    await screen.findByRole("button", { name: "取消下载" });
+
+    act(() => progressHandler?.({ payload: {
+      taskId: 41,
+      variant: "q5_k_m",
+      file: "model",
+      status: "running",
+      downloaded: 100,
+      total: 200,
+      source: "HuggingFace（海外源）",
+      speedMbps: 8,
+    } }));
+    expect(screen.getByText("正在下载主模型 50% · Hugging Face")).toBeInTheDocument();
+
+    await act(async () => {
+      progressHandler?.({ payload: {
+        taskId: 41,
+        variant: "q5_k_m",
+        file: "model",
+        status: "failed",
+        downloaded: 100,
+        total: 200,
+        source: "HuggingFace（海外源）",
+        speedMbps: 8,
+      } });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("下载失败").closest(".model-download-progress__item"))
+      .toHaveClass("is-failed");
+    expect(screen.queryByText("8.0 MB/s")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["模型下载已取消", "已暂停，可继续下载"],
+    ["网络不可用", "下载失败"],
+  ])("sets terminal progress when install rejects without an event: %s", async (error, detail) => {
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_model_status") return structuredClone(status);
+      if (command === "get_model_download_status") return null;
+      if (command === "install_gguf_model") throw new Error(error);
+      return undefined;
+    });
+    render(<ModelPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: /清晰/ }));
+    fireEvent.click(screen.getByRole("button", { name: "下载并切换" }));
+
+    expect(await screen.findByText(detail)).toBeInTheDocument();
   });
 });

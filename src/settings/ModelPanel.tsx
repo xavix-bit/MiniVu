@@ -29,7 +29,7 @@ type MlxProgressState = {
 };
 
 type FileProgressState = {
-  status: "idle" | "waiting" | "running" | "switching" | "done";
+  status: "idle" | "waiting" | "running" | "switching" | "done" | "canceled" | "failed";
   percent: number;
   downloaded: number;
   speedMbps: number | null;
@@ -57,6 +57,46 @@ function createIdleProgress(): Record<FileKey, FileProgressState> {
   return {
     model: { status: "idle", percent: 0, downloaded: 0, speedMbps: null, detail: "" },
     mmproj: { status: "idle", percent: 0, downloaded: 0, speedMbps: null, detail: "" },
+  };
+}
+
+function friendlySource(source: string | undefined): string {
+  const normalized = source?.toLowerCase() ?? "";
+  if (normalized.includes("modelscope")) return "ModelScope";
+  if (normalized.includes("huggingface") || normalized.includes("hugging face")) return "Hugging Face";
+  return "";
+}
+
+function appendSource(detail: string, source: string | undefined): string {
+  const label = friendlySource(source);
+  return label ? `${detail} · ${label}` : detail;
+}
+
+function terminalProgress(
+  current: Record<FileKey, FileProgressState>,
+  status: "canceled" | "failed",
+  file: string | null | undefined,
+  downloaded?: number,
+): Record<FileKey, FileProgressState> {
+  const fileKey: FileKey = file === "mmproj" ? "mmproj" : "model";
+  const next = createIdleProgress();
+  for (const key of Object.keys(current) as FileKey[]) {
+    if (current[key].status === "done") next[key] = current[key];
+  }
+  next[fileKey] = {
+    ...current[fileKey],
+    status,
+    downloaded: Math.max(current[fileKey].downloaded, downloaded ?? 0),
+    speedMbps: null,
+    detail: status === "canceled" ? "已暂停，可继续下载" : "下载失败",
+  };
+  return next;
+}
+
+function completedProgress(current: Record<FileKey, FileProgressState>): Record<FileKey, FileProgressState> {
+  return {
+    model: { ...current.model, status: "done", percent: 100, speedMbps: null, detail: "下载完成" },
+    mmproj: { ...current.mmproj, status: "done", percent: 100, speedMbps: null, detail: "下载完成" },
   };
 }
 
@@ -109,17 +149,23 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
     setStatus(nextStatus);
     noteSnapshot(task);
     const pending = pendingDownloadRef.current;
+    let taskVariant: GgufModelVariant | null = null;
     if (pending) {
       const claimed = claimPendingDownload(task, pending);
       if (claimed) {
         setActiveTask(claimed);
         setPendingDownload(null);
         setOperation((current) => current === "installing" ? "idle" : current);
+        taskVariant = claimed.variant;
       }
     } else {
       setActiveTask(task);
+      if (task && isActiveDownload(task)) taskVariant = task.variant;
     }
-    if (syncSelection || !initializedRef.current) {
+    if (taskVariant) {
+      setSelectedVariant(taskVariant);
+      initializedRef.current = true;
+    } else if (syncSelection || !initializedRef.current) {
       setSelectedVariant(nextStatus.ggufModelVariant);
       initializedRef.current = true;
     }
@@ -135,6 +181,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
       if (claimed) {
         setActiveTask(claimed);
         setPendingDownload(null);
+        setSelectedVariant(claimed.variant);
         setOperation((current) => current === "installing" ? "idle" : current);
       }
       return task;
@@ -142,6 +189,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
 
     setActiveTask(task);
     if (task && isActiveDownload(task)) {
+      setSelectedVariant(task.variant);
       if (task.status === "cancelRequested") {
         setOperation((current) => current === "canceling" ? "idle" : current);
       }
@@ -174,13 +222,19 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
       const fileKey: FileKey = payload.file === "mmproj" ? "mmproj" : "model";
       setFileProgress((current) => {
         const previous = current[fileKey];
+        if (payload.status === "canceled" || payload.status === "failed") {
+          return terminalProgress(current, payload.status, payload.file, payload.downloaded);
+        }
         if (payload.status === "waiting" || payload.status === "switching") {
           return {
             ...current,
             [fileKey]: {
               ...previous,
               status: payload.status,
-              detail: payload.message ?? (payload.status === "waiting" ? "等待中…" : "正在切换下载源…"),
+              detail: appendSource(
+                payload.message ?? (payload.status === "waiting" ? "等待中…" : "正在切换下载源…"),
+                payload.source,
+              ),
             },
           };
         }
@@ -204,7 +258,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
             percent,
             downloaded: Math.max(previous.downloaded, payload.downloaded),
             speedMbps: payload.speedMbps && payload.speedMbps > 0 ? payload.speedMbps : previous.speedMbps,
-            detail: payload.message ?? `正在下载${FILE_LABELS[fileKey]} ${percent}%`,
+            detail: appendSource(`正在下载${FILE_LABELS[fileKey]} ${percent}%`, payload.source),
           },
         };
       });
@@ -293,12 +347,20 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
       const result = await install;
       setCleanupWarning(result.cleanupWarning ?? "");
       setPendingDownload(null);
+      setFileProgress(completedProgress);
       await refresh(true);
       setMessage("模型已就绪");
       onStatusChange?.();
     } catch (error) {
-      setMessage(String(error));
+      const errorMessage = String(error);
+      const canceled = errorMessage.includes("取消");
+      setMessage(canceled ? "" : errorMessage);
       setPendingDownload(null);
+      setFileProgress((current) => terminalProgress(
+        current,
+        canceled ? "canceled" : "failed",
+        activeTaskRef.current?.file,
+      ));
       await refresh().catch(() => undefined);
     } finally {
       setOperation("idle");
@@ -418,7 +480,9 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
         ) : null}
         {!isMlx && (Object.keys(fileProgress) as FileKey[]).some((key) => fileProgress[key].status !== "idle") ? (
           <div className="model-download-progress" aria-label="下载进度" aria-live="polite">
-            {(Object.keys(fileProgress) as FileKey[]).map((key) => <ProgressItem key={key} label={FILE_LABELS[key]} item={fileProgress[key]} />)}
+            {(Object.keys(fileProgress) as FileKey[])
+              .filter((key) => fileProgress[key].status !== "idle")
+              .map((key) => <ProgressItem key={key} label={FILE_LABELS[key]} item={fileProgress[key]} />)}
           </div>
         ) : null}
 
@@ -448,7 +512,17 @@ function ProgressItem({ label, item }: { label: string; item: FileProgressState 
         <span className="model-download-progress__label">{label}</span>
         <div className="model-download-progress__meta">
           {item.status === "running" && item.speedMbps ? <span className="model-download-progress__speed">{item.speedMbps.toFixed(1)} MB/s</span> : null}
-          <span className="model-download-progress__percent">{item.status === "done" ? "完成" : item.status === "waiting" ? "等待" : `${item.percent}%`}</span>
+          <span className="model-download-progress__percent">{
+            item.status === "done"
+              ? "完成"
+              : item.status === "waiting"
+                ? "等待"
+                : item.status === "canceled"
+                  ? "已暂停"
+                  : item.status === "failed"
+                    ? "失败"
+                    : `${item.percent}%`
+          }</span>
         </div>
       </div>
       <div className="onboarding-overall-progress__bar" aria-hidden="true"><span style={{ width: `${item.percent}%` }} /></div>
