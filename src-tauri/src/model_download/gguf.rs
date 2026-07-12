@@ -9,12 +9,16 @@ use reqwest::header::{CONTENT_RANGE, ETAG, IF_RANGE, LAST_MODIFIED, RANGE};
 use reqwest::{Client, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::time::Instant;
 use tauri::AppHandle;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 
 const CANCELLATION_ERROR: &str = "模型下载已取消";
+#[cfg(unix)]
+static PROMOTION_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, thiserror::Error)]
 enum DownloadError {
@@ -540,12 +544,144 @@ async fn validate_or_reset_partial(
 }
 
 #[cfg(unix)]
-fn replace_file(candidate: &Path, dest: &Path) -> Result<(), String> {
-    std::fs::rename(candidate, dest).map_err(|error| error.to_string())
+fn create_promotion_directory(dest: &Path) -> Result<PathBuf, String> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    let parent = dest
+        .parent()
+        .ok_or_else(|| "模型目标路径缺少父目录".to_string())?;
+    let file_name = dest
+        .file_name()
+        .map(|value| value.to_string_lossy())
+        .unwrap_or_default();
+    for _ in 0..100 {
+        let nonce = PROMOTION_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
+        let path = parent.join(format!(
+            ".{file_name}.promotion-{}-{nonce}",
+            std::process::id()
+        ));
+        let mut builder = std::fs::DirBuilder::new();
+        builder.mode(0o700);
+        match builder.create(&path) {
+            Ok(()) => return Ok(path),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("创建模型提升目录失败: {error}")),
+        }
+    }
+    Err("无法分配模型提升目录".to_string())
+}
+
+#[cfg(unix)]
+fn replace_file(
+    candidate: &Path,
+    dest: &Path,
+    expected_bytes: u64,
+    before_stage: &(dyn Fn() + Send + Sync),
+    after_backup: &(dyn Fn(&Path) + Send + Sync),
+) -> Result<(), String> {
+    reject_managed_symlinks(dest, candidate)?;
+    let staging_dir = create_promotion_directory(dest)?;
+    let staged = staging_dir.join("candidate");
+    let backup = staging_dir.join("previous");
+
+    before_stage();
+    if let Err(error) = std::fs::rename(candidate, &staged) {
+        let _ = std::fs::remove_dir(&staging_dir);
+        return Err(format!("暂存模型文件失败: {error}"));
+    }
+    if !managed_file_is_valid(&staged, expected_bytes) {
+        let _ = std::fs::remove_file(&staged);
+        let _ = std::fs::remove_dir(&staging_dir);
+        return Err("暂存模型文件校验失败，已拒绝提升".to_string());
+    }
+
+    let had_destination = match std::fs::symlink_metadata(dest) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            let _ = std::fs::remove_file(&staged);
+            let _ = std::fs::remove_dir(&staging_dir);
+            return Err("拒绝替换符号链接形式的模型文件".to_string());
+        }
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            let _ = std::fs::remove_file(&staged);
+            let _ = std::fs::remove_dir(&staging_dir);
+            return Err(format!("无法检查现有模型文件: {error}"));
+        }
+    };
+
+    if had_destination {
+        if let Err(error) = std::fs::rename(dest, &backup) {
+            let _ = std::fs::remove_file(&staged);
+            let _ = std::fs::remove_dir(&staging_dir);
+            return Err(format!("备份现有模型失败: {error}"));
+        }
+        if std::fs::symlink_metadata(&backup)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            let _ = std::fs::remove_file(&backup);
+            let _ = std::fs::remove_file(&staged);
+            let _ = std::fs::remove_dir(&staging_dir);
+            return Err("现有模型在替换期间变成符号链接，已安全移除并中止提升".to_string());
+        }
+        if !managed_file_is_valid(&backup, expected_bytes) {
+            let _ = std::fs::rename(&backup, dest);
+            let _ = std::fs::remove_file(&staged);
+            let _ = std::fs::remove_dir(&staging_dir);
+            return Err("现有模型在替换期间发生变化，已中止提升".to_string());
+        }
+        after_backup(&staged);
+    }
+
+    if let Err(promotion_error) = std::fs::rename(&staged, dest) {
+        let rollback = if had_destination {
+            std::fs::rename(&backup, dest).err()
+        } else {
+            None
+        };
+        let _ = std::fs::remove_file(&staged);
+        let _ = std::fs::remove_dir(&staging_dir);
+        return match rollback {
+            Some(error) => Err(format!(
+                "提升模型失败: {promotion_error}；恢复现有模型失败: {error}"
+            )),
+            None => Err(format!("提升模型失败: {promotion_error}")),
+        };
+    }
+
+    if !managed_file_is_valid(dest, expected_bytes) {
+        let _ = std::fs::remove_file(dest);
+        let rollback = if had_destination {
+            std::fs::rename(&backup, dest).err()
+        } else {
+            None
+        };
+        let _ = std::fs::remove_dir(&staging_dir);
+        return match rollback {
+            Some(error) => Err(format!("提升后校验失败；恢复现有模型失败: {error}")),
+            None => Err("提升后校验失败".to_string()),
+        };
+    }
+
+    if had_destination {
+        let _ = std::fs::remove_file(&backup);
+    }
+    if let Err(error) = std::fs::remove_dir(&staging_dir) {
+        eprintln!("清理模型提升目录失败: {error}");
+    }
+    Ok(())
 }
 
 #[cfg(not(unix))]
-fn replace_file(candidate: &Path, dest: &Path) -> Result<(), String> {
+fn replace_file(
+    candidate: &Path,
+    dest: &Path,
+    _expected_bytes: u64,
+    before_stage: &(dyn Fn() + Send + Sync),
+    _after_backup: &(dyn Fn(&Path) + Send + Sync),
+) -> Result<(), String> {
+    before_stage();
     if !dest.exists() {
         return std::fs::rename(candidate, dest).map_err(|error| error.to_string());
     }
@@ -609,12 +745,11 @@ async fn finalize_part_file(
             "文件无效（需要常规文件、精确大小和 GGUF 文件头）".to_string(),
         ));
     }
-    before_promotion();
     reject_managed_symlinks(dest, part_path).map_err(DownloadError::Failed)?;
     let finalization = task
         .begin_finalization()
         .map_err(|_| DownloadError::Cancelled)?;
-    replace_file(part_path, dest)
+    replace_file(part_path, dest, expected_bytes, before_promotion, &|_| {})
         .map_err(|error| DownloadError::Failed(format!("保存文件失败: {error}")))?;
     std::fs::remove_file(source_metadata_path(part_path)).ok();
     if terminal_artifact {
@@ -1788,6 +1923,59 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(fs::read(&dest).unwrap(), b"GGUFOLD!");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn promotion_race_symlink_is_rejected_in_staging_and_never_becomes_final() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_dir("promotion-symlink-race");
+        let part_path = root.join("model.part");
+        let dest = root.join("model.gguf");
+        let outside = root.join("outside.bin");
+        fs::write(&part_path, b"GGUFNEW!").unwrap();
+        fs::write(&dest, b"GGUFOLD!").unwrap();
+        fs::write(&outside, b"OUTSIDE-UNCHANGED").unwrap();
+        let (_state, task) = test_task();
+        let raced_part = part_path.clone();
+        let outside_for_hook = outside.clone();
+        let replace_with_symlink = move || {
+            fs::remove_file(&raced_part).unwrap();
+            symlink(&outside_for_hook, &raced_part).unwrap();
+        };
+
+        let result =
+            finalize_part_file(&task, &part_path, &dest, 8, false, &replace_with_symlink).await;
+
+        assert!(result.unwrap_err().to_string().contains("校验失败"));
+        assert_eq!(fs::read(&dest).unwrap(), b"GGUFOLD!");
+        assert!(!fs::symlink_metadata(&dest)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(fs::read(&outside).unwrap(), b"OUTSIDE-UNCHANGED");
+        assert!(!part_path.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn promotion_failure_after_backup_restores_existing_valid_destination() {
+        let root = temp_dir("promotion-rollback-after-backup");
+        let candidate = root.join("model.part");
+        let dest = root.join("model.gguf");
+        fs::write(&candidate, b"GGUFNEW!").unwrap();
+        fs::write(&dest, b"GGUFOLD!").unwrap();
+
+        let result = replace_file(&candidate, &dest, 8, &no_op_promotion_hook, &|staged| {
+            fs::remove_file(staged).unwrap()
+        });
+
+        assert!(result.unwrap_err().contains("提升模型失败"));
+        assert_eq!(fs::read(&dest).unwrap(), b"GGUFOLD!");
+        assert!(managed_file_is_valid(&dest, 8));
         fs::remove_dir_all(root).unwrap();
     }
 

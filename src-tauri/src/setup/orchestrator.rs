@@ -25,6 +25,23 @@ fn begin_setup_snapshot<T>(
     Ok((lease, snapshot))
 }
 
+fn confirm_setup_ready(
+    active_backend: Result<InferenceBackend, String>,
+    runtime_ready: bool,
+    model_ready: bool,
+    emit_complete: impl FnOnce(),
+) -> Result<InferenceBackend, String> {
+    let active_backend = active_backend.map_err(|error| format!("无法启用推理后端：{error}"))?;
+    if !runtime_ready {
+        return Err("推理运行时尚未就绪，请重试。".to_string());
+    }
+    if !model_ready {
+        return Err("模型尚未就绪，请检查下载后重试。".to_string());
+    }
+    emit_complete();
+    Ok(active_backend)
+}
+
 pub async fn setup_environment(app: AppHandle) -> Result<SetupEnvironmentResult, String> {
     use crate::commands::get_device_info;
     use crate::model_cache::ModelCache;
@@ -111,33 +128,35 @@ pub async fn setup_environment(app: AppHandle) -> Result<SetupEnvironmentResult,
     let cache = ModelCache::new(&app)?;
     let paths = cache.resolve(settings.gguf_model_variant);
     let mlx = cache.resolve_mlx(Some(settings.mlx_model_id.as_str()));
-    let active = resolve_active_backend(settings.inference_backend, &app).ok();
-
-    emit_setup_progress(&app, "done", "done", "环境配置完成", 100);
-
     let runtime_ready = match settings.inference_backend {
         InferenceBackend::Mlx => mlx_runtime_ready(&app),
         InferenceBackend::Llama => resolve_llama_server(&app).is_some(),
     };
+    let active = resolve_active_backend(settings.inference_backend, &app);
+    let active_for_model = active.as_ref().copied();
+    let model_ready = active_for_model
+        .map(|value| {
+            if value == InferenceBackend::Mlx {
+                mlx_runtime_ready(&app) && mlx.is_ready()
+            } else {
+                models_ready_for_backend(value, &paths, &mlx)
+            }
+        })
+        .unwrap_or(false);
+    confirm_setup_ready(active, runtime_ready, model_ready, || {
+        emit_setup_progress(&app, "done", "done", "环境配置完成", 100);
+    })?;
 
     Ok(SetupEnvironmentResult {
         runtime_ready,
-        model_ready: active
-            .map(|value| {
-                if value == InferenceBackend::Mlx {
-                    mlx_runtime_ready(&app) && mlx.is_ready()
-                } else {
-                    models_ready_for_backend(value, &paths, &mlx)
-                }
-            })
-            .unwrap_or(false),
+        model_ready,
         shortcut: settings.shortcut,
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::begin_setup_snapshot;
+    use super::{begin_setup_snapshot, confirm_setup_ready};
     use crate::model_lifecycle::ModelLifecycleState;
     use crate::settings::InferenceBackend;
     use std::cell::Cell;
@@ -179,5 +198,38 @@ mod tests {
         let _settings_lease = lifecycle.begin_mutation().unwrap();
         configured_backend.set(InferenceBackend::Llama);
         assert_eq!(configured_backend.get(), InferenceBackend::Llama);
+    }
+
+    #[test]
+    fn backend_resolution_error_does_not_complete_setup() {
+        let completed = Cell::new(false);
+        let result = confirm_setup_ready(Err("MLX 未安装".to_string()), true, true, || {
+            completed.set(true)
+        });
+
+        assert!(result.unwrap_err().contains("无法启用推理后端"));
+        assert!(!completed.get());
+    }
+
+    #[test]
+    fn missing_runtime_does_not_complete_setup() {
+        let completed = Cell::new(false);
+        let result = confirm_setup_ready(Ok(InferenceBackend::Llama), false, true, || {
+            completed.set(true)
+        });
+
+        assert!(result.unwrap_err().contains("运行时"));
+        assert!(!completed.get());
+    }
+
+    #[test]
+    fn missing_model_does_not_complete_setup() {
+        let completed = Cell::new(false);
+        let result = confirm_setup_ready(Ok(InferenceBackend::Llama), true, false, || {
+            completed.set(true)
+        });
+
+        assert!(result.unwrap_err().contains("模型"));
+        assert!(!completed.get());
     }
 }
