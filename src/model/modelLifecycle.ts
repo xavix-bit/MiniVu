@@ -37,13 +37,13 @@ export function matchesActiveDownload(
     && event.variant === activeTask.variant;
 }
 
-export function formatModelStorage(bytes: number): string {
+export function formatModelStorage(bytes: number, fractionDigits = 1): string {
   const megabytes = bytes / (1024 * 1024);
   if (megabytes < 1024) {
-    return `${Math.round(megabytes)} MB`;
+    return `${Math.round(megabytes)} MiB`;
   }
   const gigabytes = megabytes / 1024;
-  return `${gigabytes.toFixed(1).replace(/\.0$/, "")} GB`;
+  return `${gigabytes.toFixed(fractionDigits).replace(/\.0+$/, "")} GiB`;
 }
 
 export function resolveModelPrimaryAction(

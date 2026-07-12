@@ -8,29 +8,25 @@ export const GGUF_MODEL_VARIANTS: Record<
     badge: string;
     description: string;
     modelBytes: number;
-    memoryHint: string;
   }
 > = {
   q4_k_m: {
-    label: "均衡",
+    label: "Q4 标准",
     badge: "推荐",
-    description: "下载最快，适合日常截图、翻译和问图。",
+    description: "4-bit 量化。占用最小，默认推荐。",
     modelBytes: 529_101_504,
-    memoryHint: "约 2 GB 内存",
   },
   q5_k_m: {
-    label: "清晰",
-    badge: "更稳",
-    description: "文字和细节更稳，体积只多一点。",
+    label: "Q5 高精度",
+    badge: "+46 MiB",
+    description: "5-bit 量化。保留更多权重精度。",
     modelBytes: 577_802_944,
-    memoryHint: "约 2.3 GB 内存",
   },
   q6_k: {
-    label: "高质量",
-    badge: "更准",
-    description: "适合复杂界面和更细的图像理解。",
+    label: "Q6 最高精度",
+    badge: "+96 MiB",
+    description: "6-bit 量化。三档中量化损失最少。",
     modelBytes: 629_548_224,
-    memoryHint: "约 2.6 GB 内存",
   },
 };
 

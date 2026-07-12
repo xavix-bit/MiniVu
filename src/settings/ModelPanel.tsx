@@ -12,7 +12,7 @@ import {
 import { modelClient } from "../model/modelClient";
 import type { DownloadTaskSnapshot, ModelStatusResponse } from "../model/types";
 import { resolveGgufPercent, resolveMlxPercent } from "../shared/downloadProgress";
-import { GGUF_MODEL_VARIANTS } from "../shared/modelConstants";
+import { EXPECTED_MMPROJ_BYTES, GGUF_MODEL_VARIANTS } from "../shared/modelConstants";
 import type { GgufModelVariant } from "./settingsStore";
 
 type ModelPanelProps = {
@@ -655,6 +655,9 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
 
       {!isMlx ? (
         <section className="surface model-variant-picker" aria-label="模型档位">
+          <p className="model-variant-picker__note">
+            三档都是 MiniCPM-V 4.6，只是量化精度不同。首次安装包含一份三档共用的 1.03 GiB 视觉组件。
+          </p>
           {(Object.entries(GGUF_MODEL_VARIANTS) as Array<[GgufModelVariant, (typeof GGUF_MODEL_VARIANTS)[GgufModelVariant]]>).map(([variant, spec]) => {
             const selected = variant === selectedVariant;
             const stateLabel = status ? variantStateLabel(status, variant) : "读取中";
@@ -674,7 +677,10 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
                 <span className="model-variant-option__head"><strong>{spec.label}</strong><span>{spec.badge}</span></span>
                 <span className={`model-variant-option__state${stateLabel === "当前使用" ? " is-current" : ""}`}>{stateLabel}</span>
                 <span className="model-variant-option__desc">{spec.description}</span>
-                <span className="model-variant-option__meta">{formatModelStorage(spec.modelBytes)} · {spec.memoryHint}</span>
+                <span className="model-variant-option__meta">
+                  <span>主模型 {formatModelStorage(spec.modelBytes)}</span>
+                  <span>首次安装 {formatModelStorage(spec.modelBytes + EXPECTED_MMPROJ_BYTES, 2)}</span>
+                </span>
               </button>
             );
           })}

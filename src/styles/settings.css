@@ -2262,6 +2262,14 @@
   padding: 12px;
 }
 
+.model-variant-picker__note {
+  grid-column: 1 / -1;
+  margin: 0 2px 2px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .model-variant-option {
   display: grid;
   gap: 8px;
@@ -2339,6 +2347,8 @@
 }
 
 .model-variant-option__meta {
+  display: grid;
+  gap: 2px;
   margin-top: auto;
   color: #728094;
   font-size: 12px;

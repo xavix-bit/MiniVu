@@ -106,8 +106,9 @@ describe("claimPendingDownload", () => {
 
 describe("formatModelStorage", () => {
   it("formats GGUF storage in natural binary units", () => {
-    expect(formatModelStorage(0)).toBe("0 MB");
-    expect(formatModelStorage(768 * 1024 * 1024)).toBe("768 MB");
-    expect(formatModelStorage(1.5 * 1024 * 1024 * 1024)).toBe("1.5 GB");
+    expect(formatModelStorage(0)).toBe("0 MiB");
+    expect(formatModelStorage(768 * 1024 * 1024)).toBe("768 MiB");
+    expect(formatModelStorage(1.5 * 1024 * 1024 * 1024)).toBe("1.5 GiB");
+    expect(formatModelStorage(1.525 * 1024 * 1024 * 1024, 2)).toBe("1.52 GiB");
   });
 });

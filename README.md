@@ -26,9 +26,11 @@ The built-in Metal backend supports three MiniCPM-V 4.6 GGUF variants:
 
 | Variant | Product label | Main model | Main model + shared mmproj |
 |---|---|---:|---:|
-| Q4_K_M | 均衡 | 529,101,504 bytes | about 1.53 GiB |
-| Q5_K_M | 清晰 | 577,802,944 bytes | about 1.57 GiB |
-| Q6_K | 高质量 | 629,548,224 bytes | about 1.62 GiB |
+| Q4_K_M | Q4 标准 | 505 MiB | about 1.53 GiB |
+| Q5_K_M | Q5 高精度 | 551 MiB | about 1.57 GiB |
+| Q6_K | Q6 最高精度 | 600 MiB | about 1.62 GiB |
+
+All three entries use the same MiniCPM-V 4.6 model and features. They differ only in quantization precision. The totals include the shared 1.03 GiB vision projector; after it is installed, switching variants downloads only the main model shown above.
 
 Only one variant is active. A downloaded file must be a regular GGUF file with the exact expected size and header before MiniVu can use it.
 

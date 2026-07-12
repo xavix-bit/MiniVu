@@ -298,8 +298,8 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
             {deviceInfo && deviceInfo.memoryGb < 16
               ? "内存不足 16 GB，建议关闭。"
               : isMlx
-                ? "首次提问更快，约占 2–3 GB 内存。"
-                : "首次提问更快，约占 2 GB 内存。"}
+                ? "启动后会常驻内存；实际占用随模型和对话长度变化。"
+                : "启动后会常驻内存；实际占用随模型档位、图片和对话长度变化。"}
           </span>
         </label>
       </section>
