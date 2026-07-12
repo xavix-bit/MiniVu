@@ -33,13 +33,49 @@ jobs:
         run: npm test
 
       - name: Build Tauri app
-        run: npm run tauri build
+        run: npm run tauri build -- --bundles app
 
-      - name: Upload DMG
+      - name: Sign and package macOS app
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          app_path="src-tauri/target/release/bundle/macos/MiniVu.app"
+          output_dir="src-tauri/target/release/bundle/dmg"
+          version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          architecture="$(uname -m)"
+          package_name="MiniVu_${version}_${architecture}"
+
+          test -d "$app_path"
+          mkdir -p "$output_dir"
+
+          # CI has no Developer ID certificate. Seal the complete bundle so the
+          # downloadable build is internally consistent and can be opened via
+          # macOS's explicit Open action.
+          codesign --force --deep --sign - --timestamp=none "$app_path"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$app_path" "$output_dir/${package_name}.app.zip"
+
+          staging_dir="$(mktemp -d)"
+          trap 'rm -rf "$staging_dir"' EXIT
+          ditto "$app_path" "$staging_dir/MiniVu.app"
+          ln -s /Applications "$staging_dir/Applications"
+          hdiutil create \
+            -volname MiniVu \
+            -srcfolder "$staging_dir" \
+            -ov \
+            -format UDZO \
+            "$output_dir/${package_name}.dmg"
+
+      - name: Upload macOS installers
         uses: actions/upload-artifact@v4
         with:
-          name: MiniVu-macos-dmg
-          path: src-tauri/target/release/bundle/dmg/*.dmg
+          name: MiniVu-macos-arm64
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/dmg/*.app.zip
           if-no-files-found: error
 
   publish:
@@ -49,7 +85,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: MiniVu-macos-dmg
+          name: MiniVu-macos-arm64
           path: dist
 
       - uses: softprops/action-gh-release@v2
