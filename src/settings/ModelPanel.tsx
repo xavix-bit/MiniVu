@@ -12,7 +12,13 @@ import {
 import { modelClient } from "../model/modelClient";
 import type { DownloadTaskSnapshot, ModelStatusResponse } from "../model/types";
 import { resolveGgufPercent, resolveMlxPercent } from "../shared/downloadProgress";
-import { EXPECTED_MMPROJ_BYTES, GGUF_MODEL_VARIANTS } from "../shared/modelConstants";
+import {
+  EXPECTED_MMPROJ_BYTES,
+  GGUF_MMPROJ_FILENAME,
+  GGUF_MODEL_DISPLAY_NAME,
+  GGUF_MODEL_REPOSITORY,
+  GGUF_MODEL_VARIANTS,
+} from "../shared/modelConstants";
 import type { GgufModelVariant } from "./settingsStore";
 
 type ModelPanelProps = {
@@ -73,10 +79,10 @@ const FILE_LABELS: Record<FileKey, string> = {
   mmproj: "图片理解组件",
 };
 
-const VARIANT_COPY: Record<GgufModelVariant, { label: string; description: string; technicalLabel: string }> = {
-  q4_k_m: { label: "标准", description: "下载更快，占用空间最少，推荐大多数设备。", technicalLabel: "Q4 · q4_k_m" },
-  q5_k_m: { label: "高精度", description: "保留更多细节，空间占用适中。", technicalLabel: "Q5 · q5_k_m" },
-  q6_k: { label: "最高精度", description: "三档中细节保留最多，占用空间也更大。", technicalLabel: "Q6 · q6_k" },
+const VARIANT_COPY: Record<GgufModelVariant, { label: string; description: string }> = {
+  q4_k_m: { label: "标准", description: "下载更快，占用空间最少，推荐大多数设备。" },
+  q5_k_m: { label: "高精度", description: "保留更多细节，空间占用适中。" },
+  q6_k: { label: "最高精度", description: "三档中细节保留最多，占用空间也更大。" },
 };
 
 function safeModelError(error: unknown, fallback = "操作未完成，请重试。"): string {
@@ -747,37 +753,47 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
             const selected = variant === selectedVariant;
             const stateLabel = status ? variantStateLabel(status, variant) : "读取中";
             const copy = VARIANT_COPY[variant];
+            const selectionDisabled = operation !== "idle" || activeTask !== null;
             return (
-              <button
+              <article
                 key={variant}
-                type="button"
-                className={`model-variant-option${selected ? " is-selected" : ""}`}
-                aria-pressed={selected}
-                disabled={operation !== "idle" || activeTask !== null}
-                onClick={() => {
-                  setSelectedVariant(variant);
-                  setMessage("");
-                  setFileProgress(createIdleProgress());
-                }}
+                className={`model-variant-card${selected ? " is-selected" : ""}`}
               >
-                <span className="model-variant-option__head"><strong>{copy.label}</strong><span>{spec.badge}</span></span>
-                <span className={`model-variant-option__state${stateLabel === "当前使用" ? " is-current" : ""}`}>{stateLabel}</span>
-                <span className="model-variant-option__desc">{copy.description}</span>
-                <span className="model-variant-option__meta">
-                  <span>下载大小 {formatModelStorage(spec.modelBytes)}</span>
-                  <span>首次安装 {formatModelStorage(spec.modelBytes + EXPECTED_MMPROJ_BYTES, 2)}</span>
-                </span>
-              </button>
+                <button
+                  type="button"
+                  className="model-variant-option"
+                  aria-pressed={selected}
+                  disabled={selectionDisabled}
+                  onClick={() => {
+                    setSelectedVariant(variant);
+                    setMessage("");
+                    setFileProgress(createIdleProgress());
+                  }}
+                >
+                  <span className="model-variant-option__head"><strong>{copy.label}</strong><span>{spec.badge}</span></span>
+                  <span className={`model-variant-option__state${stateLabel === "当前使用" ? " is-current" : ""}`}>{stateLabel}</span>
+                  <span className="model-variant-option__identity">
+                    <strong>{GGUF_MODEL_DISPLAY_NAME}</strong>
+                    <span>{spec.quantization}</span>
+                  </span>
+                  <span className="model-variant-option__desc">{copy.description}</span>
+                  <span className="model-variant-option__meta">
+                    <span>下载大小 {formatModelStorage(spec.modelBytes)}</span>
+                    <span>首次安装 {formatModelStorage(spec.modelBytes + EXPECTED_MMPROJ_BYTES, 2)}</span>
+                  </span>
+                </button>
+                <details className="model-variant-details">
+                  <summary>查看模型详情</summary>
+                  <dl>
+                    <div><dt>仓库</dt><dd>{GGUF_MODEL_REPOSITORY}</dd></div>
+                    <div><dt>完整文件名</dt><dd>{spec.filename}</dd></div>
+                    <div><dt>量化</dt><dd>{spec.bitDepth}-bit · {spec.quantization}</dd></div>
+                    <div><dt>图片理解组件</dt><dd>{GGUF_MMPROJ_FILENAME} · {formatModelStorage(EXPECTED_MMPROJ_BYTES, 2)}</dd></div>
+                  </dl>
+                </details>
+              </article>
             );
           })}
-          <details className="settings-advanced">
-            <summary>技术详情</summary>
-            <ul>
-              {(Object.keys(VARIANT_COPY) as GgufModelVariant[]).map((variant) => (
-                <li key={variant}>{VARIANT_COPY[variant].label}：{VARIANT_COPY[variant].technicalLabel}</li>
-              ))}
-            </ul>
-          </details>
         </section>
       ) : null}
 

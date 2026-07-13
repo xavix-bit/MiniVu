@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { cleanup } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -79,13 +79,19 @@ afterEach(() => {
 });
 
 describe("ModelPanel", () => {
-  it("shows main-model and first-install sizes in binary units", async () => {
+  it("shows the real model name, quantization, and binary sizes on every variant card", async () => {
     render(<ModelPanel />);
 
     const q4 = await screen.findByRole("button", { name: /^标准/ });
     const q5 = screen.getByRole("button", { name: /^高精度/ });
     const q6 = screen.getByRole("button", { name: /^最高精度/ });
 
+    for (const option of [q4, q5, q6]) {
+      expect(option).toHaveTextContent("OpenBMB MiniCPM-V 4.6");
+    }
+    expect(q4).toHaveTextContent("Q4_K_M");
+    expect(q5).toHaveTextContent("Q5_K_M");
+    expect(q6).toHaveTextContent("Q6_K");
     expect(q4).toHaveTextContent("下载大小 505 MiB");
     expect(q4).toHaveTextContent("首次安装 1.53 GiB");
     expect(q5).toHaveTextContent("下载大小 551 MiB");
@@ -93,14 +99,47 @@ describe("ModelPanel", () => {
     expect(q6).toHaveTextContent("下载大小 600 MiB");
     expect(q6).toHaveTextContent("首次安装 1.62 GiB");
     expect(q4).not.toHaveTextContent("内存");
+  });
 
-    const technicalDetails = screen.getByText("技术详情").closest("details");
-    expect(technicalDetails).not.toHaveAttribute("open");
-    expect(technicalDetails).toHaveTextContent("Q4");
+  it("keeps per-card model details closed and shows the complete Q4 metadata", async () => {
+    render(<ModelPanel />);
 
-    const visibleCopy = document.body.cloneNode(true) as HTMLElement;
-    visibleCopy.querySelectorAll("details:not([open]) > :not(summary)").forEach((node) => node.remove());
-    expect(visibleCopy.textContent).not.toMatch(/Metal|GGUF|MLX|llama|sidecar|runtime|推理引擎|权重|视觉投影器/i);
+    const q4 = await screen.findByRole("button", { name: /^标准/ });
+    const cards = screen.getAllByRole("article");
+    expect(cards).toHaveLength(3);
+    for (const card of cards) {
+      const details = within(card).getByText("查看模型详情").closest("details");
+      expect(details).not.toHaveAttribute("open");
+    }
+
+    const q4Card = q4.closest("article");
+    expect(q4Card).not.toBeNull();
+    const q4Details = within(q4Card as HTMLElement).getByText("查看模型详情").closest("details");
+    expect(within(q4Details as HTMLElement).getByText("仓库").closest("div"))
+      .toHaveTextContent("openbmb/MiniCPM-V-4.6-gguf");
+    expect(within(q4Details as HTMLElement).getByText("完整文件名").closest("div"))
+      .toHaveTextContent("MiniCPM-V-4_6-Q4_K_M.gguf");
+    expect(within(q4Details as HTMLElement).getByText("量化").closest("div"))
+      .toHaveTextContent("4-bit · Q4_K_M");
+    expect(within(q4Details as HTMLElement).getByText("图片理解组件").closest("div"))
+      .toHaveTextContent("mmproj-model-f16.gguf · 1.03 GiB");
+    expect(screen.queryByText("技术详情")).not.toBeInTheDocument();
+  });
+
+  it("does not change the selected variant when Q5 model details are opened", async () => {
+    render(<ModelPanel />);
+
+    const q4 = await screen.findByRole("button", { name: /^标准/ });
+    const q5 = screen.getByRole("button", { name: /^高精度/ });
+    const q5Card = q5.closest("article");
+    expect(q5Card).not.toBeNull();
+
+    const q5Details = within(q5Card as HTMLElement).getByText("查看模型详情").closest("details");
+    fireEvent.click(within(q5Details as HTMLElement).getByText("查看模型详情"));
+
+    expect(q5Details).toHaveAttribute("open");
+    expect(q4).toHaveAttribute("aria-pressed", "true");
+    expect(q5).toHaveAttribute("aria-pressed", "false");
   });
 
   it("keeps the standard content summary visible while download progress is idle", async () => {
