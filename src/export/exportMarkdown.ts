@@ -1,4 +1,5 @@
 import type { ChatMessage } from "../chat/useImageSession";
+import { publicProcessingLabel } from "./modelLabel";
 
 export type SessionExport = {
   title: string;
@@ -15,9 +16,11 @@ function escapeFence(value: string): string {
 export function renderSessionMarkdown(session: SessionExport): string {
   const assistantModelVersions = session.messages
     .filter((message) => message.role === "assistant")
-    .map((message) => message.modelVersion ?? session.modelVersion);
+    .map((message) => publicProcessingLabel(message.modelVersion ?? session.modelVersion));
   const modelVersions = [...new Set(
-    assistantModelVersions.length > 0 ? assistantModelVersions : [session.modelVersion],
+    assistantModelVersions.length > 0
+      ? assistantModelVersions
+      : [publicProcessingLabel(session.modelVersion)],
   )];
   const mixedModels = modelVersions.length > 1;
   const messages = session.messages
@@ -25,7 +28,7 @@ export function renderSessionMarkdown(session: SessionExport): string {
       const label = message.role === "user"
         ? "用户"
         : mixedModels
-          ? `MiniVu（\`${message.modelVersion ?? session.modelVersion}\`）`
+          ? `MiniVu（\`${publicProcessingLabel(message.modelVersion ?? session.modelVersion)}\`）`
           : "MiniVu";
       return `**${label}：** ${message.content}`;
     })
@@ -34,7 +37,7 @@ export function renderSessionMarkdown(session: SessionExport): string {
   return [
     `# ${session.title}`,
     "",
-    `模型：${modelVersions.map((modelVersion) => `\`${modelVersion}\``).join("、")}`,
+    `处理方式：${modelVersions.map((modelVersion) => `\`${modelVersion}\``).join("、")}`,
     "",
     `![当前图片](${session.imageFilename})`,
     "",

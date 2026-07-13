@@ -59,7 +59,7 @@ beforeEach(() => {
 
 describe("modelLabelForExport", () => {
   it("uses the active GGUF variant", () => {
-    expect(modelLabelForExport(status)).toBe("MiniCPM-V 4.6 GGUF · Q5");
+    expect(modelLabelForExport(status)).toBe("MiniVu 本机处理 · 高精度");
   });
 
   it("uses the configured MLX model id", () => {
@@ -67,7 +67,7 @@ describe("modelLabelForExport", () => {
       ...status,
       inferenceBackend: "mlx",
       mlxModelId: "mlx-community/MiniCPM-V-4.6-4bit",
-    })).toBe("mlx-community/MiniCPM-V-4.6-4bit");
+    })).toBe("兼容处理");
   });
 
   it("does not disguise a legacy custom GGUF as a managed variant", () => {
@@ -75,7 +75,7 @@ describe("modelLabelForExport", () => {
       ...status,
       modelManaged: false,
       modelPath: "/Users/private/models/acme-vision.gguf",
-    })).toBe("Custom GGUF · acme-vision.gguf");
+    })).toBe("自定义处理");
   });
 
   it("does not expose a legacy local MLX path", () => {
@@ -84,7 +84,7 @@ describe("modelLabelForExport", () => {
       inferenceBackend: "mlx",
       mlxModelId: "/Users/private/models/acme-mlx",
       mlxModelLocal: true,
-    })).toBe("Custom MLX · acme-mlx");
+    })).toBe("自定义处理");
   });
 
   it("recognizes a local MLX path from an older status payload", () => {
@@ -93,7 +93,7 @@ describe("modelLabelForExport", () => {
       ...legacyStatus,
       inferenceBackend: "mlx",
       mlxModelId: "C:\\private\\models\\legacy-mlx",
-    })).toBe("Custom MLX · legacy-mlx");
+    })).toBe("自定义处理");
   });
 });
 
@@ -103,7 +103,7 @@ describe("exportCurrentSession", () => {
 
     expect(invokeMock).toHaveBeenCalledWith("export_session", {
       request: expect.objectContaining({
-        markdown: expect.stringContaining("模型：`MiniVu local model`"),
+        markdown: expect.stringContaining("处理方式：`MiniVu 本机处理`"),
       }),
     });
   });
@@ -119,7 +119,7 @@ describe("exportCurrentSession", () => {
 
     expect(invokeMock).toHaveBeenCalledWith("export_session", {
       request: expect.objectContaining({
-        markdown: expect.stringContaining("模型：`MiniVu local model`"),
+        markdown: expect.stringContaining("处理方式：`MiniVu 本机处理`"),
       }),
     });
   });
@@ -129,7 +129,7 @@ describe("exportCurrentSession", () => {
 
     expect(invokeMock).toHaveBeenCalledWith("export_session", {
       request: expect.objectContaining({
-        markdown: expect.stringContaining("模型：`MiniCPM-V 4.6 GGUF · Q4`"),
+        markdown: expect.stringContaining("处理方式：`MiniVu 本机处理 · 标准`"),
       }),
     });
   });
@@ -151,7 +151,7 @@ describe("exportCurrentSession", () => {
     expect(invokeMock).toHaveBeenCalledWith("export_session", {
       request: expect.objectContaining({
         markdown: expect.stringContaining(
-          "模型：`MiniCPM-V 4.6 GGUF · Q4`、`MiniCPM-V 4.6 GGUF · Q5`",
+          "处理方式：`MiniVu 本机处理 · 标准`、`MiniVu 本机处理 · 高精度`",
         ),
       }),
     });

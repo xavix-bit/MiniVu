@@ -19,7 +19,8 @@ describe("renderSessionMarkdown", () => {
     expect(markdown).toContain("Error: connection refused");
     expect(markdown).toContain("**用户：** 哪里出了问题？");
     expect(markdown).toContain("**MiniVu：** 服务拒绝了连接。");
-    expect(markdown).toContain("模型：`MiniCPM-V 4.6 GGUF · Q4`");
+    expect(markdown).toContain("处理方式：`MiniVu 本机处理 · 标准`");
+    expect(markdown).not.toContain("GGUF");
   });
 
   it("identifies the model used for each assistant turn in a mixed-model session", () => {
@@ -45,13 +46,13 @@ describe("renderSessionMarkdown", () => {
     });
 
     expect(markdown).toContain(
-      "模型：`MiniCPM-V 4.6 GGUF · Q4`、`MiniCPM-V 4.6 GGUF · Q5`",
+      "处理方式：`MiniVu 本机处理 · 标准`、`MiniVu 本机处理 · 高精度`",
     );
     expect(markdown).toContain(
-      "**MiniVu（`MiniCPM-V 4.6 GGUF · Q4`）：** Q4 的回答。",
+      "**MiniVu（`MiniVu 本机处理 · 标准`）：** Q4 的回答。",
     );
     expect(markdown).toContain(
-      "**MiniVu（`MiniCPM-V 4.6 GGUF · Q5`）：** Q5 的回答。",
+      "**MiniVu（`MiniVu 本机处理 · 高精度`）：** Q5 的回答。",
     );
   });
 });
