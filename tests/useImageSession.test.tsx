@@ -380,4 +380,94 @@ describe("image session state", () => {
       await answerPromise;
     });
   });
+
+  it("rejects an in-flight image read that finishes after answering starts", async () => {
+    let finishAnswer: (() => void) | undefined;
+    invokeMock.mockImplementation(async (command, arguments_) => {
+      if (command === "get_model_status") return structuredClone(status);
+      if (command === "recognize_text_from_image_data_url") return { text: "本地文字" };
+      if (command === "ask_image") {
+        const requestId = (arguments_ as { requestId: string }).requestId;
+        await new Promise<void>((resolve) => {
+          finishAnswer = () => {
+            modelStreamHandler?.({
+              payload: { text: "完成。", done: false, requestId, modelLabel: "MiniCPM-V" },
+            });
+            modelStreamHandler?.({
+              payload: { text: "", done: true, requestId, modelLabel: "MiniCPM-V" },
+            });
+            resolve();
+          };
+        });
+      }
+      return undefined;
+    });
+    const { result } = renderHook(() => useImageSession());
+    await act(async () => {
+      await result.current.setImage({ name: "first.png", dataUrl: "data:image/png;base64,first" });
+    });
+    const finishInFlightRead = result.current.setImage;
+
+    let answerPromise: Promise<void> | undefined;
+    act(() => {
+      answerPromise = result.current.ask("继续分析");
+    });
+    await waitFor(() => expect(result.current.isAnswering).toBe(true));
+
+    await act(async () => {
+      expect(await finishInFlightRead({
+        name: "late.png",
+        dataUrl: "data:image/png;base64,late",
+      })).toBe(false);
+    });
+    expect(result.current.state.image?.name).toBe("first.png");
+
+    await act(async () => {
+      finishAnswer?.();
+      await answerPromise;
+    });
+  });
+
+  it("ignores an older OCR response that arrives after the newest image result", async () => {
+    const resolveOcr: Array<(value: { text: string }) => void> = [];
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_model_status") return structuredClone(status);
+      if (command === "recognize_text_from_image_data_url") {
+        return new Promise<{ text: string }>((resolve) => resolveOcr.push(resolve));
+      }
+      return undefined;
+    });
+    const { result } = renderHook(() => useImageSession());
+
+    let firstOcr: Promise<boolean> | undefined;
+    act(() => {
+      firstOcr = result.current.setImage({
+        name: "first.png",
+        dataUrl: "data:image/png;base64,first",
+      });
+    });
+    await waitFor(() => expect(resolveOcr).toHaveLength(1));
+
+    let secondOcr: Promise<boolean> | undefined;
+    act(() => {
+      secondOcr = result.current.setImage({
+        name: "second.png",
+        dataUrl: "data:image/png;base64,second",
+      });
+    });
+    await waitFor(() => expect(resolveOcr).toHaveLength(2));
+
+    await act(async () => {
+      resolveOcr[1]({ text: "第二张文字" });
+      await secondOcr;
+    });
+    await act(async () => {
+      resolveOcr[0]({ text: "过期的第一张文字" });
+      await firstOcr;
+    });
+
+    expect(result.current.state.image?.name).toBe("second.png");
+    expect(result.current.state.ocrText).toBe("第二张文字");
+    expect(result.current.ocrStatus).toBe("recognized");
+  });
 });
