@@ -2057,6 +2057,32 @@ html.quick-panel-window[data-theme="light"] .image2-start-actions {
   grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
 }
 
+html.quick-panel-window .image2-start-actions .drop-zone__secondary,
+html.quick-panel-window[data-theme="dark"] .image2-start-actions .drop-zone__secondary,
+html.quick-panel-window[data-theme="light"] .image2-start-actions .drop-zone__secondary {
+  border-color: #d8e2ee !important;
+  background: #ffffff !important;
+  color: #526176 !important;
+  opacity: 1 !important;
+}
+
+html.quick-panel-window .image2-start-actions .drop-zone__secondary:hover:not(:disabled),
+html.quick-panel-window[data-theme="dark"] .image2-start-actions .drop-zone__secondary:hover:not(:disabled),
+html.quick-panel-window[data-theme="light"] .image2-start-actions .drop-zone__secondary:hover:not(:disabled) {
+  border-color: #9eb7f5 !important;
+  background: #eef4ff !important;
+  color: #2563eb !important;
+}
+
+html.quick-panel-window .image2-empty-flow .drop-zone__icon,
+html.quick-panel-window[data-theme="dark"] .image2-empty-flow .drop-zone__icon,
+html.quick-panel-window[data-theme="light"] .image2-empty-flow .drop-zone__icon {
+  border-color: #9eb7f5 !important;
+  background: #ffffff !important;
+  color: #2563eb !important;
+  box-shadow: 0 6px 18px rgba(37, 99, 235, 0.12) !important;
+}
+
 .image2-start-actions .drop-zone__capture {
   grid-column: 1 / -1;
 }
