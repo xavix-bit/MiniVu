@@ -82,6 +82,23 @@ describe("natural product copy", () => {
     expect(screen.getByText("高级设置").closest("details")).not.toHaveAttribute("open");
   });
 
+  it("hides standard-mode download sources when compatibility mode is selected", async () => {
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "load_app_settings") {
+        return { ...createDefaultSettings(), inferenceBackend: "mlx" };
+      }
+      if (command === "get_device_info") {
+        return { platform: "macOS", isAppleSilicon: true, memoryGb: 16, recommended: true, message: "ready" };
+      }
+      return undefined;
+    });
+    render(<SettingsPanel />);
+
+    await screen.findByText("兼容模式", { selector: "strong" });
+    expect(screen.queryByText("下载设置")).not.toBeInTheDocument();
+    expect(screen.queryByText("下载来源")).not.toBeInTheDocument();
+  });
+
   it("explains privacy with user-facing capability names", () => {
     const { container } = render(<PrivacyNotice />);
     expect(container).toHaveTextContent("文字识别");

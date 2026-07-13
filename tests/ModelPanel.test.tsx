@@ -114,7 +114,7 @@ describe("ModelPanel", () => {
     expect(screen.getByLabelText("下载进度")).toBeEmptyDOMElement();
   });
 
-  it("shows separate component and estimated storage summaries in compatibility mode", async () => {
+  it("shows separate component and system-managed storage summaries in compatibility mode", async () => {
     const compatibleStatus: ModelStatusResponse = {
       ...structuredClone(status),
       inferenceBackend: "mlx",
@@ -134,12 +134,32 @@ describe("ModelPanel", () => {
     const summary = await screen.findByLabelText("内容摘要");
     expect(Array.from(summary.querySelectorAll(".model-file-list__label"), (node) => node.textContent))
       .toEqual(["问答组件", "图片理解组件", "已用空间"]);
-    expect(summary).toHaveTextContent("约 2.1 GiB");
-    expect(summary).toHaveTextContent("兼容模式估算");
+    expect(summary).toHaveTextContent("由系统管理");
+    expect(summary).toHaveTextContent("系统按需管理");
+    expect(summary).not.toHaveTextContent("2.1 GiB");
     expect(screen.getByText("技术详情").closest("details")).not.toHaveAttribute("open");
     const visibleCopy = document.body.cloneNode(true) as HTMLElement;
     visibleCopy.querySelectorAll("details:not([open]) > :not(summary)").forEach((node) => node.remove());
     expect(visibleCopy.textContent).not.toMatch(/Metal|GGUF|MLX|llama|sidecar|runtime|推理引擎|权重|视觉投影器/i);
+  });
+
+  it("shows undownloaded storage state in compatibility mode", async () => {
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_model_status") return {
+        ...structuredClone(status),
+        inferenceBackend: "mlx",
+        activeBackend: "mlx",
+        modelReady: false,
+        mlxRuntimeAvailable: true,
+        mlxModelReady: false,
+        modelStorageBytes: 0,
+      };
+      if (command === "get_model_download_status") return null;
+      return undefined;
+    });
+    render(<ModelPanel />);
+
+    expect(await screen.findByLabelText("内容摘要")).toHaveTextContent("已用空间未下载");
   });
 
   it("stages a variant selection without saving settings", async () => {
@@ -233,6 +253,9 @@ describe("ModelPanel", () => {
     fireEvent.click(await screen.findByRole("button", { name: "取消下载" }, { timeout: 1_200 }));
 
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("cancel_model_download", { taskId: 42 }));
+    installResult.reject(new Error("模型下载已取消"));
+    expect(await screen.findByText("已暂停，可继续下载")).toBeInTheDocument();
+    expect(screen.queryByText("下载状态已变化，请刷新后重试。")).not.toBeInTheDocument();
   });
 
   it("shows a health failure after download completion and refreshes inventory", async () => {
@@ -366,6 +389,29 @@ describe("ModelPanel", () => {
 
     expect(screen.getByRole("button", { name: "正在取消…" })).toBeDisabled();
     finishCancel?.();
+  });
+
+  it("shows a natural error and refreshes state when cancellation is rejected", async () => {
+    let downloadStatusCalls = 0;
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_model_status") return structuredClone(status);
+      if (command === "get_model_download_status") {
+        downloadStatusCalls += 1;
+        return downloadStatusCalls === 1 ? structuredClone(activeDownload) : null;
+      }
+      if (command === "cancel_model_download") {
+        throw new Error("cancel rejected: task 41 is no longer active");
+      }
+      return undefined;
+    });
+    render(<ModelPanel />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "取消下载" }));
+
+    expect(await screen.findByText("无法取消，下载状态可能已变化，已为你刷新。")).toBeInTheDocument();
+    expect(screen.queryByText(/cancel rejected|task 41/i)).not.toBeInTheDocument();
+    await waitFor(() => expect(downloadStatusCalls).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "取消下载" })).not.toBeInTheDocument());
   });
 
   it("requires inline confirmation before removing local GGUF models", async () => {
@@ -597,7 +643,7 @@ describe("ModelPanel", () => {
   });
 
   it.each([
-    ["模型下载已取消", "is-canceled", "已暂停，可继续下载"],
+    ["模型下载已取消", "is-failed", "下载失败"],
     ["网络不可用", "is-failed", "下载失败"],
   ])("keeps terminal catch ownership on mmproj: %s", async (error, className, detail) => {
     let installStarted = false;
@@ -822,7 +868,7 @@ describe("ModelPanel", () => {
   });
 
   it.each([
-    ["模型下载已取消", "已暂停，可继续下载"],
+    ["模型下载已取消", "下载失败"],
     ["网络不可用", "下载失败"],
   ])("sets terminal progress when install rejects without an event: %s", async (error, detail) => {
     invokeMock.mockImplementation(async (command) => {

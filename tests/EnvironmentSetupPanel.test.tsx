@@ -188,4 +188,27 @@ describe("EnvironmentSetupPanel", () => {
     expect(screen.queryByText(/HTTP 500|stderr|task id|\/Users\/private/i)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
   });
+
+  it("runs setup again and clears the previous error when retry is clicked", async () => {
+    let setupCalls = 0;
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_model_status") return structuredClone(modelOnlyStatus);
+      if (command === "get_environment_status") return structuredClone(environmentWithoutRuntime);
+      if (command === "setup_environment") {
+        setupCalls += 1;
+        if (setupCalls === 1) throw new Error("network failed");
+        return new Promise(() => undefined);
+      }
+      return undefined;
+    });
+    render(<EnvironmentSetupPanel showWelcome />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /开始设置/ }));
+    await screen.findByText("设置未完成，请检查网络和可用空间后重试。");
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+
+    await waitFor(() => expect(setupCalls).toBe(2));
+    expect(screen.queryByText("设置未完成，请检查网络和可用空间后重试。")).not.toBeInTheDocument();
+    expect(screen.getByText("下载中…")).toBeInTheDocument();
+  });
 });

@@ -440,7 +440,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
       {installError ? <p className="onboarding-error">{installError}</p> : null}
 
       <div className="setup-panel__actions">
-        {phase === "idle" || phase === "error" ? (
+        {phase === "idle" ? (
           <button type="button" className="settings-btn settings-btn--primary" onClick={() => void runSetup()}>
             开始设置（约需 1.6 GiB）
           </button>
@@ -449,7 +449,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
         {phase === "running" ? <p className="setup-panel__running-hint">下载中…</p> : null}
 
         {phase === "error" ? (
-          <button type="button" className="settings-btn settings-btn--secondary" onClick={() => setPhase("idle")}>
+          <button type="button" className="settings-btn settings-btn--primary" onClick={() => void runSetup()}>
             重试
           </button>
         ) : null}

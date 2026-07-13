@@ -307,7 +307,8 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
         </label>
       </section>
 
-      <section className="settings-section">
+      {!isMlx ? (
+        <section className="settings-section">
           <h2 className="settings-section__title">下载设置</h2>
           <div className="settings-field">
             <span>下载来源</span>
@@ -368,6 +369,7 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
             {benchmarkError ? <p className="onboarding-error">{benchmarkError}</p> : null}
           </div>
         </section>
+      ) : null}
 
       <div className="settings-form__footer">
         <button type="submit" className="settings-btn settings-btn--primary">
