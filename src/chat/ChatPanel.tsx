@@ -194,8 +194,8 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
       if (path) {
         setNotice(`已导出到：${path}`);
       }
-    } catch (err) {
-      setNotice(`导出失败：${String(err)}`);
+    } catch {
+      setNotice("导出未完成，请重试");
     }
   }
 

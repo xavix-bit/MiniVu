@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatPanel } from "../src/chat/ChatPanel";
 import { useImageSession } from "../src/chat/useImageSession";
+import { exportCurrentSession } from "../src/export/exportSession";
 import { captureScreenRegion, isCaptureCancelled } from "../src/image/captureScreen";
 
 vi.mock("../src/chat/useImageSession", () => ({ useImageSession: vi.fn() }));
@@ -24,6 +25,7 @@ vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ writeText: vi.fn() }));
 const useImageSessionMock = vi.mocked(useImageSession);
 const captureScreenRegionMock = vi.mocked(captureScreenRegion);
 const isCaptureCancelledMock = vi.mocked(isCaptureCancelled);
+const exportCurrentSessionMock = vi.mocked(exportCurrentSession);
 
 function session(overrides: Record<string, unknown> = {}) {
   return {
@@ -128,5 +130,24 @@ describe("ChatPanel", () => {
 
     expect(await screen.findByText("未能截图，请重试")).toBeInTheDocument();
     expect(document.body.textContent).not.toContain("/private/tmp");
+  });
+
+  it("does not expose export errors", async () => {
+    useImageSessionMock.mockReturnValue(session({
+      state: {
+        image: { name: "screen.png", dataUrl: "data:image/png;base64,abc" },
+        ocrText: "",
+        messages: [],
+      },
+      ocrStatus: "empty",
+    }));
+    exportCurrentSessionMock.mockRejectedValueOnce(new Error("/private/tmp/export stderr"));
+    render(<ChatPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: "导出" }));
+
+    expect(await screen.findByText("导出未完成，请重试")).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("/private/tmp");
+    expect(document.body.textContent).not.toContain("stderr");
   });
 });
