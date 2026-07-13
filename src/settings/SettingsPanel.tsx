@@ -28,7 +28,13 @@ type SettingsPanelProps = {
 };
 
 function backendLabel(backend: InferenceBackend) {
-  return backend === "mlx" ? "MLX 实验加速" : "内置 Metal 本地推理";
+  return backend === "mlx" ? "兼容模式" : "标准模式";
+}
+
+function safeSettingsError(action: "speed" | "install" | "download"): string {
+  if (action === "speed") return "测速未完成，请检查网络后重试。";
+  if (action === "install") return "安装未完成，请重新启动应用后重试。";
+  return "下载未完成，请检查网络和可用空间后重试。";
 }
 
 const MIRROR_LABELS: Record<AppSettings["downloadMirror"], string> = {
@@ -126,8 +132,8 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
         return next;
       });
       setSavedMessage("测速完成");
-    } catch (error) {
-      setBenchmarkError(String(error));
+    } catch {
+      setBenchmarkError(safeSettingsError("speed"));
     } finally {
       setBenchmarking(false);
     }
@@ -138,9 +144,9 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
     setMlxInstallError("");
     try {
       await invoke("install_mlx_runtime_command");
-      setSavedMessage("MLX 推理引擎已安装");
-    } catch (error) {
-      setMlxInstallError(String(error));
+      setSavedMessage("兼容处理组件已安装");
+    } catch {
+      setMlxInstallError(safeSettingsError("install"));
     } finally {
       setInstallingMlx(false);
     }
@@ -153,10 +159,10 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
     try {
       await saveSettings(settings);
       await invoke("download_mlx_model", { force: false });
-      setSavedMessage("MLX 模型权重已下载");
+      setSavedMessage("兼容模式所需内容已下载");
       onSaved?.();
-    } catch (error) {
-      setMlxDownloadError(String(error));
+    } catch {
+      setMlxDownloadError(safeSettingsError("download"));
     } finally {
       setDownloadingMlx(false);
     }
@@ -165,7 +171,10 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
   return (
     <form className="settings-form settings-form--stack" aria-label="设置" onSubmit={(event) => void handleSave(event)}>
       {deviceInfo ? (
-        <p className="callout callout--info settings-device-info">{deviceInfo.message}（{deviceInfo.platform} · {deviceInfo.memoryGb.toFixed(1)} GB）</p>
+        <p className="callout callout--info settings-device-info">
+          {deviceInfo.recommended ? "这台设备适合本机处理" : "这台设备可以使用，处理速度可能较慢"}
+          （{deviceInfo.platform} · {deviceInfo.memoryGb.toFixed(1)} GB）
+        </p>
       ) : null}
 
       <section className="settings-section">
@@ -197,74 +206,70 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
 
       {deviceInfo?.isAppleSilicon ? (
         <section className="settings-section">
-          <h2 className="settings-section__title">本地推理</h2>
-          <label className="settings-field">
-            <span>推理模式</span>
-            <select
-              value={settings.inferenceBackend ?? "llama"}
-              onChange={(event) => {
-                const inferenceBackend = event.target.value as AppSettings["inferenceBackend"];
-                setSettings((current) => ({ ...current, inferenceBackend }));
-              }}
-            >
-              <option value="llama">内置 Metal</option>
-              <option value="mlx">MLX 实验加速</option>
-            </select>
-            <span className="field-hint">
-              {isMlx
-                ? "需额外安装。"
-                : "默认。"}
-              {backendDirty ? " 改完后需点底部「保存设置」。" : ""}
-            </span>
-          </label>
+          <h2 className="settings-section__title">本机处理</h2>
+          <div className="settings-field">
+            <span>处理方式</span>
+            <strong>{backendLabel(settings.inferenceBackend ?? "llama")}</strong>
+            <span className="field-hint">标准模式适合大多数设备。</span>
+          </div>
 
-          {isMlx ? (
-            <>
-              <label className="settings-field">
-                <span>MLX 模型 ID</span>
-                <input
-                  value={settings.mlxModelId ?? "mlx-community/MiniCPM-V-4.6-4bit"}
-                  onChange={(event) =>
-                    setSettings((current) => ({ ...current, mlxModelId: event.target.value }))
-                  }
-                  placeholder="mlx-community/MiniCPM-V-4.6-4bit"
-                />
-              </label>
+          <details className="settings-advanced">
+            <summary>高级设置</summary>
+            <label className="settings-field">
+              <span>兼容模式</span>
+              <select
+                value={settings.inferenceBackend ?? "llama"}
+                onChange={(event) => {
+                  const inferenceBackend = event.target.value as AppSettings["inferenceBackend"];
+                  setSettings((current) => ({ ...current, inferenceBackend }));
+                }}
+              >
+                <option value="llama">标准（llama / Metal）</option>
+                <option value="mlx">MLX 实验模式</option>
+              </select>
+              <span className="field-hint">
+                仅在标准模式无法使用时切换。{backendDirty ? " 更改后请保存设置。" : ""}
+              </span>
+            </label>
 
-              <div className="settings-field">
-                <span>MLX 实验环境</span>
-                <div className="settings-actions-row">
-                  <button
-                    type="button"
-                    className="settings-btn settings-btn--secondary"
-                    disabled={installingMlx}
-                    onClick={() => void installMlxRuntime()}
-                  >
-                    {installingMlx ? "安装中…" : "1. 安装实验加速包"}
-                  </button>
-                  <button
-                    type="button"
-                    className="settings-btn settings-btn--primary"
-                    disabled={downloadingMlx}
-                    onClick={() => void downloadMlxModel()}
-                  >
-                    {downloadingMlx
-                      ? `2. 下载模型${mlxDownloadPercent !== null ? ` ${mlxDownloadPercent}%` : "…"}`
-                      : "2. 下载模型权重"}
-                  </button>
+            {isMlx ? (
+              <>
+                <label className="settings-field">
+                  <span>模型 ID</span>
+                  <input
+                    value={settings.mlxModelId ?? "mlx-community/MiniCPM-V-4.6-4bit"}
+                    onChange={(event) =>
+                      setSettings((current) => ({ ...current, mlxModelId: event.target.value }))
+                    }
+                    placeholder="mlx-community/MiniCPM-V-4.6-4bit"
+                  />
+                </label>
+
+                <div className="settings-field">
+                  <span>MLX 实验内容</span>
+                  <div className="settings-actions-row">
+                    <button type="button" className="settings-btn settings-btn--secondary" disabled={installingMlx} onClick={() => void installMlxRuntime()}>
+                      {installingMlx ? "安装中…" : "1. 安装兼容组件"}
+                    </button>
+                    <button type="button" className="settings-btn settings-btn--primary" disabled={downloadingMlx} onClick={() => void downloadMlxModel()}>
+                      {downloadingMlx
+                        ? `2. 下载内容${mlxDownloadPercent !== null ? ` ${mlxDownloadPercent}%` : "…"}`
+                        : "2. 下载所需内容"}
+                    </button>
+                  </div>
+                  {mlxInstallError ? <p className="onboarding-error">{mlxInstallError}</p> : null}
+                  {mlxDownloadError ? <p className="onboarding-error">{mlxDownloadError}</p> : null}
                 </div>
-                {mlxInstallError ? <p className="onboarding-error">{mlxInstallError}</p> : null}
-                {mlxDownloadError ? <p className="onboarding-error">{mlxDownloadError}</p> : null}
-              </div>
-            </>
-          ) : null}
+              </>
+            ) : null}
+          </details>
         </section>
       ) : null}
 
       <section className="settings-section">
         <h2 className="settings-section__title">性能</h2>
         <label className="settings-field">
-          <span>模型保活时间（分钟）</span>
+          <span>保持快速响应（分钟）</span>
           <select
             value={settings.modelWarmMinutes}
             onChange={(event) =>
@@ -277,7 +282,7 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
             <option value={5}>5</option>
             <option value={15}>15</option>
             <option value={30}>30</option>
-            <option value={-1}>永不卸载</option>
+            <option value={-1}>始终保持</option>
           </select>
           <span className="field-hint">时间越长，下次响应越快。</span>
         </label>
@@ -293,22 +298,19 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
               }))
             }
           />
-          <span>启动时预加载模型</span>
+          <span>启动时提前准备</span>
           <span className="field-hint">
             {deviceInfo && deviceInfo.memoryGb < 16
               ? "内存不足 16 GB，建议关闭。"
-              : isMlx
-                ? "启动后会常驻内存；实际占用随模型和对话长度变化。"
-                : "启动后会常驻内存；实际占用随模型档位、图片和对话长度变化。"}
+              : "打开应用后即可更快开始处理；会使用更多内存。"}
           </span>
         </label>
       </section>
 
-      {!isMlx ? (
-        <section className="settings-section">
-          <h2 className="settings-section__title">GGUF 模型与下载</h2>
+      <section className="settings-section">
+          <h2 className="settings-section__title">下载设置</h2>
           <div className="settings-field">
-            <span>模型下载镜像</span>
+            <span>下载来源</span>
             <select
               value={settings.downloadMirror}
               onChange={(event) => {
@@ -318,7 +320,7 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
                   void saveSettings(next);
                   return next;
                 });
-                setSavedMessage("镜像设置已保存");
+                setSavedMessage("下载来源已保存");
               }}
             >
               {(Object.keys(MIRROR_LABELS) as AppSettings["downloadMirror"][]).map((key) => (
@@ -335,7 +337,7 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
                 disabled={benchmarking}
                 onClick={() => void runBenchmark()}
               >
-                {benchmarking ? "测速中…" : "测速镜像"}
+                {benchmarking ? "测速中…" : "测试下载速度"}
               </button>
               {settings.preferredMirror ? (
                 <span className="field-hint">
@@ -357,7 +359,7 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
                         {benchmark.recommended === item.mirror ? " · 推荐" : ""}
                       </span>
                     ) : (
-                      <span>{item.error ?? "测速失败"}</span>
+                      <span>暂时无法连接</span>
                     )}
                   </li>
                 ))}
@@ -366,7 +368,6 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
             {benchmarkError ? <p className="onboarding-error">{benchmarkError}</p> : null}
           </div>
         </section>
-      ) : null}
 
       <div className="settings-form__footer">
         <button type="submit" className="settings-btn settings-btn--primary">

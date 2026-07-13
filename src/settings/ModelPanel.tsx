@@ -68,9 +68,30 @@ type PendingInstall = PendingDownload & {
 };
 
 const FILE_LABELS: Record<FileKey, string> = {
-  model: "主模型",
-  mmproj: "视觉投影器",
+  model: "问答组件",
+  mmproj: "图片理解组件",
 };
+
+const VARIANT_COPY: Record<GgufModelVariant, { label: string; description: string; technicalLabel: string }> = {
+  q4_k_m: { label: "标准", description: "下载更快，占用空间最少，推荐大多数设备。", technicalLabel: "Q4 · q4_k_m" },
+  q5_k_m: { label: "高精度", description: "保留更多细节，空间占用适中。", technicalLabel: "Q5 · q5_k_m" },
+  q6_k: { label: "最高精度", description: "三档中细节保留最多，占用空间也更大。", technicalLabel: "Q6 · q6_k" },
+};
+
+function safeModelError(error: unknown, fallback = "操作未完成，请重试。"): string {
+  const detail = String(error).toLowerCase();
+  if (detail.includes("取消") || detail.includes("cancel")) return "";
+  if (detail.includes("space") || detail.includes("disk") || detail.includes("空间")) {
+    return "可用空间不足，请清理空间后重试。";
+  }
+  if (detail.includes("health") || detail.includes("start") || detail.includes("sidecar")) {
+    return "下载内容无法启用，请重新启动应用后重试。";
+  }
+  if (detail.includes("http") || detail.includes("network") || detail.includes("download") || detail.includes("网络")) {
+    return "下载未完成，请检查网络后重试。";
+  }
+  return fallback;
+}
 
 function createIdleProgress(): Record<FileKey, FileProgressState> {
   return {
@@ -173,7 +194,7 @@ function progressFromSnapshot(
 function variantStateLabel(status: ModelStatusResponse, variant: GgufModelVariant): string {
   const item = status.ggufVariants.find((candidate) => candidate.variant === variant);
   if (item?.installed && item.active) return "当前使用";
-  if (item?.installed) return "已安装";
+  if (item?.installed) return "已下载";
   if (item && item.partialBytes > 0) return "可续传";
   return "未安装";
 }
@@ -356,7 +377,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
     let disposed = false;
     disposedRef.current = false;
     void refresh(true).catch((error) => {
-      if (!disposed) setMessage(String(error));
+      if (!disposed) setMessage(safeModelError(error, "暂时无法读取下载状态，请重试。"));
     });
     let unlisten: (() => void) | undefined;
     void listen<DownloadProgressEvent>("model-download-progress", (event) => {
@@ -366,7 +387,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
         setMlxProgress((current) => ({
           status: payload.status === "done" ? "done" : "running",
           percent: payload.status === "done" ? 100 : resolveMlxPercent(current.percent, payload.downloaded),
-          detail: payload.message ?? "正在下载 MLX 权重…",
+          detail: payload.status === "done" ? "下载完成" : "正在下载所需内容…",
         }));
         return;
       }
@@ -407,7 +428,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
               ...previous,
               status: payload.status,
               detail: appendSource(
-                payload.message ?? (payload.status === "waiting" ? "等待中…" : "正在切换下载源…"),
+                payload.status === "waiting" ? "等待中…" : "正在尝试其他下载来源…",
                 payload.source,
               ),
             },
@@ -447,7 +468,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
           releaseOperation(operationGuardRef.current);
         }
         void refresh().catch((error) => {
-          if (!disposed) setMessage(String(error));
+          if (!disposed) setMessage(safeModelError(error, "暂时无法刷新下载状态，请重试。"));
         });
       } else if (payload.status === "done" && payload.file === "mmproj" && installOperation) {
         setOperation("switching");
@@ -493,7 +514,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
         onStatusChange?.();
       } catch (error) {
         if (!disposedRef.current) {
-          setMessage(String(error));
+          setMessage(safeModelError(error, "下载未完成，请重试。"));
           setMlxProgress({ status: "idle", percent: 0, detail: "" });
         }
       } finally {
@@ -516,7 +537,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
         await modelClient.cancelModelDownload(taskId);
         await refreshDownloadTask();
       } catch (error) {
-        if (!disposedRef.current) setMessage(String(error));
+        if (!disposedRef.current) setMessage(safeModelError(error, "暂时无法取消，请重试。"));
         if (guard.kind === "installing") {
           if (!disposedRef.current) setOperation("idle");
         } else {
@@ -561,14 +582,14 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
       setPendingDownload(pending);
       setFileProgress({
         model: { status: "running", percent: 0, downloaded: 0, speedMbps: null, detail: "等待开始…" },
-        mmproj: { status: "waiting", percent: 0, downloaded: 0, speedMbps: null, detail: "等待主模型完成…" },
+        mmproj: { status: "waiting", percent: 0, downloaded: 0, speedMbps: null, detail: "等待问答组件完成…" },
       });
       const install = modelClient.installGgufModel(selectedVariant, false);
       void refreshDownloadTask().catch(() => undefined);
       const result = await install;
       if (disposedRef.current) return;
       if (!installOperation.terminalHandled) {
-        setCleanupWarning(result.cleanupWarning ?? "");
+        setCleanupWarning(result.cleanupWarning ? "部分旧内容暂未清理，可稍后重试。" : "");
         setFileProgress(completedProgress);
         if (installOperation.taskId !== null) {
           markTerminalTask(installOperation.taskId, "mmproj");
@@ -577,14 +598,14 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
       }
       await refresh(true);
       if (!disposedRef.current && !installOperation.terminalHandled) {
-        setMessage("模型已就绪");
+        setMessage("下载内容已就绪");
         onStatusChange?.();
       }
     } catch (error) {
       if (disposedRef.current || installOperation.terminalHandled) return;
-      const errorMessage = String(error);
-      const canceled = errorMessage.includes("取消");
-      setMessage(canceled ? "" : errorMessage);
+      const safeError = safeModelError(error, "下载内容无法启用，请重新启动应用后重试。");
+      const canceled = safeError === "";
+      setMessage(safeError);
       setFileProgress((current) => terminalProgress(
         current,
         canceled ? "canceled" : "failed",
@@ -612,14 +633,14 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
     try {
       const result = await modelClient.removeInstalledModels();
       if (disposedRef.current) return;
-      setCleanupWarning(result.cleanupWarning ?? "");
-      setMessage("本地模型已移除");
+      setCleanupWarning(result.cleanupWarning ? "部分旧内容暂未清理，可稍后重试。" : "");
+      setMessage("下载内容已移除");
       setRemoveConfirm(false);
       setFileProgress(createIdleProgress());
       await refresh(true);
       onStatusChange?.();
     } catch (error) {
-      if (!disposedRef.current) setMessage(String(error));
+      if (!disposedRef.current) setMessage(safeModelError(error, "暂时无法移除，请重试。"));
     } finally {
       releaseOperation(guard);
     }
@@ -639,28 +660,26 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
     : operation === "installing"
       ? isMlx ? "下载中…" : "处理中…"
       : needsRuntimeSetup
-        ? "去环境配置"
-        : isMlx ? "下载 MLX 权重" : primaryAction?.label ?? "读取中…";
+        ? "去首次设置"
+        : isMlx ? "下载所需内容" : primaryAction?.label ?? "读取中…";
 
   return (
     <div className="model-panel">
       {!runtimeReady && status ? (
         <div className="callout callout--attention" role="status">
-          <p>{isMlx ? "MLX 未安装。" : "内置 Metal 未就绪。"}</p>
-          {onOpenSetup && hasDownloadAction
-            ? <button type="button" className="callout__action" onClick={onOpenSetup}>去环境配置</button>
-            : null}
+          <p>应用组件尚未准备好。</p>
         </div>
       ) : null}
 
       {!isMlx ? (
-        <section className="surface model-variant-picker" aria-label="模型档位">
+        <section className="surface model-variant-picker" aria-label="精度选择">
           <p className="model-variant-picker__note">
-            三档都是 MiniCPM-V 4.6，只是量化精度不同。首次安装包含一份三档共用的 1.03 GiB 视觉组件。
+            三档提供不同的细节与空间占用。首次安装包含一份共用的 1.03 GiB 图片理解组件。
           </p>
           {(Object.entries(GGUF_MODEL_VARIANTS) as Array<[GgufModelVariant, (typeof GGUF_MODEL_VARIANTS)[GgufModelVariant]]>).map(([variant, spec]) => {
             const selected = variant === selectedVariant;
             const stateLabel = status ? variantStateLabel(status, variant) : "读取中";
+            const copy = VARIANT_COPY[variant];
             return (
               <button
                 key={variant}
@@ -674,31 +693,43 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
                   setFileProgress(createIdleProgress());
                 }}
               >
-                <span className="model-variant-option__head"><strong>{spec.label}</strong><span>{spec.badge}</span></span>
+                <span className="model-variant-option__head"><strong>{copy.label}</strong><span>{spec.badge}</span></span>
                 <span className={`model-variant-option__state${stateLabel === "当前使用" ? " is-current" : ""}`}>{stateLabel}</span>
-                <span className="model-variant-option__desc">{spec.description}</span>
+                <span className="model-variant-option__desc">{copy.description}</span>
                 <span className="model-variant-option__meta">
-                  <span>主模型 {formatModelStorage(spec.modelBytes)}</span>
+                  <span>下载大小 {formatModelStorage(spec.modelBytes)}</span>
                   <span>首次安装 {formatModelStorage(spec.modelBytes + EXPECTED_MMPROJ_BYTES, 2)}</span>
                 </span>
               </button>
             );
           })}
+          <details className="settings-advanced">
+            <summary>技术详情</summary>
+            <ul>
+              {(Object.keys(VARIANT_COPY) as GgufModelVariant[]).map((variant) => (
+                <li key={variant}>{VARIANT_COPY[variant].label}：{VARIANT_COPY[variant].technicalLabel}</li>
+              ))}
+            </ul>
+          </details>
         </section>
       ) : null}
 
       {isMlx ? (
-        <section className="surface model-panel__files" aria-label="MLX 模型状态">
+        <section className="surface model-panel__files" aria-label="兼容处理状态">
           {status ? (
             <ul className="model-file-list">
-              <li className="model-file-list__item"><div className="model-file-list__head"><span className="model-file-list__label">MLX 运行环境</span><strong className={`model-file-list__value${status.mlxRuntimeAvailable ? " is-positive" : ""}`}>{status.mlxRuntimeAvailable ? "已安装" : "未安装"}</strong></div></li>
-              <li className="model-file-list__item"><div className="model-file-list__head"><span className="model-file-list__label">MLX 模型</span><strong className={`model-file-list__value${status.mlxModelReady ? " is-positive" : ""}`}>{status.mlxModelReady ? "已下载" : "未下载"}</strong></div></li>
+              <li className="model-file-list__item"><div className="model-file-list__head"><span className="model-file-list__label">应用组件</span><strong className={`model-file-list__value${status.mlxRuntimeAvailable ? " is-positive" : ""}`}>{status.mlxRuntimeAvailable ? "已准备" : "未准备"}</strong></div></li>
+              <li className="model-file-list__item"><div className="model-file-list__head"><span className="model-file-list__label">问答与图片理解</span><strong className={`model-file-list__value${status.mlxModelReady ? " is-positive" : ""}`}>{status.mlxModelReady ? "已下载" : "未下载"}</strong></div></li>
             </ul>
-          ) : <p className="placeholder-copy">正在读取模型状态…</p>}
+          ) : <p className="placeholder-copy">正在读取下载状态…</p>}
+          <details className="settings-advanced">
+            <summary>技术详情</summary>
+            <p>MLX 兼容模式</p>
+          </details>
         </section>
       ) : null}
 
-      <section className="surface model-panel__actions-card" aria-label="模型操作">
+      <section className="surface model-panel__actions-card" aria-label="下载操作">
         <div className="model-actions">
           <button
             type="button"
@@ -720,10 +751,10 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
           {cleanupWarning ? <p className="model-cleanup-warning">{cleanupWarning}</p> : null}
         </div>
 
-        <div className="model-progress-region" aria-label={isMlx ? "MLX 下载进度" : "下载进度"} aria-live="polite">
+        <div className="model-progress-region" aria-label="下载进度" aria-live="polite">
           {isMlx && mlxProgress.status !== "idle" ? (
             <div className="model-download-progress">
-              <ProgressItem label="MLX 权重" item={{ ...mlxProgress, downloaded: 0, speedMbps: null }} />
+              <ProgressItem label="问答与图片理解" item={{ ...mlxProgress, downloaded: 0, speedMbps: null }} />
             </div>
           ) : null}
           {!isMlx && (Object.keys(fileProgress) as FileKey[]).some((key) => fileProgress[key].status !== "idle") ? (
@@ -737,12 +768,12 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
 
         {!isMlx && status ? (
           <div className="model-storage-row">
-            <div><span>GGUF 模型占用</span><strong>{formatModelStorage(status.modelStorageBytes)}</strong><small>含未完成下载</small></div>
+            <div><span>已用空间</span><strong>{formatModelStorage(status.modelStorageBytes)}</strong><small>含未完成下载</small></div>
             {status.modelStorageBytes > 0 && !removeConfirm ? (
-              <button type="button" className="settings-btn settings-btn--danger-secondary" disabled={operation !== "idle" || activeTask !== null} onClick={() => setRemoveConfirm(true)}>移除本地模型</button>
+              <button type="button" className="settings-btn settings-btn--danger-secondary" disabled={operation !== "idle" || activeTask !== null} onClick={() => setRemoveConfirm(true)}>移除下载内容</button>
             ) : status.modelStorageBytes > 0 ? (
-              <div className="model-remove-confirm" role="group" aria-label="确认移除本地模型">
-                <p>将移除全部已安装 GGUF 模型，未完成下载也会清理。</p>
+              <div className="model-remove-confirm" role="group" aria-label="确认移除下载内容">
+                <p>将移除全部已下载内容，未完成下载也会清理。</p>
                 <button type="button" className="settings-btn settings-btn--danger" disabled={operation !== "idle"} onClick={() => void removeModels()}>{operation === "removing" ? "正在移除…" : "确认移除"}</button>
                 <button type="button" className="settings-btn settings-btn--secondary" disabled={operation !== "idle"} onClick={() => setRemoveConfirm(false)}>取消</button>
               </div>

@@ -14,11 +14,11 @@ import { loadSettings } from "../settings/settingsStore";
 const PAGE_META: Record<SettingsSection, { title: string; subtitle: string }> = {
   home: { title: "", subtitle: "" },
   setup: {
-    title: "环境配置",
+    title: "首次设置",
     subtitle: "",
   },
   model: {
-    title: "模型文件",
+    title: "下载内容",
     subtitle: "",
   },
   settings: {
@@ -87,7 +87,8 @@ export function MainWindowShell() {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     void listen<{ message: string }>("warmup-failed", (event) => {
-      setWarmupNotice(event.payload.message);
+      void event;
+      setWarmupNotice("本机处理暂时无法启动，请打开设置检查后重试。");
     }).then((cleanup) => {
       unlisten = cleanup;
     });
@@ -160,9 +161,12 @@ export function MainWindowShell() {
         <div className={`settings-page-shell settings-page-shell--${activeSection}`}>
           {warmupNotice ? (
             <div className="callout callout--attention settings-page-shell__notice" role="status">
-              <p>准备失败：{warmupNotice}</p>
-              <button type="button" className="callout__action" onClick={() => setWarmupNotice("")}>
-                知道了
+              <p>{warmupNotice}</p>
+              <button type="button" className="callout__action" onClick={() => {
+                setWarmupNotice("");
+                handleNavigate("settings");
+              }}>
+                打开设置
               </button>
             </div>
           ) : null}

@@ -42,9 +42,6 @@ export function HomeOverview({
   const readinessPercent = environmentStatus
     ? environmentReadinessPercent(environmentStatus)
     : 0;
-  const backendLabel = environmentStatus?.inferenceBackend === "mlx" ? "MLX" : "内置 Metal";
-  const modelLabel =
-    environmentStatus?.inferenceBackend === "mlx" ? "MiniCPM-V MLX 权重" : "MiniCPM-V 4.6 GGUF";
 
   useEffect(() => {
     void loadSettings().then((settings) => setShortcut(settings.shortcut));
@@ -60,12 +57,12 @@ export function HomeOverview({
 
   const statusRows = [
     {
-      label: "引擎",
+      label: "本机处理",
       value: runtimeReady ? "可用" : environmentStatus ? "待配置" : "检测中",
       ready: runtimeReady,
     },
     {
-      label: "模型",
+      label: "图片理解",
       value: modelReady ? "已下载" : environmentStatus ? "待下载" : "检测中",
       ready: modelReady,
     },
@@ -98,19 +95,19 @@ export function HomeOverview({
               className="home-primary-button"
               onClick={environmentReady ? () => void openQuickPanel() : onOpenSetup}
             >
-              {environmentReady ? "打开快捷面板" : "完成本地配置"}
+              {environmentReady ? "打开快捷面板" : "开始首次设置"}
             </button>
             <button type="button" className="home-secondary-button" onClick={onOpenModel}>
-              管理模型文件
+              管理下载内容
             </button>
           </div>
         </div>
 
-        <aside className="home-command-card" aria-label="环境就绪度">
-          <span className="home-command-card__label">本地环境</span>
+        <aside className="home-command-card" aria-label="准备进度">
+          <span className="home-command-card__label">本机处理</span>
           <div>
             <strong>{readinessPercent}%</strong>
-            <p>{environmentReady ? `${backendLabel} 可用` : "待配置"}</p>
+            <p>{environmentReady ? "已准备好" : "待设置"}</p>
           </div>
           <div className="home-command-card__bar" aria-hidden="true">
             <span style={{ width: `${readinessPercent}%` }} />
@@ -165,15 +162,15 @@ export function HomeOverview({
             <li>
               <span>02</span>
               <div>
-                <strong>本机 OCR 与图片问答</strong>
-                <p>识字后继续追问。</p>
+                <strong>文字识别与图片理解</strong>
+                <p>提取文字后继续围绕图片提问。</p>
               </div>
             </li>
             <li>
               <span>03</span>
               <div>
-                <strong>按需导出 Markdown</strong>
-                <p>需要时再导出。</p>
+                <strong>导出文档</strong>
+                <p>按需保存识别与问答结果。</p>
               </div>
             </li>
           </ol>
@@ -181,14 +178,14 @@ export function HomeOverview({
 
         <aside className="home-status-panel">
           <div className="home-card-heading">
-            <span>模型</span>
-            <h2>{backendLabel}</h2>
+            <span>本机处理</span>
+            <h2>图片理解</h2>
           </div>
           <div className="home-model-summary">
-            <strong>{modelLabel}</strong>
+            <strong>问答与识图内容</strong>
             <p>{modelReady ? "可用" : "待下载"}</p>
             <button type="button" onClick={modelReady ? onOpenModel : onOpenSetup}>
-              {modelReady ? "查看模型" : "去配置"}
+              {modelReady ? "查看下载内容" : "开始设置"}
             </button>
           </div>
         </aside>
@@ -196,8 +193,8 @@ export function HomeOverview({
 
       <section className="home-action-grid" aria-label="快捷操作">
         <button type="button" className="home-action-tile home-action-tile--primary" onClick={() => void openQuickPanel()}>
-          <span>OCR</span>
-          <strong>截图识别</strong>
+          <span>文字</span>
+          <strong>文字识别</strong>
           <em>截取区域并提取文字</em>
         </button>
         <button type="button" className="home-action-tile" disabled={!environmentReady} onClick={() => void openQuickPanel()}>
@@ -220,8 +217,10 @@ export function HomeOverview({
       <footer className="home-footer home-footer--console">
         <p>
           {deviceInfo
-            ? deviceInfo.message
-            : "正在读取设备信息…"}
+            ? deviceInfo.recommended
+              ? "这台设备适合在本机处理图片和文字。"
+              : "这台设备可以使用，处理较大图片时可能需要稍等。"
+            : "正在检查设备…"}
         </p>
       </footer>
     </div>

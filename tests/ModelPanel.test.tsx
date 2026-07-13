@@ -82,22 +82,30 @@ describe("ModelPanel", () => {
   it("shows main-model and first-install sizes in binary units", async () => {
     render(<ModelPanel />);
 
-    const q4 = await screen.findByRole("button", { name: /Q4 标准/ });
-    const q5 = screen.getByRole("button", { name: /Q5 高精度/ });
-    const q6 = screen.getByRole("button", { name: /Q6 最高精度/ });
+    const q4 = await screen.findByRole("button", { name: /^标准/ });
+    const q5 = screen.getByRole("button", { name: /^高精度/ });
+    const q6 = screen.getByRole("button", { name: /^最高精度/ });
 
-    expect(q4).toHaveTextContent("主模型 505 MiB");
+    expect(q4).toHaveTextContent("下载大小 505 MiB");
     expect(q4).toHaveTextContent("首次安装 1.53 GiB");
-    expect(q5).toHaveTextContent("主模型 551 MiB");
+    expect(q5).toHaveTextContent("下载大小 551 MiB");
     expect(q5).toHaveTextContent("首次安装 1.57 GiB");
-    expect(q6).toHaveTextContent("主模型 600 MiB");
+    expect(q6).toHaveTextContent("下载大小 600 MiB");
     expect(q6).toHaveTextContent("首次安装 1.62 GiB");
     expect(q4).not.toHaveTextContent("内存");
+
+    const technicalDetails = screen.getByText("技术详情").closest("details");
+    expect(technicalDetails).not.toHaveAttribute("open");
+    expect(technicalDetails).toHaveTextContent("Q4");
+
+    const visibleCopy = document.body.cloneNode(true) as HTMLElement;
+    visibleCopy.querySelectorAll("details:not([open]) > :not(summary)").forEach((node) => node.remove());
+    expect(visibleCopy.textContent).not.toMatch(/Metal|GGUF|MLX|llama|sidecar|runtime|推理引擎|权重|视觉投影器/i);
   });
 
   it("stages a variant selection without saving settings", async () => {
     render(<ModelPanel />);
-    const clearVariant = await screen.findByRole("button", { name: /Q5 高精度/ });
+    const clearVariant = await screen.findByRole("button", { name: /^高精度/ });
 
     fireEvent.click(clearVariant);
 
@@ -116,7 +124,7 @@ describe("ModelPanel", () => {
     });
     render(<ModelPanel />);
 
-    fireEvent.click(await screen.findByRole("button", { name: /Q5 高精度/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^高精度/ }));
     fireEvent.click(screen.getByRole("button", { name: "下载并切换" }));
 
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("install_gguf_model", {
@@ -155,7 +163,7 @@ describe("ModelPanel", () => {
     });
     render(<ModelPanel />);
 
-    fireEvent.click(await screen.findByRole("button", { name: /Q5 高精度/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^高精度/ }));
     fireEvent.click(screen.getByRole("button", { name: "下载并切换" }));
     await screen.findByRole("button", { name: "取消下载" }, { timeout: 1_200 });
 
@@ -181,7 +189,7 @@ describe("ModelPanel", () => {
     });
     render(<ModelPanel />);
 
-    fireEvent.click(await screen.findByRole("button", { name: /Q5 高精度/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^高精度/ }));
     fireEvent.click(screen.getByRole("button", { name: "下载并切换" }));
     fireEvent.click(await screen.findByRole("button", { name: "取消下载" }, { timeout: 1_200 }));
 
@@ -215,7 +223,7 @@ describe("ModelPanel", () => {
     });
     render(<ModelPanel />);
 
-    fireEvent.click(await screen.findByRole("button", { name: /Q5 高精度/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^高精度/ }));
     fireEvent.click(screen.getByRole("button", { name: "下载并切换" }));
     await screen.findByRole("button", { name: "取消下载" }, { timeout: 1_200 });
     downloadDone = true;
@@ -225,7 +233,8 @@ describe("ModelPanel", () => {
 
     installResult.reject(new Error("sidecar health check failed"));
 
-    expect(await screen.findByText("Error: sidecar health check failed")).toBeInTheDocument();
+    expect(await screen.findByText("下载内容无法启用，请重新启动应用后重试。")).toBeInTheDocument();
+    expect(screen.queryByText(/sidecar|health check/i)).not.toBeInTheDocument();
     await waitFor(() => expect(statusCalls).toBeGreaterThan(callsBeforeFailure));
   });
 
@@ -269,7 +278,7 @@ describe("ModelPanel", () => {
     });
     render(<ModelPanel />);
 
-    fireEvent.click(await screen.findByRole("button", { name: /Q5 高精度/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^高精度/ }));
     fireEvent.click(screen.getByRole("button", { name: "下载并切换" }));
     await screen.findByRole("button", { name: "取消下载" }, { timeout: 1_200 });
     downloadDone = true;
@@ -284,7 +293,7 @@ describe("ModelPanel", () => {
     });
 
     expect(await screen.findByRole("button", { name: "当前使用" })).toBeDisabled();
-    expect(screen.getByText("模型已就绪")).toBeInTheDocument();
+    expect(screen.getByText("下载内容已就绪")).toBeInTheDocument();
   });
 
   it("cancels the exact active task id", async () => {
@@ -296,8 +305,8 @@ describe("ModelPanel", () => {
     render(<ModelPanel />);
 
     const cancel = await screen.findByRole("button", { name: "取消下载" });
-    expect(screen.getByRole("button", { name: /Q5 高精度/ })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByText("正在下载主模型 50% · ModelScope")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^高精度/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("正在下载问答组件 50% · ModelScope")).toBeInTheDocument();
     fireEvent.click(cancel);
 
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("cancel_model_download", { taskId: 41 }));
@@ -331,15 +340,15 @@ describe("ModelPanel", () => {
     });
     render(<ModelPanel />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "移除本地模型" }));
-    expect(screen.getByText(/将移除全部已安装 GGUF 模型/)).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "移除下载内容" }));
+    expect(screen.getByText(/将移除全部已下载内容/)).toBeInTheDocument();
     expect(invokeMock).not.toHaveBeenCalledWith("remove_installed_models");
 
     fireEvent.click(screen.getByRole("button", { name: "确认移除" }));
 
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("remove_installed_models"));
-    expect(await screen.findByText("本地模型已移除")).toBeInTheDocument();
-    expect(screen.getByText("一个旧文件稍后清理")).toBeInTheDocument();
+    expect(await screen.findByText("下载内容已移除")).toBeInTheDocument();
+    expect(screen.getByText("部分旧内容暂未清理，可稍后重试。")).toBeInTheDocument();
   });
 
   it("ignores progress events from stale task ids", async () => {
@@ -388,7 +397,7 @@ describe("ModelPanel", () => {
       return undefined;
     });
     render(<ModelPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: /Q5 高精度/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^高精度/ }));
     fireEvent.click(screen.getByRole("button", { name: "下载并切换" }));
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("install_gguf_model", expect.anything()));
 
@@ -414,7 +423,7 @@ describe("ModelPanel", () => {
       return undefined;
     });
     render(<ModelPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: /Q5 高精度/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^高精度/ }));
     fireEvent.click(screen.getByRole("button", { name: "下载并切换" }));
 
     expect(await screen.findByRole("button", { name: "取消下载" }, { timeout: 1_500 })).toBeEnabled();
@@ -432,7 +441,7 @@ describe("ModelPanel", () => {
 
     const button = await screen.findByRole("button", { name: "正在取消…" });
     expect(button).toBeDisabled();
-    expect(screen.getByRole("button", { name: /Q5 高精度/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /^高精度/ })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("下载进度").querySelector(".model-download-progress__item"))
       .toHaveClass("is-canceling");
     fireEvent.click(button);
@@ -450,7 +459,7 @@ describe("ModelPanel", () => {
     });
     render(<ModelPanel onOpenSetup={onOpenSetup} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "去环境配置" }));
+    fireEvent.click(await screen.findByRole("button", { name: "去首次设置" }));
 
     expect(onOpenSetup).toHaveBeenCalledTimes(1);
     expect(invokeMock).not.toHaveBeenCalledWith("install_gguf_model", expect.anything());
@@ -494,7 +503,7 @@ describe("ModelPanel", () => {
       return undefined;
     });
     render(<ModelPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: /Q5 高精度/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^高精度/ }));
     const install = screen.getByRole("button", { name: "下载并切换" });
 
     fireEvent.click(install);
@@ -571,7 +580,7 @@ describe("ModelPanel", () => {
       return undefined;
     });
     render(<ModelPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: /Q5 高精度/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^高精度/ }));
     fireEvent.click(screen.getByRole("button", { name: "下载并切换" }));
     await screen.findByRole("button", { name: "取消下载" }, { timeout: 1_200 });
 
@@ -580,7 +589,7 @@ describe("ModelPanel", () => {
     const terminalDetail = await screen.findByText(detail);
     const item = terminalDetail.closest(".model-download-progress__item");
     expect(item).toHaveClass(className);
-    expect(item).toHaveTextContent("视觉投影器");
+    expect(item).toHaveTextContent("图片理解组件");
   });
 
   it("does not let an old install rejection clear a newer resume operation", async () => {
@@ -615,7 +624,7 @@ describe("ModelPanel", () => {
       return undefined;
     });
     render(<ModelPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: /Q5 高精度/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^高精度/ }));
     fireEvent.click(screen.getByRole("button", { name: "下载并切换" }));
     await screen.findByRole("button", { name: "取消下载" }, { timeout: 1_200 });
 
@@ -671,7 +680,7 @@ describe("ModelPanel", () => {
     await screen.findByRole("button", { name: "当前使用" });
 
     expect(screen.getByLabelText("下载进度")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "移除本地模型" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "移除下载内容" })).not.toBeInTheDocument();
   });
 
   it("renders a friendly source and pauses cleanly on a canceled event", async () => {
@@ -707,7 +716,7 @@ describe("ModelPanel", () => {
       source: "ModelScope（国内镜像）",
       speedMbps: 5,
     } }));
-    expect(screen.getByText("正在下载主模型 50% · ModelScope")).toBeInTheDocument();
+    expect(screen.getByText("正在下载问答组件 50% · ModelScope")).toBeInTheDocument();
     expect(screen.queryByText(/国内镜像/)).not.toBeInTheDocument();
 
     terminal = true;
@@ -751,7 +760,7 @@ describe("ModelPanel", () => {
       source: "HuggingFace（海外源）",
       speedMbps: 8,
     } }));
-    expect(screen.getByText("正在下载主模型 50% · Hugging Face")).toBeInTheDocument();
+    expect(screen.getByText("正在下载问答组件 50% · Hugging Face")).toBeInTheDocument();
 
     await act(async () => {
       progressHandler?.({ payload: {
@@ -784,7 +793,7 @@ describe("ModelPanel", () => {
       return undefined;
     });
     render(<ModelPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: /Q5 高精度/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^高精度/ }));
     fireEvent.click(screen.getByRole("button", { name: "下载并切换" }));
 
     expect(await screen.findByText(detail)).toBeInTheDocument();

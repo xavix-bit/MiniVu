@@ -7,7 +7,6 @@ import { resolveGgufPercent, resolveMlxPercent } from "../shared/downloadProgres
 import type { GgufModelVariant } from "../settings/settingsStore";
 import { loadSettings, saveSettings } from "../settings/settingsStore";
 import {
-  PHASE_ORDER,
   computeOverallPercent,
   createInitialDownloadBytes,
   createInitialProgress,
@@ -31,14 +30,22 @@ type EnvironmentSetupPanelProps = {
   onSetupSucceeded?: () => void;
 };
 
-const PHASE_LABELS: Record<string, string> = {
-  device: "设备检测",
-  runtime: "内置 Metal",
-  model: "主模型",
-  mmproj: "视觉投影",
+const SETUP_STEPS = ["device", "runtime", "image", "shortcut"] as const;
+
+const PHASE_LABELS: Record<(typeof SETUP_STEPS)[number], string> = {
+  device: "设备检查",
+  runtime: "应用组件",
+  image: "图片理解",
   shortcut: "快捷键",
-  done: "完成",
 };
+
+function progressMessage(status: SetupProgress["status"]): string {
+  if (status === "done") return "已完成";
+  if (status === "error") return "未完成，请重试";
+  if (status === "switching") return "正在尝试其他下载来源…";
+  if (status === "running") return "正在准备…";
+  return "等待中";
+}
 
 export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetupSucceeded }: EnvironmentSetupPanelProps) {
   const [phase, setPhase] = useState<"idle" | "running" | "success" | "error">("idle");
@@ -122,7 +129,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
         mergeProgress(current, {
           phase: payload.phase,
           status,
-          message: payload.message,
+          message: progressMessage(status),
           percent: payload.percent,
           speedMbps: status === "running" ? undefined : null,
         }),
@@ -140,11 +147,10 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
       speedMbps?: number;
       variant?: GgufModelVariant;
     }>("model-download-progress", (event) => {
-      const { file, status: downloadStatus, message, downloaded, total, source, speedMbps, variant } =
+      const { file, status: downloadStatus, downloaded, total, speedMbps, variant } =
         event.payload;
 
       if (file === "mlx") {
-        const sourceHint = source ? `（${source}）` : "";
         const speed = speedMbps && speedMbps > 0 ? speedMbps : null;
         if (speed) {
           setActiveSpeedMbps(speed);
@@ -154,7 +160,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
             mergeProgress(current, {
               phase: "model",
               status: "done",
-              message: message ?? "下载完成",
+              message: "已完成",
               percent: 100,
               speedMbps: null,
             }),
@@ -167,7 +173,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
           return mergeProgress(current, {
             phase: "model",
             status: "running",
-            message: `正在下载 MLX 模型 ${resolvedPercent}%${sourceHint}`,
+            message: "正在下载图片理解所需内容…",
             percent: resolvedPercent,
             speedMbps: speed,
           });
@@ -176,14 +182,12 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
       }
 
       const phaseKey = file === "mmproj" ? "mmproj" : "model";
-      const label = file === "mmproj" ? "视觉投影器" : "主模型";
-
       if (downloadStatus === "waiting") {
         setProgress((current) =>
           mergeProgress(current, {
             phase: phaseKey,
             status: "waiting",
-            message: message ?? "等待中…",
+            message: "等待中",
             speedMbps: null,
           }),
         );
@@ -198,7 +202,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
           mergeProgress(current, {
             phase: phaseKey,
             status: "switching",
-            message: message ?? "正在切换下载源…",
+            message: "正在尝试其他下载来源…",
           }),
         );
         return;
@@ -210,7 +214,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
           mergeProgress(current, {
             phase: phaseKey,
             status: "done",
-            message: message ?? "下载完成",
+            message: "已完成",
             percent: 100,
             speedMbps: null,
           }),
@@ -219,7 +223,6 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
         return;
       }
 
-      const sourceHint = source ? `（${source}）` : "";
       const speed = speedMbps && speedMbps > 0 ? speedMbps : null;
 
       if (speed) {
@@ -238,7 +241,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
         return mergeProgress(current, {
           phase: phaseKey,
           status: "running",
-          message: `正在下载${label} ${resolvedPercent}%${sourceHint}`,
+          message: "正在下载图片理解所需内容…",
           percent: resolvedPercent,
           speedMbps: speed,
         });
@@ -267,14 +270,14 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
         mergeProgress(current, {
           phase: "done",
           status: "done",
-          message: "环境配置完成",
+          message: "首次设置完成",
           percent: 100,
         }),
       );
       const environment = await refreshStatus();
       const completed = await persistOnboardingAndRefresh(environment);
       if (!completed?.environment.environmentReady) {
-        setInstallError("运行环境或模型尚未就绪。");
+        setInstallError("准备未完成，请重试。仍有问题时，请重新启动应用。");
         setPhase("error");
         return;
       }
@@ -282,8 +285,8 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
       if (!showWelcome) {
         onComplete?.();
       }
-    } catch (error) {
-      setInstallError(String(error));
+    } catch {
+      setInstallError("设置未完成，请检查网络和可用空间后重试。");
       setPhase("error");
     }
   }
@@ -295,7 +298,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
       setStatus(next);
       const completed = await persistOnboardingAndRefresh(env);
       if (!completed?.environment.environmentReady) {
-        setInstallError("运行环境或模型尚未就绪。");
+        setInstallError("准备未完成，请重试。仍有问题时，请重新启动应用。");
         setPhase("error");
         return;
       }
@@ -303,8 +306,8 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
       if (openPanel) {
         await invoke("show_entry");
       }
-    } catch (error) {
-      setInstallError(String(error));
+    } catch {
+      setInstallError("暂时无法继续，请重新启动应用后重试。");
       setPhase("error");
     }
   }
@@ -324,9 +327,24 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
           </span>
         </div>
         <ul className="onboarding-progress-list">
-          {PHASE_ORDER.map((step) => {
-            const item = progress[step];
-            const label = PHASE_LABELS[step] ?? step;
+          {SETUP_STEPS.map((step) => {
+            const imageItems = [progress.model, progress.mmproj].filter(Boolean) as SetupProgress[];
+            const item = step === "image"
+              ? {
+                  phase: "image",
+                  status: imageItems.every((entry) => entry.status === "done")
+                    ? "done"
+                    : imageItems.some((entry) => entry.status === "error")
+                      ? "error"
+                      : imageItems.some((entry) => entry.status === "running" || entry.status === "switching")
+                        ? "running"
+                        : "waiting",
+                  message: "",
+                  percent: Math.round(imageItems.reduce((sum, entry) => sum + entry.percent, 0) / Math.max(imageItems.length, 1)),
+                  speedMbps: imageItems.find((entry) => entry.speedMbps)?.speedMbps ?? null,
+                } satisfies SetupProgress
+              : progress[step];
+            const label = PHASE_LABELS[step];
             const itemStatus = item?.status ?? "waiting";
             return (
               <li key={step} className={`onboarding-progress-item is-${itemStatus}`}>
@@ -343,7 +361,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
                 </span>
                 <div>
                   <strong>{label}</strong>
-                  <p>{item?.message ?? "等待中"}</p>
+                  <p>{progressMessage(itemStatus)}</p>
                 </div>
                 {itemStatus === "running" && item?.speedMbps ? (
                   <span className="onboarding-progress-item__speed">{item.speedMbps.toFixed(1)} MB/s</span>
@@ -363,43 +381,25 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
     );
   }
 
+  const applicationReady = status?.inferenceBackend === "mlx"
+    ? status?.mlxRuntimeAvailable
+    : status?.llamaServerAvailable;
   const statusItems = [
     {
-      label: status?.inferenceBackend === "mlx" ? "MLX 实验包" : "内置 Metal",
-      value:
-        status?.inferenceBackend === "mlx"
-          ? status?.mlxRuntimeAvailable
-            ? "已安装"
-            : "未安装"
-          : status?.llamaServerAvailable
-            ? "可用"
-            : "未完成",
-      ok:
-        status?.inferenceBackend === "mlx"
-          ? status?.mlxRuntimeAvailable
-          : status?.llamaServerAvailable,
+      label: "应用组件",
+      value: applicationReady ? "可用" : "未完成",
+      ok: applicationReady,
     },
-    ...(status?.inferenceBackend === "mlx"
-      ? [
-          {
-            label: "MLX 模型",
-            value: status?.mlxModelReady ? "已下载" : "未下载",
-            ok: status?.mlxModelReady,
-          },
-        ]
-      : [
-          {
-            label: "主模型",
-            value: status?.modelDownloaded ? "已下载" : "未下载",
-            ok: status?.modelDownloaded,
-          },
-          {
-            label: "视觉投影",
-            value: status?.mmprojDownloaded ? "已下载" : "未下载",
-            ok: status?.mmprojDownloaded,
-          },
-        ]),
-    { label: "整体状态", value: status?.modelReady ? "可用" : "未完成", ok: status?.modelReady },
+    {
+      label: "图片理解",
+      value: status?.modelReady ? "已下载" : "未下载",
+      ok: status?.modelReady,
+    },
+    {
+      label: "整体状态",
+      value: applicationReady && status?.modelReady ? "可用" : "未完成",
+      ok: applicationReady && status?.modelReady,
+    },
   ];
 
   return (
@@ -424,10 +424,13 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
           <p className="setup-panel__success-lead">配置完成</p>
           <ul className="onboarding-checklist">
             <li className={result?.runtimeReady ? "is-done" : ""}>
-              内置 Metal {result?.runtimeReady ? "已安装" : "未完成"}
+              设备检查 已完成
+            </li>
+            <li className={result?.runtimeReady ? "is-done" : ""}>
+              应用组件 {result?.runtimeReady ? "已准备" : "未完成"}
             </li>
             <li className={result?.modelReady ? "is-done" : ""}>
-              视觉模型 {result?.modelReady ? "已下载" : "未完成"}
+              图片理解 {result?.modelReady ? "已准备" : "未完成"}
             </li>
             <li className="is-done">快捷键：⌃⌥Space</li>
           </ul>
@@ -439,7 +442,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
       <div className="setup-panel__actions">
         {phase === "idle" || phase === "error" ? (
           <button type="button" className="settings-btn settings-btn--primary" onClick={() => void runSetup()}>
-            下载均衡模型并完成配置（约 1.6 GiB）
+            开始设置（约需 1.6 GiB）
           </button>
         ) : null}
 
@@ -447,7 +450,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
 
         {phase === "error" ? (
           <button type="button" className="settings-btn settings-btn--secondary" onClick={() => setPhase("idle")}>
-            返回
+            重试
           </button>
         ) : null}
 
