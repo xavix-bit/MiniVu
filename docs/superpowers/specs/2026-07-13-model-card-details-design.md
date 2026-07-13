@@ -25,7 +25,7 @@ The existing state badge, recommendation badge, description, and selection behav
 
 Each card contains a collapsed `查看模型详情` disclosure. Opening it shows:
 
-- Repository: `OpenBMB/MiniCPM-V-4.6-GGUF`
+- Repository: `openbmb/MiniCPM-V-4.6-gguf`
 - Complete model filename for the selected variant
 - Quantization bit depth
 - Shared image-understanding component filename: `mmproj-model-f16.gguf`
