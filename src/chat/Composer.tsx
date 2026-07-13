@@ -128,7 +128,7 @@ export function Composer({
           composingRef.current = false;
           compositionEndedAtRef.current = performance.now();
         }}
-        placeholder="问这张图…"
+        placeholder={disabled && !canSubmit ? "先截图、粘贴或选择一张图片" : "问这张图…"}
       />
       <div className="composer__footer">
         {isAnswering ? (

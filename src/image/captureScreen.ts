@@ -6,6 +6,10 @@ type CapturedImagePayload = {
   dataUrl: string;
 };
 
+export function isCaptureCancelled(error: unknown): boolean {
+  return String(error).includes("已取消截图");
+}
+
 export async function captureScreenRegion(): Promise<AcceptedImage> {
   try {
     const image = await invoke<CapturedImagePayload>("capture_screen_region");

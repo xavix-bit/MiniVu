@@ -41,8 +41,8 @@ export function TranscriptPanel({ messages, streamingText }: TranscriptPanelProp
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
-  }, [messages, streamingText]);
+    endRef.current?.scrollIntoView?.({ block: "end", behavior: "auto" });
+  }, [messages.length, Boolean(streamingText)]);
 
   return (
     <div className="transcript-panel" aria-label="对话">

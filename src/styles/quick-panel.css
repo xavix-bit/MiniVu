@@ -1215,13 +1215,6 @@ html.quick-panel-window[data-panel-mode="pet"] #root {
   cursor: not-allowed;
 }
 
-.image2-panel-tabs button.is-active {
-  border-color: #2361f1;
-  background: #edf3ff;
-  color: #2361f1;
-  box-shadow: inset 0 0 0 1px #2361f1;
-}
-
 .image2-panel-tabs span {
   font-size: 17px;
   line-height: 1;
@@ -1709,13 +1702,6 @@ html.quick-panel-window {
   display: none;
 }
 
-.quick-panel-window .image2-panel-tabs button.is-active {
-  border-color: rgba(37, 99, 235, 0.42);
-  background: #eef4ff;
-  color: #2563eb;
-  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.18);
-}
-
 .quick-panel-window .chat-panel__body {
   gap: 8px;
   overflow-y: auto;
@@ -1962,13 +1948,6 @@ html.quick-panel-window[data-theme="light"] .image2-panel-tabs button {
   color: #526176 !important;
 }
 
-html.quick-panel-window .image2-panel-tabs button.is-active,
-html.quick-panel-window[data-theme="dark"] .image2-panel-tabs button.is-active,
-html.quick-panel-window[data-theme="light"] .image2-panel-tabs button.is-active {
-  background: #edf4ff !important;
-  color: #2563eb !important;
-}
-
 html.quick-panel-window .quick-actions,
 html.quick-panel-window[data-theme="dark"] .quick-actions,
 html.quick-panel-window[data-theme="light"] .quick-actions {
@@ -2046,4 +2025,102 @@ html.quick-panel-window .composer__footer,
 html.quick-panel-window[data-theme="dark"] .composer__footer,
 html.quick-panel-window[data-theme="light"] .composer__footer {
   justify-content: flex-end !important;
+}
+
+/* Quick actions are commands, not persistent modes. */
+html.quick-panel-window .image2-panel-tabs button,
+html.quick-panel-window[data-theme="dark"] .image2-panel-tabs button,
+html.quick-panel-window[data-theme="light"] .image2-panel-tabs button {
+  min-height: 44px !important;
+  padding: 6px 4px !important;
+  box-shadow: none !important;
+}
+
+.chat-panel button,
+.chat-panel .composer__input,
+.chat-panel .drop-zone__capture,
+.chat-panel .drop-zone__secondary,
+.chat-panel .ghost-btn,
+.chat-panel .copy-btn {
+  min-height: 44px;
+}
+
+html.quick-panel-window .panel-header__btn,
+html.quick-panel-window .composer__submit,
+html.quick-panel-window .composer__stop {
+  min-height: 44px !important;
+}
+
+html.quick-panel-window .image2-start-actions,
+html.quick-panel-window[data-theme="dark"] .image2-start-actions,
+html.quick-panel-window[data-theme="light"] .image2-start-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+.image2-start-actions .drop-zone__capture {
+  grid-column: 1 / -1;
+}
+
+.quick-panel-window .chat-panel__body {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.quick-panel-window .transcript-panel {
+  flex: 0 0 auto;
+  min-height: 0;
+  overflow: visible;
+  padding-right: 0;
+}
+
+.ocr-status--failed,
+.answer-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid #f2c7c3;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fff8f7;
+  color: #9f2f28;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ocr-status--failed button,
+.answer-error button {
+  flex: 0 0 auto;
+  min-width: 64px;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  padding: 0 12px;
+  background: #ffffff;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+@media (max-width: 420px) {
+  .image2-panel-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .quick-panel-window .chat-panel__image-row--compact {
+    grid-template-columns: minmax(0, 96px) minmax(0, 1fr);
+  }
+
+  .quick-panel-window .chat-panel__image-actions--row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 340px) {
+  .quick-panel-window .chat-panel__image-row--compact {
+    grid-template-columns: 1fr;
+  }
 }

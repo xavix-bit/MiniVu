@@ -1,17 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { Composer } from "./Composer";
 import { ImagePreviewStrip } from "./ImagePreviewStrip";
 import { ModelStatusBar } from "./ModelStatusBar";
 import { PanelHeader } from "./PanelHeader";
-import { QuickActions } from "./QuickActions";
 import { RecognizedTextPanel } from "./RecognizedTextPanel";
 import { ReplaceImageConfirm } from "./ReplaceImageConfirm";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { useImageSession } from "./useImageSession";
 import { exportCurrentSession } from "../export/exportSession";
-import { captureScreenRegion } from "../image/captureScreen";
+import { captureScreenRegion, isCaptureCancelled } from "../image/captureScreen";
 import {
   filterAcceptedFiles,
   readClipboardImage,
@@ -56,14 +54,18 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
     streamingText,
     isAnswering,
     ocrLoading,
+    ocrStatus,
     error,
+    answerError,
     statusBar,
     clearError,
     setImage,
+    retryOcr,
     pendingReplaceImage,
     confirmReplaceImage,
     cancelReplaceImage,
     ask,
+    retryAnswer,
     stopGeneration,
     clearConversation,
   } = useImageSession();
@@ -71,7 +73,6 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const hasConversation = state.messages.length > 0 || Boolean(streamingText);
-  const showQuickActions = Boolean(state.image) && !hasConversation;
   const banner = error || notice;
 
   useEffect(() => {
@@ -92,6 +93,9 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
 
   useEffect(() => {
     function handlePaste(event: ClipboardEvent) {
+      if (isAnswering) {
+        return;
+      }
       const items = event.clipboardData?.items;
       if (!items) {
         return;
@@ -115,7 +119,7 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
 
     window.addEventListener("paste", handlePaste);
     return () => window.removeEventListener("paste", handlePaste);
-  }, [setImage]);
+  }, [isAnswering, setImage]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -139,6 +143,9 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
 
     function handleDragEnter(event: DragEvent) {
       event.preventDefault();
+      if (isAnswering) {
+        return;
+      }
       setDragOver(true);
     }
 
@@ -150,12 +157,18 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
 
     function handleDragOver(event: DragEvent) {
       event.preventDefault();
+      if (isAnswering) {
+        return;
+      }
       setDragOver(true);
     }
 
     function handleDrop(event: DragEvent) {
       event.preventDefault();
       setDragOver(false);
+      if (isAnswering) {
+        return;
+      }
       const files = filterAcceptedFiles(event.dataTransfer?.files ?? []);
       const file = files[0];
       if (file) {
@@ -173,7 +186,7 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
       element.removeEventListener("dragover", handleDragOver);
       element.removeEventListener("drop", handleDrop);
     };
-  }, [setImage, state.image, hasConversation]);
+  }, [hasConversation, isAnswering, setImage, state.image]);
 
   async function handleExport() {
     try {
@@ -216,24 +229,6 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
     void ask(prompt, displayText);
   }
 
-  async function handleCopyText() {
-    if (ocrLoading) {
-      setNotice("识别中…");
-      return;
-    }
-    const text = state.ocrText.trim();
-    if (!text) {
-      setNotice("没识别到文字。");
-      return;
-    }
-    try {
-      await writeText(text);
-      setNotice("已复制文字");
-    } catch (err) {
-      setNotice(`复制失败：${String(err)}`);
-    }
-  }
-
   function handleTranslateImage() {
     if (!state.image || isAnswering) {
       return;
@@ -262,10 +257,16 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
   }
 
   function triggerReplaceImage() {
+    if (isAnswering) {
+      return;
+    }
     fileInputRef.current?.click();
   }
 
   async function handlePasteImage() {
+    if (isAnswering) {
+      return;
+    }
     const image = await readClipboardImage();
     if (image) {
       await setImage(image);
@@ -285,9 +286,8 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
       const image = await captureScreenRegion();
       await setImage(image);
     } catch (err) {
-      const message = String(err);
-      if (!message.includes("已取消截图")) {
-        setNotice(message);
+      if (!isCaptureCancelled(err)) {
+        setNotice("未能截图，请重试");
       }
     } finally {
       setCapturing(false);
@@ -295,6 +295,10 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
   }
 
   function handleFilePicked(event: React.ChangeEvent<HTMLInputElement>) {
+    if (isAnswering) {
+      event.target.value = "";
+      return;
+    }
     const file = event.target.files?.[0];
     if (file) {
       void readFileAsDataUrl(file).then((image) => void setImage(image));
@@ -317,25 +321,24 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
         visible={statusBar.visible}
         message={statusBar.message}
         detail={statusBar.detail}
-        onStop={() => void stopGeneration()}
       />
 
-      <div className="image2-panel-tabs" aria-label="识别模式">
-        <button type="button" className="is-active" onClick={() => void handleCaptureScreen()} disabled={capturing || isAnswering}>
+      <div className="image2-panel-tabs" aria-label="快捷操作">
+        <button type="button" aria-label="截图 OCR" onClick={() => void handleCaptureScreen()} disabled={capturing || isAnswering}>
           <span>⌗</span>
-          截图
+          截图 OCR
         </button>
-        <button type="button" onClick={() => void handleCopyText()} disabled={!state.image || isAnswering}>
-          <span>≡</span>
-          文字
-        </button>
-        <button type="button" onClick={handleTranslateImage} disabled={!state.image || isAnswering}>
+        <button type="button" aria-label="截图翻译" onClick={handleTranslateImage} disabled={!state.image || isAnswering}>
           <span>⇄</span>
-          翻译
+          截图翻译
         </button>
-        <button type="button" onClick={handleAskImage} disabled={!state.image || isAnswering}>
+        <button type="button" aria-label="图片问答" onClick={handleAskImage} disabled={!state.image || isAnswering}>
           <span>◎</span>
-          问图
+          图片问答
+        </button>
+        <button type="button" aria-label="更多" onClick={triggerReplaceImage} disabled={isAnswering}>
+          <span>•••</span>
+          更多
         </button>
       </div>
 
@@ -371,6 +374,7 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
         type="file"
         accept="image/png,image/jpeg,image/webp"
         hidden
+        disabled={isAnswering}
         onChange={handleFilePicked}
       />
 
@@ -405,7 +409,15 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
                 disabled={isAnswering}
                 onClick={() => void handlePasteImage()}
               >
-                粘贴
+                粘贴图片
+              </button>
+              <button
+                type="button"
+                className="drop-zone__secondary"
+                disabled={isAnswering}
+                onClick={triggerReplaceImage}
+              >
+                选择图片
               </button>
             </div>
           </div>
@@ -419,35 +431,23 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
                   compact={hasConversation}
                 />
                 <div className={`chat-panel__image-actions${hasConversation ? " chat-panel__image-actions--row" : ""}`}>
-                  <button
-                    type="button"
-                    className="ghost-btn"
-                    disabled={capturing || isAnswering}
-                    onClick={() => void handleCaptureScreen()}
-                  >
-                    {capturing ? "截图中…" : "截图"}
-                  </button>
-                  <button type="button" className="ghost-btn" onClick={triggerReplaceImage}>
+                  <button type="button" className="ghost-btn" disabled={isAnswering} onClick={triggerReplaceImage}>
                     换图
                   </button>
                   {hasConversation ? (
-                    <button type="button" className="ghost-btn" onClick={clearConversation}>
+                    <button type="button" className="ghost-btn" disabled={isAnswering} onClick={clearConversation}>
                       清空
                     </button>
                   ) : null}
                 </div>
               </div>
-              {showQuickActions ? (
-                <QuickActions
-                  onCopyText={() => void handleCopyText()}
-                  onTranslate={handleTranslateImage}
-                  onAsk={handleAskImage}
-                  textReady={Boolean(state.ocrText.trim())}
-                  disabled={isAnswering || ocrLoading}
+              {!hasConversation ? (
+                <RecognizedTextPanel
+                  text={state.ocrText}
+                  status={ocrStatus}
+                  disabled={isAnswering}
+                  onRetry={() => void retryOcr()}
                 />
-              ) : null}
-              {!hasConversation && (state.ocrText || ocrLoading) ? (
-                <RecognizedTextPanel text={state.ocrText} loading={ocrLoading} />
               ) : null}
             </div>
 
@@ -455,8 +455,23 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
               <TranscriptPanel messages={state.messages} streamingText={streamingText} />
             ) : null}
 
-            {hasConversation && (state.ocrText || ocrLoading) ? (
-              <RecognizedTextPanel text={state.ocrText} loading={ocrLoading} compact />
+            {hasConversation ? (
+              <RecognizedTextPanel
+                text={state.ocrText}
+                status={ocrStatus}
+                compact
+                disabled={isAnswering}
+                onRetry={() => void retryOcr()}
+              />
+            ) : null}
+
+            {answerError ? (
+              <div className="answer-error" role="alert">
+                <span>{answerError}</span>
+                <button type="button" onClick={() => void retryAnswer()} disabled={isAnswering}>
+                  重试回答
+                </button>
+              </div>
             ) : null}
           </>
         )}
@@ -464,7 +479,7 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
 
       <Composer
         value={input}
-        disabled={false}
+        disabled={!state.image || isAnswering}
         isAnswering={isAnswering}
         canSubmit={Boolean(state.image)}
         focusSignal={focusComposerSignal}

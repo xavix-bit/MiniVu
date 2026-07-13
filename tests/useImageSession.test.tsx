@@ -169,11 +169,11 @@ describe("image session state", () => {
     expect(invokeMock).not.toHaveBeenCalledWith("get_model_status");
     expect(invokeMock).toHaveBeenCalledWith("export_session", {
       request: expect.objectContaining({
-        markdown: expect.stringContaining("模型：`MiniCPM-V 4.6 GGUF · Q5`"),
+        markdown: expect.stringContaining("处理方式：`MiniVu 本机处理 · 高精度`"),
       }),
     });
     const exportRequest = invokeMock.mock.calls.find(([command]) => command === "export_session")?.[1];
-    expect(JSON.stringify(exportRequest)).not.toContain("GGUF · Q4");
+    expect(JSON.stringify(exportRequest)).not.toContain("GGUF");
   });
 
   it("ignores a stream chunk carrying another request identity", async () => {
@@ -252,8 +252,132 @@ describe("image session state", () => {
     await act(async () => { await result.current.ask("第二次"); });
 
     expect(result.current.state.messages).toEqual([
+      { role: "user", content: "第一次" },
       { role: "user", content: "第二次" },
       { role: "assistant", content: "成功。", modelVersion: "Custom MLX · local-vlm" },
     ]);
+  });
+
+  it("keeps a failed question and retries it without exposing the raw error", async () => {
+    let askCount = 0;
+    invokeMock.mockImplementation(async (command, arguments_) => {
+      if (command === "get_model_status") return structuredClone(status);
+      if (command === "recognize_text_from_image_data_url") return { text: "本地文字" };
+      if (command === "ask_image") {
+        askCount += 1;
+        if (askCount === 1) {
+          throw new Error("http://127.0.0.1:43123 returned stderr");
+        }
+        const requestId = (arguments_ as { requestId: string }).requestId;
+        modelStreamHandler?.({
+          payload: { text: "重试成功。", done: false, requestId, modelLabel: "MiniCPM-V" },
+        });
+        modelStreamHandler?.({
+          payload: { text: "", done: true, requestId, modelLabel: "MiniCPM-V" },
+        });
+      }
+      return undefined;
+    });
+    const { result } = renderHook(() => useImageSession());
+
+    await act(async () => {
+      await result.current.setImage({ name: "screen.png", dataUrl: "data:image/png;base64,abc" });
+    });
+    await act(async () => {
+      await result.current.ask("图里写了什么？");
+    });
+
+    expect(result.current.state.messages).toEqual([{ role: "user", content: "图里写了什么？" }]);
+    expect(result.current.answerError).toBe("回答没有完成，请重试");
+    expect(result.current.answerError).not.toContain("stderr");
+
+    await act(async () => {
+      await result.current.retryAnswer();
+    });
+
+    expect(result.current.state.messages).toEqual([
+      { role: "user", content: "图里写了什么？" },
+      { role: "assistant", content: "重试成功。", modelVersion: "MiniCPM-V" },
+    ]);
+    expect(result.current.answerError).toBe("");
+  });
+
+  it("keeps the image available when OCR fails and can retry without raw errors", async () => {
+    let ocrAttempts = 0;
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_model_status") return structuredClone(status);
+      if (command === "recognize_text_from_image_data_url") {
+        ocrAttempts += 1;
+        if (ocrAttempts === 1) {
+          throw new Error("Vision helper stderr: private path");
+        }
+        return { text: "重试识别成功" };
+      }
+      return undefined;
+    });
+    const { result } = renderHook(() => useImageSession());
+
+    await act(async () => {
+      await result.current.setImage({ name: "screen.png", dataUrl: "data:image/png;base64,abc" });
+    });
+
+    expect(result.current.state.image?.name).toBe("screen.png");
+    expect(result.current.ocrStatus).toBe("failed");
+    expect(result.current.ocrError).toBe("文字没识别出来");
+    expect(result.current.ocrError).not.toContain("stderr");
+
+    await act(async () => {
+      await result.current.retryOcr();
+    });
+
+    expect(result.current.ocrStatus).toBe("recognized");
+    expect(result.current.state.ocrText).toBe("重试识别成功");
+    expect(result.current.ocrError).toBe("");
+  });
+
+  it("blocks image changes and clearing while an answer is running", async () => {
+    let finishAnswer: (() => void) | undefined;
+    invokeMock.mockImplementation(async (command, arguments_) => {
+      if (command === "get_model_status") return structuredClone(status);
+      if (command === "recognize_text_from_image_data_url") return { text: "本地文字" };
+      if (command === "ask_image") {
+        const requestId = (arguments_ as { requestId: string }).requestId;
+        await new Promise<void>((resolve) => {
+          finishAnswer = () => {
+            modelStreamHandler?.({
+              payload: { text: "完成。", done: false, requestId, modelLabel: "MiniCPM-V" },
+            });
+            modelStreamHandler?.({
+              payload: { text: "", done: true, requestId, modelLabel: "MiniCPM-V" },
+            });
+            resolve();
+          };
+        });
+      }
+      return undefined;
+    });
+    const { result } = renderHook(() => useImageSession());
+    await act(async () => {
+      await result.current.setImage({ name: "first.png", dataUrl: "data:image/png;base64,first" });
+    });
+
+    let answerPromise: Promise<void> | undefined;
+    act(() => {
+      answerPromise = result.current.ask("继续分析");
+    });
+    await waitFor(() => expect(result.current.isAnswering).toBe(true));
+
+    await act(async () => {
+      expect(await result.current.setImage({ name: "second.png", dataUrl: "data:image/png;base64,second" })).toBe(false);
+      result.current.clearConversation();
+    });
+
+    expect(result.current.state.image?.name).toBe("first.png");
+    expect(result.current.state.messages).toEqual([{ role: "user", content: "继续分析" }]);
+
+    await act(async () => {
+      finishAnswer?.();
+      await answerPromise;
+    });
   });
 });
