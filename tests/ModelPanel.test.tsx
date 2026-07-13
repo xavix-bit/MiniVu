@@ -103,6 +103,45 @@ describe("ModelPanel", () => {
     expect(visibleCopy.textContent).not.toMatch(/Metal|GGUF|MLX|llama|sidecar|runtime|推理引擎|权重|视觉投影器/i);
   });
 
+  it("keeps the standard content summary visible while download progress is idle", async () => {
+    render(<ModelPanel />);
+
+    await screen.findByRole("button", { name: "当前使用" });
+    const summary = screen.getByLabelText("内容摘要");
+    expect(Array.from(summary.querySelectorAll(".model-file-list__label"), (node) => node.textContent))
+      .toEqual(["问答组件", "图片理解组件", "已用空间"]);
+    expect(summary).toHaveTextContent("1.5 GiB");
+    expect(screen.getByLabelText("下载进度")).toBeEmptyDOMElement();
+  });
+
+  it("shows separate component and estimated storage summaries in compatibility mode", async () => {
+    const compatibleStatus: ModelStatusResponse = {
+      ...structuredClone(status),
+      inferenceBackend: "mlx",
+      activeBackend: "mlx",
+      modelReady: true,
+      mlxRuntimeAvailable: true,
+      mlxModelReady: true,
+      modelStorageBytes: 0,
+    };
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "get_model_status") return structuredClone(compatibleStatus);
+      if (command === "get_model_download_status") return null;
+      return undefined;
+    });
+    render(<ModelPanel />);
+
+    const summary = await screen.findByLabelText("内容摘要");
+    expect(Array.from(summary.querySelectorAll(".model-file-list__label"), (node) => node.textContent))
+      .toEqual(["问答组件", "图片理解组件", "已用空间"]);
+    expect(summary).toHaveTextContent("约 2.1 GiB");
+    expect(summary).toHaveTextContent("兼容模式估算");
+    expect(screen.getByText("技术详情").closest("details")).not.toHaveAttribute("open");
+    const visibleCopy = document.body.cloneNode(true) as HTMLElement;
+    visibleCopy.querySelectorAll("details:not([open]) > :not(summary)").forEach((node) => node.remove());
+    expect(visibleCopy.textContent).not.toMatch(/Metal|GGUF|MLX|llama|sidecar|runtime|推理引擎|权重|视觉投影器/i);
+  });
+
   it("stages a variant selection without saving settings", async () => {
     render(<ModelPanel />);
     const clearVariant = await screen.findByRole("button", { name: /^高精度/ });

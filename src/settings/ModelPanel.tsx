@@ -12,7 +12,7 @@ import {
 import { modelClient } from "../model/modelClient";
 import type { DownloadTaskSnapshot, ModelStatusResponse } from "../model/types";
 import { resolveGgufPercent, resolveMlxPercent } from "../shared/downloadProgress";
-import { EXPECTED_MMPROJ_BYTES, GGUF_MODEL_VARIANTS } from "../shared/modelConstants";
+import { EXPECTED_MLX_BYTES, EXPECTED_MMPROJ_BYTES, GGUF_MODEL_VARIANTS } from "../shared/modelConstants";
 import type { GgufModelVariant } from "./settingsStore";
 
 type ModelPanelProps = {
@@ -653,6 +653,14 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
     : null;
   const hasDownloadAction = primaryAction?.kind === "cancel" || primaryAction?.kind === "canceling";
   const needsRuntimeSetup = Boolean(status && !runtimeReady && !hasDownloadAction);
+  const questionReady = isMlx ? status?.mlxModelReady : status?.modelDownloaded;
+  const imageReady = isMlx ? status?.mlxModelReady : status?.mmprojDownloaded;
+  const contentState = (ready: boolean | undefined) => status ? ready ? "已下载" : "未下载" : "读取中";
+  const storageValue = !status
+    ? "读取中"
+    : isMlx
+      ? status.mlxModelReady ? `约 ${formatModelStorage(EXPECTED_MLX_BYTES)}` : "尚未统计"
+      : formatModelStorage(status.modelStorageBytes);
   const primaryLabel = operation === "canceling"
     ? "正在取消…"
     : operation === "switching"
@@ -670,6 +678,38 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
           <p>应用组件尚未准备好。</p>
         </div>
       ) : null}
+
+      <section className="surface model-panel__files" aria-label="内容摘要">
+        <ul className="model-file-list">
+          <li className="model-file-list__item">
+            <div className="model-file-list__head">
+              <span className="model-file-list__label">问答组件</span>
+              <strong className={`model-file-list__value${questionReady ? " is-positive" : ""}`}>{contentState(questionReady)}</strong>
+            </div>
+            <span className="model-file-list__path">用于理解问题并生成回答</span>
+          </li>
+          <li className="model-file-list__item">
+            <div className="model-file-list__head">
+              <span className="model-file-list__label">图片理解组件</span>
+              <strong className={`model-file-list__value${imageReady ? " is-positive" : ""}`}>{contentState(imageReady)}</strong>
+            </div>
+            <span className="model-file-list__path">用于读取图片中的内容</span>
+          </li>
+          <li className="model-file-list__item">
+            <div className="model-file-list__head">
+              <span className="model-file-list__label">已用空间</span>
+              <strong className="model-file-list__value">{storageValue}</strong>
+            </div>
+            <span className="model-file-list__path">{isMlx ? "兼容模式估算" : "含未完成下载"}</span>
+          </li>
+        </ul>
+        {isMlx ? (
+          <details className="settings-advanced">
+            <summary>技术详情</summary>
+            <p>MLX 兼容模式</p>
+          </details>
+        ) : null}
+      </section>
 
       {!isMlx ? (
         <section className="surface model-variant-picker" aria-label="精度选择">
@@ -714,21 +754,6 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
         </section>
       ) : null}
 
-      {isMlx ? (
-        <section className="surface model-panel__files" aria-label="兼容处理状态">
-          {status ? (
-            <ul className="model-file-list">
-              <li className="model-file-list__item"><div className="model-file-list__head"><span className="model-file-list__label">应用组件</span><strong className={`model-file-list__value${status.mlxRuntimeAvailable ? " is-positive" : ""}`}>{status.mlxRuntimeAvailable ? "已准备" : "未准备"}</strong></div></li>
-              <li className="model-file-list__item"><div className="model-file-list__head"><span className="model-file-list__label">问答与图片理解</span><strong className={`model-file-list__value${status.mlxModelReady ? " is-positive" : ""}`}>{status.mlxModelReady ? "已下载" : "未下载"}</strong></div></li>
-            </ul>
-          ) : <p className="placeholder-copy">正在读取下载状态…</p>}
-          <details className="settings-advanced">
-            <summary>技术详情</summary>
-            <p>MLX 兼容模式</p>
-          </details>
-        </section>
-      ) : null}
-
       <section className="surface model-panel__actions-card" aria-label="下载操作">
         <div className="model-actions">
           <button
@@ -754,7 +779,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
         <div className="model-progress-region" aria-label="下载进度" aria-live="polite">
           {isMlx && mlxProgress.status !== "idle" ? (
             <div className="model-download-progress">
-              <ProgressItem label="问答与图片理解" item={{ ...mlxProgress, downloaded: 0, speedMbps: null }} />
+              <ProgressItem label="问答组件与图片理解组件" item={{ ...mlxProgress, downloaded: 0, speedMbps: null }} />
             </div>
           ) : null}
           {!isMlx && (Object.keys(fileProgress) as FileKey[]).some((key) => fileProgress[key].status !== "idle") ? (
@@ -766,18 +791,18 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
           ) : null}
         </div>
 
-        {!isMlx && status ? (
+        {!isMlx && status && status.modelStorageBytes > 0 ? (
           <div className="model-storage-row">
-            <div><span>已用空间</span><strong>{formatModelStorage(status.modelStorageBytes)}</strong><small>含未完成下载</small></div>
-            {status.modelStorageBytes > 0 && !removeConfirm ? (
+            <div><span>存储管理</span><small>移除后可重新下载</small></div>
+            {!removeConfirm ? (
               <button type="button" className="settings-btn settings-btn--danger-secondary" disabled={operation !== "idle" || activeTask !== null} onClick={() => setRemoveConfirm(true)}>移除下载内容</button>
-            ) : status.modelStorageBytes > 0 ? (
+            ) : (
               <div className="model-remove-confirm" role="group" aria-label="确认移除下载内容">
                 <p>将移除全部已下载内容，未完成下载也会清理。</p>
                 <button type="button" className="settings-btn settings-btn--danger" disabled={operation !== "idle"} onClick={() => void removeModels()}>{operation === "removing" ? "正在移除…" : "确认移除"}</button>
                 <button type="button" className="settings-btn settings-btn--secondary" disabled={operation !== "idle"} onClick={() => setRemoveConfirm(false)}>取消</button>
               </div>
-            ) : null}
+            )}
           </div>
         ) : null}
       </section>
