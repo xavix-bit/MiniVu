@@ -47,6 +47,7 @@ type FailedAnswer = {
 
 export function useImageSession() {
   const [state, setState] = useState<ImageSessionState>(createImageSessionState);
+  const stateRef = useRef(state);
   const [streamingText, setStreamingText] = useState("");
   const [isAnswering, setIsAnswering] = useState(false);
   const [modelLoading, setModelLoading] = useState(false);
@@ -62,9 +63,26 @@ export function useImageSession() {
   const [mlxWeightsReady, setMlxWeightsReady] = useState(true);
   const [loadProgress, setLoadProgress] = useState("");
   const [elapsed, setElapsed] = useState(0);
+  const answerRequestRef = useRef(0);
   const isAnsweringRef = useRef(false);
   const ocrRequestRef = useRef(0);
   const warmupStartedRef = useRef(false);
+
+  const setSessionState = useCallback(
+    (update: ImageSessionState | ((current: ImageSessionState) => ImageSessionState)) => {
+      if (typeof update !== "function") {
+        stateRef.current = update;
+        setState(update);
+        return;
+      }
+      setState((current) => {
+        const next = update(current);
+        stateRef.current = next;
+        return next;
+      });
+    },
+    [],
+  );
 
   const setAnswering = useCallback((value: boolean) => {
     isAnsweringRef.current = value;
@@ -94,8 +112,9 @@ export function useImageSession() {
   }, []);
 
   const resetSession = useCallback(() => {
+    answerRequestRef.current += 1;
     ocrRequestRef.current += 1;
-    setState(createImageSessionState());
+    setSessionState(createImageSessionState());
     setStreamingText("");
     setAnswering(false);
     setModelLoading(false);
@@ -109,7 +128,7 @@ export function useImageSession() {
     setLoadProgress("");
     setElapsed(0);
     warmupStartedRef.current = false;
-  }, [setAnswering]);
+  }, [setAnswering, setSessionState]);
 
   const recognizeImage = useCallback(async (image: ImageAttachment) => {
     const requestId = ++ocrRequestRef.current;
@@ -124,13 +143,13 @@ export function useImageSession() {
       if (requestId !== ocrRequestRef.current) {
         return;
       }
-      setState((current) => ({ ...current, ocrText: text }));
+      setSessionState((current) => ({ ...current, ocrText: text }));
       setOcrStatus(text ? "recognized" : "empty");
     } catch {
       if (requestId !== ocrRequestRef.current) {
         return;
       }
-      setState((current) => ({ ...current, ocrText: "" }));
+      setSessionState((current) => ({ ...current, ocrText: "" }));
       setOcrStatus("failed");
       setOcrError("文字没识别出来");
     } finally {
@@ -138,18 +157,18 @@ export function useImageSession() {
         setOcrLoading(false);
       }
     }
-  }, []);
+  }, [setSessionState]);
 
   const applyImage = useCallback(async (image: ImageAttachment, replaceConversation: boolean) => {
     if (isAnsweringRef.current) {
       return false;
     }
     if (replaceConversation) {
-      setState({ ...createImageSessionState(), image, ocrText: "" });
+      setSessionState({ ...createImageSessionState(), image, ocrText: "" });
       setStreamingText("");
       setAnswering(false);
     } else {
-      setState((current) => ({ ...current, image, ocrText: "" }));
+      setSessionState((current) => ({ ...current, image, ocrText: "" }));
     }
 
     setError("");
@@ -158,7 +177,7 @@ export function useImageSession() {
     kickModelWarmup();
     await recognizeImage(image);
     return true;
-  }, [kickModelWarmup, recognizeImage, setAnswering]);
+  }, [kickModelWarmup, recognizeImage, setAnswering, setSessionState]);
 
   const retryOcr = useCallback(async () => {
     if (!state.image || ocrLoading || isAnsweringRef.current) {
@@ -172,13 +191,13 @@ export function useImageSession() {
       if (isAnsweringRef.current) {
         return false;
       }
-      if (shouldConfirmImageReplacement(state)) {
+      if (shouldConfirmImageReplacement(stateRef.current)) {
         setPendingReplaceImage(image);
         return false;
       }
       return applyImage(image, false);
     },
-    [applyImage, state],
+    [applyImage],
   );
 
   const confirmReplaceImage = useCallback(async () => {
@@ -198,14 +217,14 @@ export function useImageSession() {
     if (isAnsweringRef.current) {
       return;
     }
-    setState((current) => ({ ...current, messages: [] }));
+    setSessionState((current) => ({ ...current, messages: [] }));
     setStreamingText("");
     setAnswering(false);
     setModelLoading(false);
     setError("");
     setAnswerError("");
     setFailedAnswer(null);
-  }, [setAnswering]);
+  }, [setAnswering, setSessionState]);
 
   const stopGeneration = useCallback(async () => {
     try {
@@ -217,18 +236,20 @@ export function useImageSession() {
 
   const runAnswer = useCallback(
     async (prompt: string, displayText?: string, reuseLastQuestion = false) => {
-      if (!state.image || !prompt.trim() || isAnsweringRef.current) {
+      const currentState = stateRef.current;
+      if (!currentState.image || !prompt.trim() || isAnsweringRef.current) {
         return;
       }
+      const answerRequest = ++answerRequestRef.current;
 
-      const history = reuseLastQuestion ? state.messages.slice(0, -1) : state.messages;
+      const history = reuseLastQuestion ? currentState.messages.slice(0, -1) : currentState.messages;
       const isFollowUp = history.length > 0;
       const userMessage: ChatMessage = {
         role: "user",
         content: (displayText ?? prompt).trim(),
       };
       if (!reuseLastQuestion) {
-        setState((current) => ({
+        setSessionState((current) => ({
           ...current,
           messages: [...current.messages, userMessage],
         }));
@@ -247,12 +268,15 @@ export function useImageSession() {
       try {
         await modelClient.askImage(
           {
-            imageDataUrl: state.image.dataUrl,
-            ocrText: state.ocrText,
+            imageDataUrl: currentState.image.dataUrl,
+            ocrText: currentState.ocrText,
             prompt: prompt.trim(),
             history: history.map(({ role, content }) => ({ role, content })),
           },
           (chunk) => {
+            if (answerRequest !== answerRequestRef.current) {
+              return;
+            }
             if (chunk.modelLabel) {
               modelVersion = chunk.modelLabel;
             }
@@ -266,20 +290,29 @@ export function useImageSession() {
             }
           },
         );
+        if (answerRequest !== answerRequestRef.current) {
+          return;
+        }
         if (!assistantText.trim()) {
           failed = true;
           setAnswerError("回答没有完成，请重试");
         }
       } catch {
+        if (answerRequest !== answerRequestRef.current) {
+          return;
+        }
         failed = true;
         setAnswerError("回答没有完成，请重试");
       } finally {
+        if (answerRequest !== answerRequestRef.current) {
+          return;
+        }
         setModelLoading(false);
         setAnswering(false);
         if (failed) {
           setFailedAnswer({ prompt: prompt.trim(), displayText });
         } else if (assistantText.trim()) {
-          setState((current) => ({
+          setSessionState((current) => ({
             ...current,
             messages: [
               ...current.messages,
@@ -290,7 +323,7 @@ export function useImageSession() {
         setStreamingText("");
       }
     },
-    [setAnswering, state.image, state.messages, state.ocrText],
+    [setAnswering, setSessionState],
   );
 
   const ask = useCallback(

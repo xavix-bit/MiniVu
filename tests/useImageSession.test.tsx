@@ -470,4 +470,117 @@ describe("image session state", () => {
     expect(result.current.state.ocrText).toBe("第二张文字");
     expect(result.current.ocrStatus).toBe("recognized");
   });
+
+  it("invalidates answer chunks and cleanup after the session resets", async () => {
+    const streamHandlers: Array<(event: { payload: TestStreamChunk }) => void> = [];
+    const finishAnswer: Array<() => void> = [];
+    listenMock.mockImplementation(async (event, handler) => {
+      if (event === "model-stream") {
+        streamHandlers.push(handler as (event: { payload: TestStreamChunk }) => void);
+      }
+      return vi.fn();
+    });
+    invokeMock.mockImplementation(async (command, arguments_) => {
+      if (command === "get_model_status") return structuredClone(status);
+      if (command === "recognize_text_from_image_data_url") return { text: "本地文字" };
+      if (command === "ask_image") {
+        const requestId = (arguments_ as { requestId: string }).requestId;
+        const handler = streamHandlers[finishAnswer.length];
+        await new Promise<void>((resolve) => {
+          finishAnswer.push(() => {
+            handler({
+              payload: { text: `回答 ${finishAnswer.length}`, done: false, requestId, modelLabel: "MiniCPM-V" },
+            });
+            handler({ payload: { text: "", done: true, requestId, modelLabel: "MiniCPM-V" } });
+            resolve();
+          });
+        });
+      }
+      return undefined;
+    });
+    const { result } = renderHook(() => useImageSession());
+    await act(async () => {
+      await result.current.setImage({ name: "old.png", dataUrl: "data:image/png;base64,old" });
+    });
+
+    let oldAnswer: Promise<void> | undefined;
+    act(() => {
+      oldAnswer = result.current.ask("旧问题");
+    });
+    await waitFor(() => expect(finishAnswer).toHaveLength(1));
+
+    act(() => result.current.resetSession());
+    await act(async () => {
+      await result.current.setImage({ name: "new.png", dataUrl: "data:image/png;base64,new" });
+    });
+    let newAnswer: Promise<void> | undefined;
+    act(() => {
+      newAnswer = result.current.ask("新问题");
+    });
+    await waitFor(() => expect(finishAnswer).toHaveLength(2));
+
+    await act(async () => {
+      finishAnswer[0]();
+      await oldAnswer;
+    });
+
+    expect(result.current.state.image?.name).toBe("new.png");
+    expect(result.current.state.messages).toEqual([{ role: "user", content: "新问题" }]);
+    expect(result.current.streamingText).toBe("");
+    expect(result.current.isAnswering).toBe(true);
+
+    await act(async () => {
+      finishAnswer[1]();
+      await newAnswer;
+    });
+  });
+
+  it("uses the latest conversation when an image read returns after an answer completes", async () => {
+    let finishAnswer: (() => void) | undefined;
+    invokeMock.mockImplementation(async (command, arguments_) => {
+      if (command === "get_model_status") return structuredClone(status);
+      if (command === "recognize_text_from_image_data_url") return { text: "本地文字" };
+      if (command === "ask_image") {
+        const requestId = (arguments_ as { requestId: string }).requestId;
+        await new Promise<void>((resolve) => {
+          finishAnswer = () => {
+            modelStreamHandler?.({
+              payload: { text: "回答完成。", done: false, requestId, modelLabel: "MiniCPM-V" },
+            });
+            modelStreamHandler?.({
+              payload: { text: "", done: true, requestId, modelLabel: "MiniCPM-V" },
+            });
+            resolve();
+          };
+        });
+      }
+      return undefined;
+    });
+    const { result } = renderHook(() => useImageSession());
+    await act(async () => {
+      await result.current.setImage({ name: "first.png", dataUrl: "data:image/png;base64,first" });
+    });
+    const finishInFlightRead = result.current.setImage;
+
+    let answer: Promise<void> | undefined;
+    act(() => {
+      answer = result.current.ask("分析图片");
+    });
+    await waitFor(() => expect(result.current.isAnswering).toBe(true));
+    await act(async () => {
+      finishAnswer?.();
+      await answer;
+    });
+
+    await act(async () => {
+      expect(await finishInFlightRead({
+        name: "late.png",
+        dataUrl: "data:image/png;base64,late",
+      })).toBe(false);
+    });
+
+    expect(result.current.state.image?.name).toBe("first.png");
+    expect(result.current.state.messages).toHaveLength(2);
+    expect(result.current.pendingReplaceImage?.name).toBe("late.png");
+  });
 });

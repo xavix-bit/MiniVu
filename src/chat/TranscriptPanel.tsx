@@ -42,7 +42,7 @@ export function TranscriptPanel({ messages, streamingText }: TranscriptPanelProp
 
   useEffect(() => {
     endRef.current?.scrollIntoView?.({ block: "end", behavior: "auto" });
-  }, [messages.length, Boolean(streamingText)]);
+  }, [messages.length, streamingText]);
 
   return (
     <div className="transcript-panel" aria-label="对话">
