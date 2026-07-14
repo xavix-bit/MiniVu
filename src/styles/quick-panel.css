@@ -382,51 +382,18 @@ html.quick-panel-window[data-panel-mode="pet"] #root {
   place-items: center;
   width: 70px;
   height: 54px;
-  border: 2px solid var(--accent);
+  border: 1px solid #c9d8fb;
   border-radius: 16px;
-  background: var(--card);
-  color: var(--text);
+  background: #eef4ff;
+  color: #2563eb;
   opacity: 1;
   box-shadow: 0 8px 22px rgba(59, 99, 230, 0.12);
 }
 
-.drop-zone__icon::before,
-.drop-zone__icon::after,
-.drop-zone__icon span::before,
-.drop-zone__icon span::after {
-  content: "";
-  position: absolute;
-  width: 14px;
-  height: 14px;
-  border-color: var(--text);
-}
-
-.drop-zone__icon::before {
-  left: 14px;
-  top: 13px;
-  border-top: 2px solid;
-  border-left: 2px solid;
-}
-
-.drop-zone__icon::after {
-  right: 14px;
-  top: 13px;
-  border-top: 2px solid;
-  border-right: 2px solid;
-}
-
-.drop-zone__icon span::before {
-  left: 14px;
-  bottom: 13px;
-  border-bottom: 2px solid;
-  border-left: 2px solid;
-}
-
-.drop-zone__icon span::after {
-  right: 14px;
-  bottom: 13px;
-  border-right: 2px solid;
-  border-bottom: 2px solid;
+.drop-zone__icon svg {
+  width: 28px;
+  height: 28px;
+  stroke-width: 1.8;
 }
 
 .drop-zone__copy {
@@ -2046,4 +2013,49 @@ html.quick-panel-window .composer__footer,
 html.quick-panel-window[data-theme="dark"] .composer__footer,
 html.quick-panel-window[data-theme="light"] .composer__footer {
   justify-content: flex-end !important;
+}
+
+html.quick-panel-window .image2-start-actions .drop-zone__secondary,
+html.quick-panel-window[data-theme="dark"] .image2-start-actions .drop-zone__secondary,
+html.quick-panel-window[data-theme="light"] .image2-start-actions .drop-zone__secondary {
+  border-color: #d8e2ee !important;
+  background: #ffffff !important;
+  color: #42526a !important;
+  opacity: 1 !important;
+}
+
+html.quick-panel-window .image2-start-actions .drop-zone__secondary:hover:not(:disabled),
+html.quick-panel-window[data-theme="dark"] .image2-start-actions .drop-zone__secondary:hover:not(:disabled),
+html.quick-panel-window[data-theme="light"] .image2-start-actions .drop-zone__secondary:hover:not(:disabled) {
+  border-color: #9eb7f5 !important;
+  background: #eef4ff !important;
+  color: #2563eb !important;
+}
+
+html.quick-panel-window .image2-start-actions .drop-zone__secondary:focus-visible,
+html.quick-panel-window[data-theme="dark"] .image2-start-actions .drop-zone__secondary:focus-visible,
+html.quick-panel-window[data-theme="light"] .image2-start-actions .drop-zone__secondary:focus-visible,
+html.quick-panel-window .image2-start-actions .drop-zone__capture:focus-visible,
+html.quick-panel-window[data-theme="dark"] .image2-start-actions .drop-zone__capture:focus-visible,
+html.quick-panel-window[data-theme="light"] .image2-start-actions .drop-zone__capture:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.24) !important;
+  outline-offset: 2px !important;
+}
+
+html.quick-panel-window .image2-start-actions .drop-zone__secondary:disabled,
+html.quick-panel-window[data-theme="dark"] .image2-start-actions .drop-zone__secondary:disabled,
+html.quick-panel-window[data-theme="light"] .image2-start-actions .drop-zone__secondary:disabled {
+  border-color: #e3e9f1 !important;
+  background: #f4f6f9 !important;
+  color: #8a95a5 !important;
+  opacity: 1 !important;
+}
+
+html.quick-panel-window .image2-empty-flow .drop-zone__icon,
+html.quick-panel-window[data-theme="dark"] .image2-empty-flow .drop-zone__icon,
+html.quick-panel-window[data-theme="light"] .image2-empty-flow .drop-zone__icon {
+  border-color: #c9d8fb !important;
+  background: #eef4ff !important;
+  color: #2563eb !important;
+  box-shadow: 0 6px 18px rgba(37, 99, 235, 0.12) !important;
 }

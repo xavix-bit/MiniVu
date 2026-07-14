@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { ImagePlus } from "lucide-react";
 import { Composer } from "./Composer";
 import { ImagePreviewStrip } from "./ImagePreviewStrip";
 import { ModelStatusBar } from "./ModelStatusBar";
@@ -381,8 +382,12 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
               ref={dropRef}
               className={`drop-zone${dragOver ? " drop-zone--drag-over" : ""}`}
             >
-              <span className="drop-zone__icon" aria-hidden="true">
-                <span />
+              <span
+                className="drop-zone__icon"
+                data-testid="empty-image-icon"
+                aria-hidden="true"
+              >
+                <ImagePlus />
               </span>
               <div className="drop-zone__copy">
                 <strong>拖入图片</strong>
