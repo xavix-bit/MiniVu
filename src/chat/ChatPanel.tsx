@@ -51,7 +51,6 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
   const [capturing, setCapturing] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [shortcutHint, setShortcutHint] = useState("");
-  const [focusComposerSignal, setFocusComposerSignal] = useState(0);
   const {
     state,
     streamingText,
@@ -254,14 +253,6 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
     );
   }
 
-  function handleAskImage() {
-    if (!state.image) {
-      return;
-    }
-    setNotice("");
-    setFocusComposerSignal((value) => value + 1);
-  }
-
   function triggerReplaceImage() {
     fileInputRef.current?.click();
   }
@@ -320,25 +311,6 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
         detail={statusBar.detail}
         onStop={() => void stopGeneration()}
       />
-
-      <div className="image2-panel-tabs" aria-label="识别模式">
-        <button type="button" className="is-active" onClick={() => void handleCaptureScreen()} disabled={capturing || isAnswering}>
-          <span>⌗</span>
-          截图
-        </button>
-        <button type="button" onClick={() => void handleCopyText()} disabled={!state.image || isAnswering}>
-          <span>≡</span>
-          文字
-        </button>
-        <button type="button" onClick={handleTranslateImage} disabled={!state.image || isAnswering}>
-          <span>⇄</span>
-          翻译
-        </button>
-        <button type="button" onClick={handleAskImage} disabled={!state.image || isAnswering}>
-          <span>◎</span>
-          问图
-        </button>
-      </div>
 
       {banner ? (
         <div
@@ -446,7 +418,6 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
                 <QuickActions
                   onCopyText={() => void handleCopyText()}
                   onTranslate={handleTranslateImage}
-                  onAsk={handleAskImage}
                   textReady={Boolean(state.ocrText.trim())}
                   disabled={isAnswering || ocrLoading}
                 />
@@ -472,7 +443,6 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
         disabled={false}
         isAnswering={isAnswering}
         canSubmit={Boolean(state.image)}
-        focusSignal={focusComposerSignal}
         onChange={setInput}
         onSubmit={submit}
         onStop={() => void stopGeneration()}
