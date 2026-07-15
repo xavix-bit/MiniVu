@@ -10,6 +10,9 @@ import type { EnvironmentStatus } from "../model/types";
 import { ModelPanel } from "../settings/ModelPanel";
 import { SettingsPanel } from "../settings/SettingsPanel";
 import { loadSettings } from "../settings/settingsStore";
+import { WorkbenchShell } from "../workbench/WorkbenchShell";
+import { captureScreenRegion } from "../image/captureScreen";
+import { captureClient } from "../captures/captureClient";
 
 const PAGE_META: Record<SettingsSection, { title: string; subtitle: string }> = {
   home: { title: "", subtitle: "" },
@@ -133,6 +136,24 @@ export function MainWindowShell() {
       return;
     }
     handleNavigate("setup");
+  }
+
+  async function handleWorkbenchCapture() {
+    const image = await captureScreenRegion();
+    await captureClient.create({
+      dataUrl: image.dataUrl,
+      source: "capture",
+      retention: "24h",
+    });
+  }
+
+  if (onboardingDone && activeSection === "home") {
+    return (
+      <WorkbenchShell
+        onOpenSettings={() => handleNavigate("settings")}
+        onCapture={() => void handleWorkbenchCapture()}
+      />
+    );
   }
 
   return (

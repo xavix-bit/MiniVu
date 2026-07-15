@@ -145,3 +145,5 @@ export function useCaptureLibrary(api: CaptureClient = captureClient) {
     refresh,
   };
 }
+
+export type CaptureLibraryState = ReturnType<typeof useCaptureLibrary>;
