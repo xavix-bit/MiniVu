@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   CaptureClient,
   CaptureRecord,
+  CaptureRecordChanged,
   CaptureRecordPatch,
   CreateCaptureInput,
 } from "../src/captures/types";
@@ -121,5 +122,39 @@ describe("useCaptureLibrary", () => {
     await act(async () => result.current.select("b"));
     act(() => resolveA?.(a));
     await waitFor(() => expect(result.current.selected?.id).toBe("b"));
+  });
+
+  it("selects and hydrates a record created by another webview", async () => {
+    const existing = record({ id: "existing", createdAtMs: 100 });
+    const created = record({
+      id: "created-elsewhere",
+      createdAtMs: 200,
+      imageDataUrl: undefined,
+      thumbnailDataUrl: undefined,
+    });
+    let listed = [existing];
+    let onChange: ((event: CaptureRecordChanged) => void) | undefined;
+    const api = client(listed);
+    api.list = vi.fn(async () => listed);
+    api.get = vi.fn(async (id) => id === created.id ? created : existing);
+    api.readImage = vi.fn(async (id, thumbnail) => (
+      `data:image/${thumbnail ? "jpeg" : "png"};base64,${id}`
+    ));
+    api.subscribe = vi.fn(async (callback) => {
+      onChange = callback;
+      return () => {};
+    });
+
+    const { result } = renderHook(() => useCaptureLibrary(api));
+    await waitFor(() => expect(result.current.selected?.id).toBe(existing.id));
+    await waitFor(() => expect(onChange).toBeDefined());
+
+    listed = [created, existing];
+    act(() => onChange?.({ action: "created", id: created.id, summary: created }));
+
+    await waitFor(() => expect(result.current.selected?.id).toBe(created.id));
+    expect(result.current.selected?.imageDataUrl).toBe(
+      `data:image/png;base64,${created.id}`,
+    );
   });
 });

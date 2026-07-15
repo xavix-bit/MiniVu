@@ -1,17 +1,18 @@
 use crate::environment::{evaluate_environment, is_environment_ready, EnvironmentStatus};
 use crate::inference::{
-    run_ask_image, sidecar_health_ok, wait_for_sidecar_ready, ActiveInferenceContext,
-    AskImageRequest, GenerationFlag, HistoryMessage,
+    emit_chunk, run_ask_image, sidecar_health_ok, wait_for_sidecar_ready, ActiveInferenceContext,
+    AskImageRequest, GenerationRegistry, HistoryMessage,
 };
 use crate::inference_backend::{backend_label, mlx_runtime_ready, resolve_active_backend};
 use crate::model_cache::ModelCache;
 use crate::runtime_installer::resolve_llama_server;
 use crate::settings::{load_settings, GgufModelVariant, InferenceBackend};
 use crate::sidecar::{
-    begin_sidecar_activity, init_sidecar_state as sidecar_init, lock_sidecar, SidecarState,
+    begin_cancellable_sidecar_activity, begin_sidecar_activity, init_sidecar_state as sidecar_init,
+    lock_sidecar, SidecarState,
 };
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use tauri::AppHandle;
 
 pub use crate::environment::models_ready_for_backend;
@@ -20,7 +21,7 @@ pub fn init_sidecar_state() -> SidecarState {
     sidecar_init()
 }
 
-pub use crate::inference::init_generation_flag;
+pub use crate::inference::init_generation_registry;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,8 +44,8 @@ pub struct ModelStatusResponse {
 }
 
 #[tauri::command]
-pub fn cancel_generation(cancel: tauri::State<GenerationFlag>) {
-    cancel.store(true, Ordering::SeqCst);
+pub fn cancel_generation(request_id: String, registry: tauri::State<GenerationRegistry>) {
+    registry.cancel(&request_id);
 }
 
 #[tauri::command]
@@ -97,7 +98,7 @@ pub fn get_model_status(
 pub async fn ask_image(
     app: AppHandle,
     sidecar: tauri::State<'_, SidecarState>,
-    cancel: tauri::State<'_, GenerationFlag>,
+    registry: tauri::State<'_, GenerationRegistry>,
     record_id: String,
     request_id: String,
     image_data_url: String,
@@ -105,23 +106,29 @@ pub async fn ask_image(
     prompt: String,
     history: Vec<HistoryMessage>,
 ) -> Result<(), String> {
-    let _activity = begin_sidecar_activity(sidecar.inner());
-    let cancel_flag = cancel.inner().clone();
-    cancel_flag.store(false, Ordering::SeqCst);
-    run_ask_image(
+    let cancel_flag = registry.begin(&request_id);
+    let Some(_activity) = begin_cancellable_sidecar_activity(sidecar.inner(), &cancel_flag).await
+    else {
+        let result = emit_chunk(&app, &record_id, &request_id, "", true);
+        registry.finish(&request_id, &cancel_flag);
+        return result;
+    };
+    let result = run_ask_image(
         &app,
         sidecar.inner(),
         &cancel_flag,
         AskImageRequest {
             record_id,
-            request_id,
+            request_id: request_id.clone(),
             image_data_url,
             ocr_text,
             prompt,
             history,
         },
     )
-    .await
+    .await;
+    registry.finish(&request_id, &cancel_flag);
+    result
 }
 
 #[tauri::command]
@@ -129,11 +136,11 @@ pub async fn warmup_model(
     app: AppHandle,
     sidecar: tauri::State<'_, SidecarState>,
 ) -> Result<(), String> {
+    let _activity = begin_sidecar_activity(sidecar.inner()).await;
     let settings = load_settings(&app)?;
     if !settings.background_warmup {
         return Ok(());
     }
-    let _activity = begin_sidecar_activity(sidecar.inner());
     let ctx = ActiveInferenceContext::load(&app)?;
     if !ctx.models_ready {
         return Ok(());

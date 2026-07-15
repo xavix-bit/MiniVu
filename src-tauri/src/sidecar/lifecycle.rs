@@ -2,9 +2,9 @@ use super::{lock_sidecar, SidecarState};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
-/// 设置变更后停止侧车，下次识图时按新后端/路径重新启动。
+/// 设置变更后安排重启；正在处理的任务完成前不会被中断。
 pub fn on_settings_saved(app: &AppHandle) {
-    lock_sidecar(app.state::<SidecarState>().inner()).stop();
+    lock_sidecar(app.state::<SidecarState>().inner()).request_restart();
 }
 
 pub fn spawn_idle_unloader(app: AppHandle) {

@@ -35,6 +35,8 @@ function session(overrides: Record<string, unknown> = {}) {
     ask: vi.fn(),
     stopGeneration: vi.fn(),
     clearConversation: vi.fn(),
+    loadSession: vi.fn(),
+    resetSession: vi.fn(),
     ...overrides,
   } as unknown as ReturnType<typeof useImageSession>;
 }

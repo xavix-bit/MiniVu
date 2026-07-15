@@ -22,7 +22,7 @@ mod sidecar;
 mod tray;
 mod window;
 
-use model_sidecar::{init_generation_flag, init_sidecar_state};
+use model_sidecar::{init_generation_registry, init_sidecar_state};
 use sidecar::{lock_sidecar, spawn_idle_unloader};
 use std::sync::Mutex;
 use tauri::Manager;
@@ -37,7 +37,7 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .manage(init_sidecar_state())
-        .manage(init_generation_flag())
+        .manage(init_generation_registry())
         .manage(Mutex::new(window::QuickPanelState::default()))
         .setup(|app| {
             tray::create_tray(app.handle())?;
@@ -97,6 +97,7 @@ pub fn run() {
             window::hide_quick_panel_command,
             window::expand_quick_panel_command,
             window::show_quick_launcher_command,
+            window::take_pending_capture_request,
             window::open_screen_recording_settings,
             screenshot::capture_screen_region,
         ])

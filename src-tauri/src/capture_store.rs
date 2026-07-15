@@ -2,9 +2,11 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use image::codecs::jpeg::JpegEncoder;
 use image::ImageFormat;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
@@ -185,6 +187,23 @@ pub struct CaptureStore {
     captures_dir: PathBuf,
 }
 
+#[derive(Default)]
+struct CaptureStoreState {
+    transient: HashMap<(PathBuf, String), TransientCapture>,
+}
+
+struct TransientCapture {
+    record: CaptureRecord,
+    image_png: Vec<u8>,
+    thumbnail_jpeg: Vec<u8>,
+}
+
+static CAPTURE_STORE_STATE: OnceLock<Mutex<CaptureStoreState>> = OnceLock::new();
+
+fn capture_store_state() -> &'static Mutex<CaptureStoreState> {
+    CAPTURE_STORE_STATE.get_or_init(|| Mutex::new(CaptureStoreState::default()))
+}
+
 impl CaptureStore {
     pub fn new(app_data_dir: impl AsRef<Path>) -> Self {
         Self {
@@ -193,7 +212,17 @@ impl CaptureStore {
     }
 
     pub fn create(&self, input: CreateCaptureInput, now_ms: i64) -> Result<CaptureRecord, String> {
+        self.with_state(|state| self.create_locked(input, now_ms, state))
+    }
+
+    fn create_locked(
+        &self,
+        input: CreateCaptureInput,
+        now_ms: i64,
+        state: &mut CaptureStoreState,
+    ) -> Result<CaptureRecord, String> {
         let image = decode_image_data_url(&input.image_data_url)?;
+        let is_transient = input.retention == CaptureRetention::None;
         let record = CaptureRecord {
             id: Uuid::new_v4().hyphenated().to_string(),
             source: input.source,
@@ -206,6 +235,22 @@ impl CaptureStore {
             expires_at_ms: input.retention.expires_at_ms(now_ms),
             pinned: false,
         };
+
+        if is_transient {
+            state
+                .transient
+                .retain(|(captures_dir, _), _| captures_dir != &self.captures_dir);
+            state.transient.insert(
+                self.transient_key(&record.id),
+                TransientCapture {
+                    record: record.clone(),
+                    image_png: encode_original(&image)?,
+                    thumbnail_jpeg: encode_thumbnail(&image)?,
+                },
+            );
+            return Ok(record);
+        }
+
         let record_dir = self.record_dir(&record.id)?;
         fs::create_dir_all(&record_dir).map_err(|error| error.to_string())?;
 
@@ -223,6 +268,18 @@ impl CaptureStore {
     }
 
     pub fn get(&self, id: &str) -> Result<Option<CaptureRecord>, String> {
+        self.with_state(|state| self.get_locked(id, state))
+    }
+
+    fn get_locked(
+        &self,
+        id: &str,
+        state: &CaptureStoreState,
+    ) -> Result<Option<CaptureRecord>, String> {
+        validate_capture_id(id)?;
+        if let Some(capture) = state.transient.get(&self.transient_key(id)) {
+            return Ok(Some(capture.record.clone()));
+        }
         let metadata_path = self.record_dir(id)?.join("metadata.json");
         match fs::read(metadata_path) {
             Ok(bytes) => serde_json::from_slice(&bytes)
@@ -237,6 +294,15 @@ impl CaptureStore {
         &self,
         query: Option<&str>,
         pinned_only: bool,
+    ) -> Result<Vec<CaptureRecord>, String> {
+        self.with_state(|state| self.list_locked(query, pinned_only, state))
+    }
+
+    fn list_locked(
+        &self,
+        query: Option<&str>,
+        pinned_only: bool,
+        state: &CaptureStoreState,
     ) -> Result<Vec<CaptureRecord>, String> {
         let entries = match fs::read_dir(&self.captures_dir) {
             Ok(entries) => entries,
@@ -257,7 +323,7 @@ impl CaptureStore {
             let Some(directory_id) = entry.file_name().to_str().map(str::to_owned) else {
                 continue;
             };
-            let Ok(Some(record)) = self.get(&directory_id) else {
+            let Ok(Some(record)) = self.get_locked(&directory_id, state) else {
                 continue;
             };
             if record.id != directory_id || (pinned_only && !record.pinned) {
@@ -289,13 +355,31 @@ impl CaptureStore {
     }
 
     pub fn read_image(&self, id: &str, thumbnail: bool) -> Result<String, String> {
+        self.with_state(|state| self.read_image_locked(id, thumbnail, state))
+    }
+
+    fn read_image_locked(
+        &self,
+        id: &str,
+        thumbnail: bool,
+        state: &CaptureStoreState,
+    ) -> Result<String, String> {
+        validate_capture_id(id)?;
         let (filename, mime_type) = if thumbnail {
             ("thumbnail.jpg", "image/jpeg")
         } else {
             ("image.png", "image/png")
         };
-        let bytes =
-            fs::read(self.record_dir(id)?.join(filename)).map_err(|error| error.to_string())?;
+        let key = self.transient_key(id);
+        let bytes = if let Some(capture) = state.transient.get(&key) {
+            if thumbnail {
+                capture.thumbnail_jpeg.clone()
+            } else {
+                capture.image_png.clone()
+            }
+        } else {
+            fs::read(self.record_dir(id)?.join(filename)).map_err(|error| error.to_string())?
+        };
         Ok(format!(
             "data:{mime_type};base64,{}",
             STANDARD.encode(bytes)
@@ -308,30 +392,40 @@ impl CaptureStore {
         patch: CaptureRecordPatch,
         now_ms: i64,
     ) -> Result<CaptureRecord, String> {
+        self.with_state(|state| self.update_locked(id, patch, now_ms, state))
+    }
+
+    fn update_locked(
+        &self,
+        id: &str,
+        patch: CaptureRecordPatch,
+        now_ms: i64,
+        state: &mut CaptureStoreState,
+    ) -> Result<CaptureRecord, String> {
+        validate_capture_id(id)?;
+        let key = self.transient_key(id);
+        if let Some(capture) = state.transient.get_mut(&key) {
+            apply_patch(&mut capture.record, patch, now_ms);
+            return Ok(capture.record.clone());
+        }
+
         let mut record = self
-            .get(id)?
+            .get_locked(id, state)?
             .ok_or_else(|| "capture record not found".to_string())?;
-        if let NullablePatch::Set(title) = patch.title {
-            record.title = title;
-        }
-        if let Some(ocr_text) = patch.ocr_text {
-            record.ocr_text = ocr_text;
-        }
-        if let Some(ocr_state) = patch.ocr_state {
-            record.ocr_state = ocr_state;
-        }
-        if let Some(messages) = patch.messages {
-            record.messages = messages;
-        }
-        if let Some(pinned) = patch.pinned {
-            record.pinned = pinned;
-        }
-        record.updated_at_ms = now_ms;
+        apply_patch(&mut record, patch, now_ms);
         write_metadata_atomically(&self.record_dir(id)?, &record)?;
         Ok(record)
     }
 
     pub fn delete(&self, id: &str) -> Result<bool, String> {
+        self.with_state(|state| self.delete_locked(id, state))
+    }
+
+    fn delete_locked(&self, id: &str, state: &mut CaptureStoreState) -> Result<bool, String> {
+        validate_capture_id(id)?;
+        if state.transient.remove(&self.transient_key(id)).is_some() {
+            return Ok(true);
+        }
         let record_dir = self.record_dir(id)?;
         match fs::remove_dir_all(record_dir) {
             Ok(()) => Ok(true),
@@ -341,22 +435,63 @@ impl CaptureStore {
     }
 
     pub fn cleanup(&self, now_ms: i64) -> Result<Vec<CaptureRecord>, String> {
+        self.with_state(|state| self.cleanup_locked(now_ms, state))
+    }
+
+    fn cleanup_locked(
+        &self,
+        now_ms: i64,
+        state: &mut CaptureStoreState,
+    ) -> Result<Vec<CaptureRecord>, String> {
         let mut removed = Vec::new();
-        for record in self.list(None, false)? {
+        for record in self.list_locked(None, false, state)? {
             let expired = record
                 .expires_at_ms
                 .is_some_and(|expires_at_ms| expires_at_ms <= now_ms);
-            if !record.pinned && expired && self.delete(&record.id)? {
+            if !record.pinned && expired && self.delete_locked(&record.id, state)? {
                 removed.push(record);
             }
         }
         Ok(removed)
     }
 
+    fn with_state<R>(
+        &self,
+        operation: impl FnOnce(&mut CaptureStoreState) -> Result<R, String>,
+    ) -> Result<R, String> {
+        let mut state = capture_store_state()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        operation(&mut state)
+    }
+
+    fn transient_key(&self, id: &str) -> (PathBuf, String) {
+        (self.captures_dir.clone(), id.to_string())
+    }
+
     fn record_dir(&self, id: &str) -> Result<PathBuf, String> {
         validate_capture_id(id)?;
         Ok(self.captures_dir.join(id))
     }
+}
+
+fn apply_patch(record: &mut CaptureRecord, patch: CaptureRecordPatch, now_ms: i64) {
+    if let NullablePatch::Set(title) = patch.title {
+        record.title = title;
+    }
+    if let Some(ocr_text) = patch.ocr_text {
+        record.ocr_text = ocr_text;
+    }
+    if let Some(ocr_state) = patch.ocr_state {
+        record.ocr_state = ocr_state;
+    }
+    if let Some(messages) = patch.messages {
+        record.messages = messages;
+    }
+    if let Some(pinned) = patch.pinned {
+        record.pinned = pinned;
+    }
+    record.updated_at_ms = now_ms;
 }
 
 fn validate_capture_id(id: &str) -> Result<(), String> {
@@ -378,6 +513,23 @@ fn decode_image_data_url(data_url: &str) -> Result<image::DynamicImage, String> 
         .decode(payload)
         .map_err(|error| error.to_string())?;
     image::load_from_memory(&bytes).map_err(|error| error.to_string())
+}
+
+fn encode_original(image: &image::DynamicImage) -> Result<Vec<u8>, String> {
+    let mut bytes = Cursor::new(Vec::new());
+    image
+        .write_to(&mut bytes, ImageFormat::Png)
+        .map_err(|error| error.to_string())?;
+    Ok(bytes.into_inner())
+}
+
+fn encode_thumbnail(image: &image::DynamicImage) -> Result<Vec<u8>, String> {
+    let thumbnail = image.thumbnail(THUMBNAIL_EDGE_PX, THUMBNAIL_EDGE_PX);
+    let mut bytes = Vec::new();
+    JpegEncoder::new_with_quality(&mut bytes, THUMBNAIL_JPEG_QUALITY)
+        .encode_image(&thumbnail)
+        .map_err(|error| error.to_string())?;
+    Ok(bytes)
 }
 
 fn write_original(path: &Path, image: &image::DynamicImage) -> Result<(), String> {
@@ -533,6 +685,7 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Barrier};
 
     const PNG_DATA_URL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
@@ -629,6 +782,72 @@ mod tests {
         );
         assert!(error.is_err());
         assert_eq!(store.get(&original.id).unwrap(), Some(updated));
+    }
+
+    #[test]
+    fn concurrent_metadata_updates_preserve_all_fields() {
+        let app_data = TestDir::new();
+        let store = Arc::new(CaptureStore::new(app_data.path()));
+        let original = store
+            .create(
+                CreateCaptureInput {
+                    image_data_url: PNG_DATA_URL.to_string(),
+                    source: CaptureSource::Capture,
+                    retention: CaptureRetention::Hours24,
+                },
+                1_000,
+            )
+            .expect("create capture");
+        let barrier = Arc::new(Barrier::new(4));
+
+        let updates = [
+            CaptureRecordPatch {
+                ocr_text: Some("recognized text".to_string()),
+                ocr_state: Some(OcrState::Ready),
+                ..CaptureRecordPatch::default()
+            },
+            CaptureRecordPatch {
+                messages: Some(vec![CaptureMessage {
+                    role: CaptureMessageRole::Assistant,
+                    content: "answer".to_string(),
+                }]),
+                ..CaptureRecordPatch::default()
+            },
+            CaptureRecordPatch {
+                pinned: Some(true),
+                ..CaptureRecordPatch::default()
+            },
+        ];
+        let handles = updates
+            .into_iter()
+            .enumerate()
+            .map(|(index, patch)| {
+                let store = Arc::clone(&store);
+                let barrier = Arc::clone(&barrier);
+                let id = original.id.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    store.update(&id, patch, 2_000 + index as i64)
+                })
+            })
+            .collect::<Vec<_>>();
+
+        barrier.wait();
+        for handle in handles {
+            handle.join().expect("join update").expect("update record");
+        }
+
+        let record = store.get(&original.id).unwrap().unwrap();
+        assert_eq!(record.ocr_text, "recognized text");
+        assert_eq!(record.ocr_state, OcrState::Ready);
+        assert_eq!(
+            record.messages,
+            vec![CaptureMessage {
+                role: CaptureMessageRole::Assistant,
+                content: "answer".to_string(),
+            }]
+        );
+        assert!(record.pinned);
     }
 
     #[test]
@@ -783,14 +1002,38 @@ mod tests {
         assert_eq!(hours_24.expires_at_ms, Some(500 + DAY_MS));
         assert_eq!(days_7.expires_at_ms, Some(500 + 7 * DAY_MS));
         assert_eq!(forever.expires_at_ms, None);
-        assert!(app_data.path().join("captures").join(&none.id).exists());
+        assert!(!app_data.path().join("captures").join(&none.id).exists());
+        assert_eq!(store.get(&none.id).unwrap(), Some(none.clone()));
+        assert!(store.read_image(&none.id, false).is_ok());
+        let transient_update = store
+            .update(
+                &none.id,
+                CaptureRecordPatch {
+                    ocr_text: Some("temporary OCR".to_string()),
+                    ocr_state: Some(OcrState::Ready),
+                    ..CaptureRecordPatch::default()
+                },
+                501,
+            )
+            .unwrap();
+        assert_eq!(transient_update.ocr_text, "temporary OCR");
+        assert_eq!(store.get(&none.id).unwrap(), Some(transient_update.clone()));
+        assert!(!store
+            .list(None, false)
+            .unwrap()
+            .iter()
+            .any(|record| record.id == none.id));
 
         let removed = store.cleanup(500).unwrap();
-        assert_eq!(removed, vec![none.clone()]);
-        assert_eq!(store.get(&none.id).unwrap(), None);
+        assert!(removed.is_empty());
+        assert_eq!(store.get(&none.id).unwrap(), Some(transient_update));
         assert!(store.get(&hours_24.id).unwrap().is_some());
         assert!(store.get(&days_7.id).unwrap().is_some());
         assert!(store.get(&forever.id).unwrap().is_some());
+
+        let newer_none = create(CaptureRetention::None);
+        assert_eq!(store.get(&none.id).unwrap(), None);
+        assert_eq!(store.get(&newer_none.id).unwrap(), Some(newer_none));
     }
 
     #[test]
@@ -802,7 +1045,7 @@ mod tests {
                 CreateCaptureInput {
                     image_data_url: PNG_DATA_URL.to_string(),
                     source: CaptureSource::Paste,
-                    retention: CaptureRetention::None,
+                    retention: CaptureRetention::Hours24,
                 },
                 1_000,
             )
@@ -818,7 +1061,7 @@ mod tests {
             )
             .unwrap();
 
-        assert!(store.cleanup(10_000).unwrap().is_empty());
+        assert!(store.cleanup(1_000 + DAY_MS).unwrap().is_empty());
         assert_eq!(store.get(&record.id).unwrap(), Some(pinned));
     }
 

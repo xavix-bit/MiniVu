@@ -37,7 +37,11 @@ export type ImageSessionStatusBar = {
   detail: string | undefined;
 };
 
-export function useImageSession() {
+export type UseImageSessionOptions = {
+  recordId?: string | null;
+};
+
+export function useImageSession({ recordId = null }: UseImageSessionOptions = {}) {
   const [state, setState] = useState<ImageSessionState>(createImageSessionState);
   const [streamingText, setStreamingText] = useState("");
   const [isAnswering, setIsAnswering] = useState(false);
@@ -52,6 +56,14 @@ export function useImageSession() {
   const [elapsed, setElapsed] = useState(0);
   const warmupStartedRef = useRef(false);
   const imageRequestRef = useRef(0);
+  const stateRef = useRef(state);
+  const recordIdRef = useRef(recordId);
+  const sessionGenerationRef = useRef(0);
+  const currentRequestIdRef = useRef<string | null>(null);
+  const answeringRef = useRef(false);
+  const answerOperationRef = useRef(0);
+  stateRef.current = state;
+  recordIdRef.current = recordId;
 
   const clearError = useCallback(() => setError(""), []);
 
@@ -72,9 +84,25 @@ export function useImageSession() {
     return status;
   }, []);
 
+  const cancelActiveRequest = useCallback(() => {
+    const requestId = currentRequestIdRef.current;
+    currentRequestIdRef.current = null;
+    if (requestId) {
+      void modelClient.cancelGeneration(requestId).catch(() => {
+        /* 会话切换时取消失败不应阻塞新记录 */
+      });
+    }
+  }, []);
+
   const resetSession = useCallback(() => {
+    sessionGenerationRef.current += 1;
+    answerOperationRef.current += 1;
+    answeringRef.current = false;
+    cancelActiveRequest();
     imageRequestRef.current += 1;
-    setState(createImageSessionState());
+    const emptyState = createImageSessionState();
+    stateRef.current = emptyState;
+    setState(emptyState);
     setStreamingText("");
     setIsAnswering(false);
     setModelLoading(false);
@@ -84,16 +112,44 @@ export function useImageSession() {
     setLoadProgress("");
     setElapsed(0);
     warmupStartedRef.current = false;
-  }, []);
+  }, [cancelActiveRequest]);
+
+  const loadSession = useCallback((session: ImageSessionState) => {
+    sessionGenerationRef.current += 1;
+    answerOperationRef.current += 1;
+    answeringRef.current = false;
+    cancelActiveRequest();
+    imageRequestRef.current += 1;
+    stateRef.current = session;
+    setState(session);
+    setStreamingText("");
+    setIsAnswering(false);
+    setModelLoading(false);
+    setOcrLoading(false);
+    setError("");
+    setPendingReplaceImage(null);
+    setLoadProgress("");
+    setElapsed(0);
+  }, [cancelActiveRequest]);
 
   const applyImage = useCallback(async (image: ImageAttachment, replaceConversation: boolean) => {
+    sessionGenerationRef.current += 1;
+    answerOperationRef.current += 1;
+    answeringRef.current = false;
+    cancelActiveRequest();
     const request = ++imageRequestRef.current;
     if (replaceConversation) {
-      setState({ ...createImageSessionState(), image, ocrText: "" });
+      const nextState = { ...createImageSessionState(), image, ocrText: "" };
+      stateRef.current = nextState;
+      setState(nextState);
       setStreamingText("");
       setIsAnswering(false);
     } else {
-      setState((current) => ({ ...current, image, ocrText: "" }));
+      setState((current) => {
+        const nextState = { ...current, image, ocrText: "" };
+        stateRef.current = nextState;
+        return nextState;
+      });
     }
 
     setError("");
@@ -105,7 +161,11 @@ export function useImageSession() {
       queueMicrotask(kickModelWarmup);
       const ocr = await ocrRequest;
       if (imageRequestRef.current === request) {
-        setState((current) => ({ ...current, ocrText: ocr.text }));
+        setState((current) => {
+          const nextState = { ...current, ocrText: ocr.text };
+          stateRef.current = nextState;
+          return nextState;
+        });
       }
     } catch (err) {
       if (imageRequestRef.current === request) {
@@ -117,18 +177,15 @@ export function useImageSession() {
       }
     }
     return true;
-  }, [kickModelWarmup]);
+  }, [cancelActiveRequest, kickModelWarmup]);
 
-  const setImage = useCallback(
-    async (image: ImageAttachment) => {
-      if (shouldConfirmImageReplacement(state)) {
-        setPendingReplaceImage(image);
-        return false;
-      }
-      return applyImage(image, false);
-    },
-    [applyImage, state],
-  );
+  const setImage = useCallback(async (image: ImageAttachment) => {
+    if (shouldConfirmImageReplacement(stateRef.current)) {
+      setPendingReplaceImage(image);
+      return false;
+    }
+    return applyImage(image, false);
+  }, [applyImage]);
 
   const confirmReplaceImage = useCallback(async () => {
     if (!pendingReplaceImage) {
@@ -144,16 +201,40 @@ export function useImageSession() {
   }, []);
 
   const clearConversation = useCallback(() => {
-    setState((current) => ({ ...current, messages: [] }));
+    sessionGenerationRef.current += 1;
+    answerOperationRef.current += 1;
+    answeringRef.current = false;
+    cancelActiveRequest();
+    setState((current) => {
+      const nextState = { ...current, messages: [] };
+      stateRef.current = nextState;
+      return nextState;
+    });
     setStreamingText("");
     setIsAnswering(false);
     setModelLoading(false);
     setError("");
-  }, []);
+  }, [cancelActiveRequest]);
+
+  const suspendSession = useCallback(() => {
+    sessionGenerationRef.current += 1;
+    answerOperationRef.current += 1;
+    answeringRef.current = false;
+    cancelActiveRequest();
+    setStreamingText("");
+    setIsAnswering(false);
+    setModelLoading(false);
+    setLoadProgress("");
+    setElapsed(0);
+  }, [cancelActiveRequest]);
 
   const stopGeneration = useCallback(async () => {
+    const requestId = currentRequestIdRef.current;
+    if (!requestId) {
+      return;
+    }
     try {
-      await modelClient.cancelGeneration();
+      await modelClient.cancelGeneration(requestId);
     } catch {
       // 忽略取消失败
     }
@@ -161,39 +242,75 @@ export function useImageSession() {
 
   const ask = useCallback(
     async (prompt: string, displayText?: string) => {
-      if (!state.image || !prompt.trim() || isAnswering) {
+      const normalizedPrompt = prompt.trim();
+      const initialState = stateRef.current;
+      if (!initialState.image || !normalizedPrompt || answeringRef.current) {
         return;
       }
 
-      await refreshModelStatus();
-
-      const history = state.messages;
-      const isFollowUp = history.length > 0;
-      const userMessage: ChatMessage = {
-        role: "user",
-        content: (displayText ?? prompt).trim(),
-      };
-      setState((current) => ({
-        ...current,
-        messages: [...current.messages, userMessage],
-      }));
-      setStreamingText("");
+      const operation = ++answerOperationRef.current;
+      answeringRef.current = true;
       setIsAnswering(true);
-      setModelLoading(true);
-      setInferPhase(isFollowUp ? "thinking" : "loading");
       setError("");
 
+      const generation = sessionGenerationRef.current;
+      const sessionRecordId = recordIdRef.current;
+      let requestId: string | null = null;
+      let userMessageAdded = false;
       let assistantText = "";
       let failed = false;
+
+      const isCurrentOperation = () =>
+        answerOperationRef.current === operation &&
+        sessionGenerationRef.current === generation;
+
       try {
+        await refreshModelStatus();
+        if (!isCurrentOperation()) {
+          return;
+        }
+
+        const sessionState = stateRef.current;
+        if (!sessionState.image) {
+          return;
+        }
+        const history = sessionState.messages;
+        const isFollowUp = history.length > 0;
+        requestId = crypto.randomUUID();
+        currentRequestIdRef.current = requestId;
+        const userMessage: ChatMessage = {
+          role: "user",
+          content: (displayText ?? normalizedPrompt).trim(),
+        };
+        setState((current) => {
+          const nextState = {
+            ...current,
+            messages: [...current.messages, userMessage],
+          };
+          stateRef.current = nextState;
+          return nextState;
+        });
+        userMessageAdded = true;
+        setStreamingText("");
+        setModelLoading(true);
+        setInferPhase(isFollowUp ? "thinking" : "loading");
+
         await modelClient.askImage(
           {
-            imageDataUrl: state.image.dataUrl,
-            ocrText: state.ocrText,
-            prompt: prompt.trim(),
+            recordId: sessionRecordId ?? undefined,
+            requestId,
+            imageDataUrl: sessionState.image.dataUrl,
+            ocrText: sessionState.ocrText,
+            prompt: normalizedPrompt,
             history,
           },
           (chunk) => {
+            if (
+              currentRequestIdRef.current !== requestId ||
+              !isCurrentOperation()
+            ) {
+              return;
+            }
             if (chunk.text) {
               assistantText += chunk.text;
               setStreamingText(assistantText);
@@ -210,25 +327,45 @@ export function useImageSession() {
         }
       } catch (err) {
         failed = true;
-        setError(String(err));
+        if (isCurrentOperation()) {
+          setError(String(err));
+        }
       } finally {
+        if (!isCurrentOperation()) {
+          return;
+        }
+        if (requestId && currentRequestIdRef.current === requestId) {
+          currentRequestIdRef.current = null;
+        }
+        answeringRef.current = false;
         setModelLoading(false);
         setIsAnswering(false);
-        if (failed) {
-          setState((current) => ({
-            ...current,
-            messages: current.messages.slice(0, -1),
-          }));
+        if (failed && userMessageAdded) {
+          setState((current) => {
+            const nextState = {
+              ...current,
+              messages: current.messages.slice(0, -1),
+            };
+            stateRef.current = nextState;
+            return nextState;
+          });
         } else if (assistantText.trim()) {
-          setState((current) => ({
-            ...current,
-            messages: [...current.messages, { role: "assistant", content: assistantText.trim() }],
-          }));
+          setState((current) => {
+            const nextState: ImageSessionState = {
+              ...current,
+              messages: [
+                ...current.messages,
+                { role: "assistant", content: assistantText.trim() },
+              ],
+            };
+            stateRef.current = nextState;
+            return nextState;
+          });
         }
         setStreamingText("");
       }
     },
-    [isAnswering, refreshModelStatus, state.image, state.messages, state.ocrText],
+    [refreshModelStatus],
   );
 
   const waitingForModel = modelLoading && !streamingText && inferPhase === "loading";
@@ -306,7 +443,7 @@ export function useImageSession() {
     let unlistenClosing: (() => void) | undefined;
 
     void listen("quick-panel-closing", () => {
-      resetSession();
+      suspendSession();
     }).then((cleanup) => {
       unlistenClosing = cleanup;
     });
@@ -314,7 +451,7 @@ export function useImageSession() {
     return () => {
       unlistenClosing?.();
     };
-  }, [resetSession]);
+  }, [suspendSession]);
 
   return {
     state,
@@ -333,6 +470,7 @@ export function useImageSession() {
     ask,
     stopGeneration,
     clearConversation,
+    loadSession,
     resetSession,
   };
 }

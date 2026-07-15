@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { ImagePlus } from "lucide-react";
@@ -8,9 +8,8 @@ import { ModelStatusBar } from "./ModelStatusBar";
 import { PanelHeader } from "./PanelHeader";
 import { QuickActions } from "./QuickActions";
 import { RecognizedTextPanel } from "./RecognizedTextPanel";
-import { ReplaceImageConfirm } from "./ReplaceImageConfirm";
 import { TranscriptPanel } from "./TranscriptPanel";
-import { useImageSession } from "./useImageSession";
+import { useImageSession, type ChatMessage } from "./useImageSession";
 import { exportCurrentSession } from "../export/exportSession";
 import { captureScreenRegion } from "../image/captureScreen";
 import {
@@ -21,6 +20,7 @@ import {
 import { loadSettings } from "../settings/settingsStore";
 import type { AcceptedImage } from "../image/imageInput";
 import { captureClient } from "../captures/captureClient";
+import type { CaptureSource } from "../captures/types";
 
 function formatShortcut(raw: string): string {
   return raw
@@ -47,14 +47,34 @@ function formatShortcut(raw: string): string {
     .join("");
 }
 
+const messageSaveQueues = new Map<string, Promise<void>>();
+
+function enqueueMessageSave(recordId: string, messages: ChatMessage[]) {
+  const previous = messageSaveQueues.get(recordId) ?? Promise.resolve();
+  const next = previous
+    .catch(() => undefined)
+    .then(async () => {
+      await captureClient.update(recordId, { messages });
+    })
+    .catch(() => undefined);
+  messageSaveQueues.set(recordId, next);
+  void next.finally(() => {
+    if (messageSaveQueues.get(recordId) === next) {
+      messageSaveQueues.delete(recordId);
+    }
+  });
+}
+
 export function ChatPanel({
   onCollapse,
   initialImage,
   recordId,
+  onImageInput,
 }: {
   onCollapse?: () => void;
   initialImage?: AcceptedImage | null;
   recordId?: string | null;
+  onImageInput?: (image: AcceptedImage, source: CaptureSource) => Promise<void> | void;
 }) {
   const [input, setInput] = useState("");
   const [notice, setNotice] = useState("");
@@ -70,38 +90,96 @@ export function ChatPanel({
     statusBar,
     clearError,
     setImage,
-    pendingReplaceImage,
-    confirmReplaceImage,
-    cancelReplaceImage,
     ask,
     stopGeneration,
     clearConversation,
-  } = useImageSession();
+    loadSession,
+    resetSession,
+  } = useImageSession({ recordId });
   const dropRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const standaloneImageRef = useRef<string | null>(null);
+  const [loadedRecordId, setLoadedRecordId] = useState<string | null>(null);
 
   const hasConversation = state.messages.length > 0 || Boolean(streamingText);
   const showQuickActions = Boolean(state.image) && !hasConversation;
   const banner = error || notice;
 
   useEffect(() => {
-    if (initialImage) {
-      void setImage(initialImage);
+    let active = true;
+    setLoadedRecordId(null);
+    resetSession();
+
+    if (!recordId) {
+      if (initialImage && standaloneImageRef.current !== initialImage.dataUrl) {
+        standaloneImageRef.current = initialImage.dataUrl;
+        void setImage(initialImage);
+      }
+      return () => {
+        active = false;
+      };
     }
-  }, [initialImage, setImage]);
+
+    void (async () => {
+      try {
+        const record = await captureClient.get(recordId);
+        if (!active || !record) return;
+        const image: AcceptedImage = initialImage ?? {
+          name: `${recordId}.png`,
+          dataUrl: await captureClient.readImage(recordId, false),
+        };
+        if (!active) return;
+
+        if (record.ocrState === "pending") {
+          await setImage(image);
+        } else {
+          loadSession({
+            image,
+            ocrText: record.ocrText,
+            messages: record.messages,
+          });
+        }
+        if (active) setLoadedRecordId(recordId);
+      } catch (err) {
+        if (active) setNotice(`加载截图失败：${String(err)}`);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [initialImage?.dataUrl, initialImage?.name, loadSession, recordId, resetSession, setImage]);
 
   useEffect(() => {
-    if (!recordId || !state.image || ocrLoading) return;
+    if (!recordId || loadedRecordId !== recordId || !state.image || ocrLoading) return;
     void captureClient.update(recordId, {
       ocrText: state.ocrText,
       ocrState: error ? "failed" : "ready",
     });
-  }, [error, ocrLoading, recordId, state.image, state.ocrText]);
+  }, [error, loadedRecordId, ocrLoading, recordId, state.image, state.ocrText]);
 
   useEffect(() => {
-    if (!recordId || !state.image) return;
-    void captureClient.update(recordId, { messages: state.messages });
-  }, [recordId, state.image, state.messages]);
+    if (!recordId || loadedRecordId !== recordId || !state.image) return;
+    enqueueMessageSave(recordId, state.messages);
+  }, [loadedRecordId, recordId, state.image, state.messages]);
+
+  const acceptImage = useCallback(async (image: AcceptedImage, source: CaptureSource) => {
+    setNotice("");
+    clearError();
+    if (onImageInput) {
+      try {
+        await onImageInput(image, source);
+      } catch (err) {
+        setNotice(`添加图片失败：${String(err)}`);
+      }
+      return;
+    }
+    if (recordId) {
+      setNotice("无法创建新的截图记录。");
+      return;
+    }
+    await setImage(image);
+  }, [clearError, onImageInput, recordId, setImage]);
 
   useEffect(() => {
     let active = true;
@@ -130,35 +208,32 @@ export function ChatPanel({
           event.preventDefault();
           const file = item.getAsFile();
           if (file) {
-            void readFileAsDataUrl(file).then((image) => void setImage(image));
+            void readFileAsDataUrl(file).then((image) => void acceptImage(image, "paste"));
           }
           return;
         }
       }
       void readClipboardImage().then((image) => {
         if (image) {
-          void setImage(image);
+          void acceptImage(image, "paste");
         }
       });
     }
 
     window.addEventListener("paste", handlePaste);
     return () => window.removeEventListener("paste", handlePaste);
-  }, [setImage]);
+  }, [acceptImage]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") {
         return;
       }
-      if (pendingReplaceImage) {
-        return;
-      }
       void invoke("hide_quick_panel_command");
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [pendingReplaceImage]);
+  }, []);
 
   useEffect(() => {
     const element = dropRef.current;
@@ -188,7 +263,7 @@ export function ChatPanel({
       const files = filterAcceptedFiles(event.dataTransfer?.files ?? []);
       const file = files[0];
       if (file) {
-        void readFileAsDataUrl(file).then((image) => void setImage(image));
+        void readFileAsDataUrl(file).then((image) => void acceptImage(image, "drag"));
       }
     }
 
@@ -202,7 +277,7 @@ export function ChatPanel({
       element.removeEventListener("dragover", handleDragOver);
       element.removeEventListener("drop", handleDrop);
     };
-  }, [setImage, state.image, hasConversation]);
+  }, [acceptImage, state.image, hasConversation]);
 
   async function handleExport() {
     try {
@@ -289,7 +364,7 @@ export function ChatPanel({
   async function handlePasteImage() {
     const image = await readClipboardImage();
     if (image) {
-      await setImage(image);
+      await acceptImage(image, "paste");
     } else {
       setNotice("剪贴板没有图片。");
     }
@@ -304,7 +379,7 @@ export function ChatPanel({
     clearError();
     try {
       const image = await captureScreenRegion();
-      void setImage(image);
+      await acceptImage(image, "capture");
     } catch (err) {
       const message = String(err);
       if (!message.includes("已取消截图")) {
@@ -318,7 +393,7 @@ export function ChatPanel({
   function handleFilePicked(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (file) {
-      void readFileAsDataUrl(file).then((image) => void setImage(image));
+      void readFileAsDataUrl(file).then((image) => void acceptImage(image, "file"));
     }
     event.target.value = "";
   }
@@ -359,13 +434,6 @@ export function ChatPanel({
             ✕
           </button>
         </div>
-      ) : null}
-
-      {pendingReplaceImage ? (
-        <ReplaceImageConfirm
-          onCancel={() => cancelReplaceImage()}
-          onConfirm={() => void confirmReplaceImage()}
-        />
       ) : null}
 
       <input

@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
+const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct StreamChunk {
@@ -44,6 +46,23 @@ pub fn sidecar_request_model(backend: InferenceBackend, mlx: &MlxModelRef) -> St
     }
 }
 
+async fn wait_until_cancelled(cancel: &AtomicBool) {
+    while !cancel.load(Ordering::SeqCst) {
+        tokio::time::sleep(CANCEL_POLL_INTERVAL).await;
+    }
+}
+
+async fn sleep_or_cancel(cancel: &AtomicBool, duration: Duration) -> bool {
+    tokio::select! {
+        _ = wait_until_cancelled(cancel) => true,
+        _ = tokio::time::sleep(duration) => false,
+    }
+}
+
+fn complete_cancelled(app: &AppHandle, record_id: &str, request_id: &str) -> Result<(), String> {
+    emit_chunk(app, record_id, request_id, "", true)
+}
+
 pub async fn stream_from_sidecar(
     app: &AppHandle,
     port: u16,
@@ -75,10 +94,17 @@ pub async fn stream_from_sidecar(
 
     let mut response = None;
     for _ in 0..max_retries {
-        let attempt = client.post(&url).json(&body).send().await;
+        let attempt = tokio::select! {
+            _ = wait_until_cancelled(cancel) => {
+                return complete_cancelled(app, record_id, request_id);
+            }
+            result = client.post(&url).json(&body).send() => result,
+        };
         match attempt {
             Ok(resp) if resp.status() == StatusCode::SERVICE_UNAVAILABLE => {
-                tokio::time::sleep(retry_delay).await;
+                if sleep_or_cancel(cancel, retry_delay).await {
+                    return complete_cancelled(app, record_id, request_id);
+                }
                 continue;
             }
             Ok(resp) => {
@@ -93,7 +119,12 @@ pub async fn stream_from_sidecar(
 
     if !response.status().is_success() {
         let status = response.status();
-        let detail = response.text().await.unwrap_or_default();
+        let detail = tokio::select! {
+            _ = wait_until_cancelled(cancel) => {
+                return complete_cancelled(app, record_id, request_id);
+            }
+            result = response.text() => result.unwrap_or_default(),
+        };
         let detail = detail.trim();
         if detail.is_empty() {
             return Err(format!("推理失败: HTTP {status}"));
@@ -105,11 +136,16 @@ pub async fn stream_from_sidecar(
     let mut buffer = String::new();
     let mut emitted_any = false;
 
-    while let Some(chunk) = stream.next().await {
-        if cancel.load(Ordering::SeqCst) {
-            emit_chunk(app, record_id, request_id, "", true)?;
-            return Ok(());
-        }
+    loop {
+        let chunk = tokio::select! {
+            _ = wait_until_cancelled(cancel) => {
+                return complete_cancelled(app, record_id, request_id);
+            }
+            result = stream.next() => result,
+        };
+        let Some(chunk) = chunk else {
+            break;
+        };
         let chunk = chunk.map_err(|e| e.to_string())?;
         buffer.push_str(&String::from_utf8_lossy(&chunk));
 
@@ -144,4 +180,29 @@ pub async fn stream_from_sidecar(
 
     emit_chunk(app, record_id, request_id, "", true)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn cancellation_interrupts_a_long_wait() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let trigger = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            trigger.store(true, Ordering::SeqCst);
+        });
+
+        let cancelled = tokio::time::timeout(
+            Duration::from_millis(250),
+            sleep_or_cancel(&cancel, Duration::from_secs(600)),
+        )
+        .await
+        .expect("cancel-aware wait should finish promptly");
+
+        assert!(cancelled);
+    }
 }

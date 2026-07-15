@@ -23,7 +23,7 @@ export type ModelClient = {
     request: AskImageRequest,
     onChunk: (chunk: StreamChunk) => void,
   ): Promise<void>;
-  cancelGeneration(): Promise<void>;
+  cancelGeneration(requestId: string): Promise<void>;
   warmupModel(): Promise<void>;
   unloadWhenIdle(): Promise<void>;
   /** 运维/调试详情：侧车、路径、后端细项。 */
@@ -59,8 +59,8 @@ export function createModelClient(): ModelClient {
       }
     },
 
-    async cancelGeneration() {
-      await invoke("cancel_generation");
+    async cancelGeneration(requestId) {
+      await invoke("cancel_generation", { requestId });
     },
 
     async warmupModel() {

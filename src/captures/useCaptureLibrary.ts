@@ -26,6 +26,7 @@ export function useCaptureLibrary(api: CaptureClient = captureClient) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const selectionRequestRef = useRef(0);
+  const refreshRequestRef = useRef(0);
   const selectedIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -42,17 +43,23 @@ export function useCaptureLibrary(api: CaptureClient = captureClient) {
 
   const select = useCallback(async (id: string) => {
     const request = ++selectionRequestRef.current;
+    selectedIdRef.current = id;
     const detail = await api.get(id);
     if (!detail) {
       return;
     }
     const hydrated = await hydrate(detail);
-    if (selectionRequestRef.current === request) {
+    if (selectionRequestRef.current === request && selectedIdRef.current === id) {
       setSelected(hydrated);
     }
   }, [api, hydrate]);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (preferredId?: string) => {
+    const request = ++refreshRequestRef.current;
+    ++selectionRequestRef.current;
+    if (preferredId) {
+      selectedIdRef.current = preferredId;
+    }
     setLoading(true);
     try {
       const listed = newestFirst(await api.list());
@@ -60,34 +67,45 @@ export function useCaptureLibrary(api: CaptureClient = captureClient) {
         ...record,
         thumbnailDataUrl: record.thumbnailDataUrl || await api.readImage(record.id, true),
       })));
+      if (refreshRequestRef.current !== request) {
+        return;
+      }
       setRecords(next);
       setError("");
 
       const selectedId = selectedIdRef.current;
-      const nextId = selectedId && next.some((item) => item.id === selectedId)
-        ? selectedId
-        : next[0]?.id;
+      const nextId = preferredId && next.some((item) => item.id === preferredId)
+        ? preferredId
+        : selectedId && next.some((item) => item.id === selectedId)
+          ? selectedId
+          : next[0]?.id;
       if (nextId) {
-        void select(nextId);
+        await select(nextId);
       } else {
         ++selectionRequestRef.current;
+        selectedIdRef.current = null;
         setSelected(null);
       }
     } catch (reason) {
-      setError(String(reason));
+      if (refreshRequestRef.current === request) {
+        setError(String(reason));
+      }
     } finally {
-      setLoading(false);
+      if (refreshRequestRef.current === request) {
+        setLoading(false);
+      }
     }
   }, [api, select]);
 
   useEffect(() => {
     void refresh();
     let unsubscribe: (() => void) | undefined;
-    void api.subscribe(() => void refresh()).then((cleanup) => {
+    void api.subscribe((event) => void refresh(event.action === "created" ? event.id : undefined)).then((cleanup) => {
       unsubscribe = cleanup;
     });
     return () => {
       ++selectionRequestRef.current;
+      ++refreshRequestRef.current;
       unsubscribe?.();
     };
   }, [api, refresh]);
@@ -96,6 +114,7 @@ export function useCaptureLibrary(api: CaptureClient = captureClient) {
     const created = await api.create(input);
     const hydrated = await hydrate({ ...created, imageDataUrl: input.dataUrl });
     ++selectionRequestRef.current;
+    selectedIdRef.current = hydrated.id;
     setRecords((current) => newestFirst([hydrated, ...current.filter((item) => item.id !== hydrated.id)]));
     setSelected(hydrated);
     return hydrated;
@@ -112,22 +131,13 @@ export function useCaptureLibrary(api: CaptureClient = captureClient) {
 
   const remove = useCallback(async (id: string) => {
     await api.remove(id);
-    setRecords((current) => {
-      const next = current.filter((item) => item.id !== id);
-      setSelected((active) => {
-        if (active?.id !== id) {
-          return active;
-        }
-        ++selectionRequestRef.current;
-        const fallback = next[0] ?? null;
-        if (fallback) {
-          void select(fallback.id);
-        }
-        return fallback;
-      });
-      return next;
-    });
-  }, [api, select]);
+    if (selectedIdRef.current === id) {
+      ++selectionRequestRef.current;
+      selectedIdRef.current = null;
+      setSelected(null);
+    }
+    await refresh();
+  }, [api, refresh]);
 
   const visibleRecords = useMemo(
     () => records.filter((record) => matchesQuery(record, query)),

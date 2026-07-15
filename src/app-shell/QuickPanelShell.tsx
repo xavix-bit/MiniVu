@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
@@ -14,6 +14,7 @@ import { captureScreenRegion } from "../image/captureScreen";
 import { readClipboardImage } from "../image/imageIntake";
 import { captureClient } from "../captures/captureClient";
 import type { AcceptedImage } from "../image/imageInput";
+import type { CaptureSource } from "../captures/types";
 import { loadSettings } from "../settings/settingsStore";
 
 type PanelMode = "expanded" | "launcher" | "pet" | "hidden";
@@ -49,8 +50,10 @@ export function QuickLauncher({
 
 export function QuickPanelShell() {
   const [mode, setMode] = useState<PanelMode>("expanded");
-  const [initialImage, setInitialImage] = useState<AcceptedImage | null>(null);
-  const [recordId, setRecordId] = useState<string | null>(null);
+  const [activeCapture, setActiveCapture] = useState<{
+    recordId: string;
+    image: AcceptedImage;
+  } | null>(null);
   const petDragStartRef = useRef<{ x: number; y: number } | null>(null);
   const suppressPetClickRef = useRef(false);
 
@@ -62,24 +65,6 @@ export function QuickPanelShell() {
       delete document.documentElement.dataset.panelMode;
     };
   }, [mode]);
-
-  useEffect(() => {
-    const unlisteners: Array<() => void> = [];
-
-    void listen<PanelMode>("quick-panel-mode", (event) => {
-      setMode(event.payload);
-    }).then((cleanup) => unlisteners.push(cleanup));
-
-    void listen("capture-requested", () => {
-      void handleCapture();
-    }).then((cleanup) => unlisteners.push(cleanup));
-
-    return () => {
-      for (const cleanup of unlisteners) {
-        cleanup();
-      }
-    };
-  }, []);
 
   function handlePetPointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
     if (event.button !== 0) {
@@ -122,33 +107,67 @@ export function QuickPanelShell() {
     void invoke("show_quick_launcher_command");
   }
 
-  async function showResult(image: AcceptedImage, source: "capture" | "paste") {
+  const showResult = useCallback(async (image: AcceptedImage, source: CaptureSource) => {
     const settings = await loadSettings();
     const record = await captureClient.create({
       dataUrl: image.dataUrl,
       source,
       retention: settings.captureRetention ?? "24h",
     });
-    setRecordId(record.id);
-    setInitialImage(image);
+    setActiveCapture({ recordId: record.id, image });
     await invoke("expand_quick_panel_command");
-  }
+  }, []);
 
-  async function handleCapture() {
+  const handleCapture = useCallback(async () => {
     try {
       const image = await captureScreenRegion();
       await showResult(image, "capture");
     } catch (error) {
       if (!String(error).includes("已取消截图")) console.warn(error);
     }
-  }
+  }, [showResult]);
 
-  async function handlePaste() {
+  const handlePaste = useCallback(async () => {
     const image = await readClipboardImage();
     if (image) {
       await showResult(image, "paste");
     }
-  }
+  }, [showResult]);
+
+  useEffect(() => {
+    const unlisteners: Array<() => void> = [];
+    let active = true;
+
+    async function consumeCaptureRequest() {
+      const pending = await invoke<boolean>("take_pending_capture_request");
+      if (active && pending) {
+        await handleCapture();
+      }
+    }
+
+    void listen<PanelMode>("quick-panel-mode", (event) => {
+      setMode(event.payload);
+    }).then((cleanup) => {
+      if (active) unlisteners.push(cleanup);
+      else cleanup();
+    });
+
+    void listen("capture-requested", () => {
+      void consumeCaptureRequest();
+    }).then((cleanup) => {
+      if (active) {
+        unlisteners.push(cleanup);
+        void consumeCaptureRequest();
+      } else {
+        cleanup();
+      }
+    });
+
+    return () => {
+      active = false;
+      for (const cleanup of unlisteners) cleanup();
+    };
+  }, [handleCapture]);
 
   useEffect(() => {
     if (mode !== "launcher") return;
@@ -195,8 +214,9 @@ export function QuickPanelShell() {
     <main className="quick-panel-shell">
       <PanelChrome>
         <ChatPanel
-          initialImage={initialImage}
-          recordId={recordId}
+          initialImage={activeCapture?.image ?? null}
+          recordId={activeCapture?.recordId ?? null}
+          onImageInput={showResult}
           onCollapse={() => void invoke("close_quick_panel_command")}
         />
       </PanelChrome>

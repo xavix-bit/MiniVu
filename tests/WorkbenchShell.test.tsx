@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { CaptureRecord } from "../src/captures/types";
 import type { CaptureLibraryState } from "../src/captures/useCaptureLibrary";
@@ -48,15 +48,19 @@ describe("WorkbenchView", () => {
     expect(screen.queryByText(/Metal|运行时|模型就绪/)).not.toBeInTheDocument();
   });
 
-  it("filters pinned records and switches between AI and recognized text", () => {
+  it("filters pinned records and switches between AI and recognized text", async () => {
     const first = record();
     const pinned = record({ id: "two", title: "固定截图", pinned: true });
     const api = library([first, pinned]);
-    render(<WorkbenchView library={api} onOpenSettings={vi.fn()} onCapture={vi.fn()} />);
+    const view = render(<WorkbenchView library={api} onOpenSettings={vi.fn()} onCapture={vi.fn()} />);
 
     fireEvent.click(screen.getByRole("button", { name: "固定" }));
     expect(screen.getByRole("listitem", { name: /固定截图/ })).toBeInTheDocument();
     expect(screen.queryByRole("listitem", { name: /登录页/ })).not.toBeInTheDocument();
+    await waitFor(() => expect(api.select).toHaveBeenCalledWith(pinned.id));
+
+    api.selected = pinned;
+    view.rerender(<WorkbenchView library={api} onOpenSettings={vi.fn()} onCapture={vi.fn()} />);
 
     fireEvent.click(screen.getByRole("tab", { name: "文字" }));
     expect(screen.getByText("欢迎回来")).toBeInTheDocument();
@@ -84,5 +88,51 @@ describe("WorkbenchView", () => {
         expect.objectContaining({ role: "assistant", content: "这是一个登录界面。" }),
       ]) }),
     ));
+  });
+
+  it("cancels only the active request for the selected record", async () => {
+    let finishAsk: ((answer: string) => void) | undefined;
+    const ask = vi.fn((_record, _prompt, _requestId, _onChunk) => (
+      new Promise<string>((resolve) => { finishAsk = resolve; })
+    ));
+    const cancel = vi.fn(async () => {});
+    const api = library([record()]);
+    render(
+      <WorkbenchView
+        library={api}
+        onOpenSettings={vi.fn()}
+        onCapture={vi.fn()}
+        onAsk={ask}
+        onCancel={cancel}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "帮我看懂" }));
+    await waitFor(() => expect(ask).toHaveBeenCalledTimes(1));
+    const requestId = ask.mock.calls[0][2];
+    expect(requestId).toEqual(expect.any(String));
+
+    fireEvent.click(screen.getByRole("button", { name: "停止" }));
+    expect(cancel).toHaveBeenCalledWith(requestId);
+
+    finishAsk?.("");
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeInTheDocument());
+  });
+
+  it("hydrates the first visible record when filtering hides the selection", async () => {
+    const current = record({ id: "current", title: "当前截图" });
+    const summary = record({
+      id: "search-result",
+      title: "搜索结果",
+      imageDataUrl: undefined,
+    });
+    const api = library([current, summary]);
+    api.visibleRecords = [summary];
+
+    render(<WorkbenchView library={api} onOpenSettings={vi.fn()} onCapture={vi.fn()} />);
+
+    await waitFor(() => expect(api.select).toHaveBeenCalledWith(summary.id));
+    expect(within(screen.getByRole("main")).queryByText("搜索结果")).not.toBeInTheDocument();
+    expect(within(screen.getByRole("main")).getByText("正在载入截图")).toBeInTheDocument();
   });
 });

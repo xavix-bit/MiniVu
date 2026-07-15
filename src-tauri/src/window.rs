@@ -30,6 +30,7 @@ pub fn current_quick_panel_mode(app: &AppHandle) -> QuickPanelMode {
 pub struct QuickPanelState {
     pub expanded_size: LogicalSize<f64>,
     pub mode: QuickPanelMode,
+    pub capture_pending: bool,
 }
 
 impl Default for QuickPanelState {
@@ -37,6 +38,7 @@ impl Default for QuickPanelState {
         Self {
             expanded_size: LogicalSize::new(PANEL_WIDTH, PANEL_HEIGHT),
             mode: QuickPanelMode::Hidden,
+            capture_pending: false,
         }
     }
 }
@@ -235,8 +237,21 @@ pub fn request_capture_via_shortcut(app: &AppHandle) -> Result<(), String> {
     if !settings.onboarding_complete || !environment_ready {
         return show_main_window(app);
     }
+    with_panel_state(app, |state| {
+        state.capture_pending = true;
+        Ok(())
+    })?;
     app.emit_to(QUICK_PANEL_LABEL, "capture-requested", ())
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn take_pending_capture_request(app: AppHandle) -> Result<bool, String> {
+    with_panel_state(&app, |state| {
+        let pending = state.capture_pending;
+        state.capture_pending = false;
+        Ok(pending)
+    })
 }
 
 pub fn show_quick_panel_from_main(app: &AppHandle) -> Result<(), String> {

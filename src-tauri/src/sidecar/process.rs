@@ -12,9 +12,15 @@ pub struct ModelSidecar {
     pub port: u16,
     child: Option<Child>,
     last_used: Mutex<Option<Instant>>,
-    active_jobs: Mutex<usize>,
+    activity: Mutex<ActivityState>,
     service_ready: Mutex<bool>,
     active_backend: Mutex<Option<InferenceBackend>>,
+}
+
+#[derive(Default)]
+struct ActivityState {
+    active_jobs: usize,
+    restart_pending: bool,
 }
 
 impl ModelSidecar {
@@ -23,7 +29,7 @@ impl ModelSidecar {
             port,
             child: None,
             last_used: Mutex::new(None),
-            active_jobs: Mutex::new(0),
+            activity: Mutex::new(ActivityState::default()),
             service_ready: Mutex::new(false),
             active_backend: Mutex::new(None),
         }
@@ -70,18 +76,62 @@ impl ModelSidecar {
         }
     }
 
-    pub fn begin_activity(&self) {
-        if let Ok(mut guard) = self.active_jobs.lock() {
-            *guard += 1;
+    /// Enters the sidecar only when no settings-driven restart is pending.
+    /// Callers retry asynchronously so the outer sidecar mutex is never held while waiting.
+    pub fn try_begin_activity(&self) -> bool {
+        let admitted = self
+            .activity
+            .lock()
+            .map(|mut state| {
+                if state.restart_pending {
+                    return false;
+                }
+                state.active_jobs += 1;
+                true
+            })
+            .unwrap_or(false);
+        if !admitted {
+            return false;
         }
         self.touch();
+        true
     }
 
-    pub fn finish_activity(&self) {
-        if let Ok(mut guard) = self.active_jobs.lock() {
-            *guard = guard.saturating_sub(1);
-        }
+    pub fn finish_activity(&mut self) {
+        let should_restart = self
+            .activity
+            .lock()
+            .map(|mut state| {
+                state.active_jobs = state.active_jobs.saturating_sub(1);
+                if state.active_jobs == 0 && state.restart_pending {
+                    state.restart_pending = false;
+                    return true;
+                }
+                false
+            })
+            .unwrap_or(false);
         self.touch();
+        if should_restart {
+            self.stop();
+        }
+    }
+
+    pub fn request_restart(&mut self) {
+        let restart_now = self
+            .activity
+            .lock()
+            .map(|mut state| {
+                if state.active_jobs > 0 {
+                    state.restart_pending = true;
+                    false
+                } else {
+                    true
+                }
+            })
+            .unwrap_or(false);
+        if restart_now {
+            self.stop();
+        }
     }
 
     pub fn should_unload(&self) -> bool {
@@ -90,9 +140,9 @@ impl ModelSidecar {
 
     fn should_unload_after(&self, idle_timeout: Duration) -> bool {
         if self
-            .active_jobs
+            .activity
             .lock()
-            .map(|guard| *guard > 0)
+            .map(|state| state.active_jobs > 0 || state.restart_pending)
             .unwrap_or(true)
         {
             return false;
@@ -165,12 +215,34 @@ mod tests {
 
     #[test]
     fn active_work_never_unloads_and_resets_the_idle_clock() {
-        let sidecar = ModelSidecar::new(9000);
+        let mut sidecar = ModelSidecar::new(9000);
         *sidecar.last_used.lock().unwrap() = Some(Instant::now() - Duration::from_secs(900));
-        sidecar.begin_activity();
+        assert!(sidecar.try_begin_activity());
         assert!(!sidecar.should_unload());
         sidecar.finish_activity();
         assert!(!sidecar.should_unload());
+    }
+
+    #[test]
+    fn settings_restart_waits_for_active_work() {
+        let mut sidecar = ModelSidecar::new(9000);
+        assert!(sidecar.try_begin_activity());
+
+        sidecar.request_restart();
+
+        let activity = sidecar.activity.lock().unwrap();
+        assert_eq!(activity.active_jobs, 1);
+        assert!(activity.restart_pending);
+        drop(activity);
+        assert!(!sidecar.try_begin_activity());
+
+        sidecar.finish_activity();
+
+        let activity = sidecar.activity.lock().unwrap();
+        assert_eq!(activity.active_jobs, 0);
+        assert!(!activity.restart_pending);
+        drop(activity);
+        assert!(sidecar.try_begin_activity());
     }
 }
 
