@@ -68,6 +68,7 @@ export function CaptureCanvas({ record }: CaptureCanvasProps) {
       >
         {record.imageDataUrl ? (
           <img
+            key={record.id}
             src={record.imageDataUrl}
             alt={record.title || "截图"}
             draggable={false}

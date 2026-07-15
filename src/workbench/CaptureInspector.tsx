@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Copy, LoaderCircle, Send, Square } from "lucide-react";
 import { TranscriptPanel } from "../chat/TranscriptPanel";
 import type { CaptureRecord } from "../captures/types";
@@ -24,7 +24,13 @@ export function CaptureInspector({
 }: CaptureInspectorProps) {
   const [tab, setTab] = useState<"ai" | "text">("ai");
   const [copied, setCopied] = useState(false);
+  const tabRefs = useRef<Record<"ai" | "text", HTMLButtonElement | null>>({ ai: null, text: null });
   const hasConversation = record.messages.length > 0 || Boolean(streamingText);
+
+  function moveToTab(next: "ai" | "text") {
+    setTab(next);
+    requestAnimationFrame(() => tabRefs.current[next]?.focus());
+  }
 
   async function copyText() {
     if (!record.ocrText) return;
@@ -47,27 +53,54 @@ export function CaptureInspector({
     <aside className="capture-inspector" aria-label="截图信息">
       <div className="capture-inspector__tabs" role="tablist">
         <button
+          ref={(node) => { tabRefs.current.ai = node; }}
+          id="capture-tab-ai"
           type="button"
           role="tab"
           aria-selected={tab === "ai"}
+          aria-controls="capture-panel-ai"
+          tabIndex={tab === "ai" ? 0 : -1}
           className={tab === "ai" ? "is-active" : ""}
           onClick={() => setTab("ai")}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+              event.preventDefault();
+              moveToTab("text");
+            }
+          }}
         >
           AI
         </button>
         <button
+          ref={(node) => { tabRefs.current.text = node; }}
+          id="capture-tab-text"
           type="button"
           role="tab"
           aria-selected={tab === "text"}
+          aria-controls="capture-panel-text"
+          tabIndex={tab === "text" ? 0 : -1}
           className={tab === "text" ? "is-active" : ""}
           onClick={() => setTab("text")}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+              event.preventDefault();
+              moveToTab("ai");
+            }
+          }}
         >
           文字
         </button>
       </div>
 
-      {tab === "ai" ? (
-        <div className="capture-inspector__ai" role="tabpanel">
+      <div className="capture-inspector__panels">
+        <div
+          id="capture-panel-ai"
+          className={`capture-inspector__panel capture-inspector__ai${tab === "ai" ? " is-active" : ""}`}
+          role="tabpanel"
+          aria-labelledby="capture-tab-ai"
+          aria-hidden={tab !== "ai"}
+          inert={tab !== "ai"}
+        >
           <div className="capture-inspector__conversation">
             {hasConversation ? (
               <TranscriptPanel messages={record.messages} streamingText={streamingText} />
@@ -113,8 +146,14 @@ export function CaptureInspector({
             )}
           </div>
         </div>
-      ) : (
-        <div className="capture-inspector__text" role="tabpanel">
+        <div
+          id="capture-panel-text"
+          className={`capture-inspector__panel capture-inspector__text${tab === "text" ? " is-active" : ""}`}
+          role="tabpanel"
+          aria-labelledby="capture-tab-text"
+          aria-hidden={tab !== "text"}
+          inert={tab !== "text"}
+        >
           <header>
             <span>{record.ocrText ? `${record.ocrText.length} 字` : "识别文字"}</span>
             <button type="button" onClick={() => void copyText()} disabled={!record.ocrText}>
@@ -130,7 +169,7 @@ export function CaptureInspector({
             <p className="capture-inspector__status">这张截图里没有识别到文字</p>
           )}
         </div>
-      )}
+      </div>
     </aside>
   );
 }

@@ -27,6 +27,7 @@ function library(records: CaptureRecord[] = []): CaptureLibraryState {
     records,
     visibleRecords: records,
     selected: records[0] ?? null,
+    selectedId: records[0]?.id ?? null,
     query: "",
     setQuery: vi.fn(),
     loading: false,
@@ -88,6 +89,38 @@ describe("WorkbenchView", () => {
         expect.objectContaining({ role: "assistant", content: "这是一个登录界面。" }),
       ]) }),
     ));
+  });
+
+  it("switches inspector tabs with the arrow keys", async () => {
+    render(<WorkbenchView library={library([record()])} onOpenSettings={vi.fn()} onCapture={vi.fn()} />);
+
+    const aiTab = screen.getByRole("tab", { name: "AI" });
+    aiTab.focus();
+    fireEvent.keyDown(aiTab, { key: "ArrowRight" });
+
+    const textTab = screen.getByRole("tab", { name: "文字" });
+    await waitFor(() => expect(textTab).toHaveFocus());
+    expect(textTab).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel", { name: "文字" })).toBeVisible();
+
+    fireEvent.keyDown(textTab, { key: "ArrowRight" });
+    await waitFor(() => expect(aiTab).toHaveFocus());
+    expect(aiTab).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("makes the previous detail inert while another screenshot loads", () => {
+    const first = record({ id: "one" });
+    const second = record({ id: "two" });
+    const api = library([first, second]);
+    api.selected = first;
+    api.selectedId = second.id;
+
+    const { container } = render(
+      <WorkbenchView library={api} onOpenSettings={vi.fn()} onCapture={vi.fn()} />,
+    );
+
+    expect(screen.getByRole("status", { name: "" })).toHaveTextContent("正在载入");
+    expect(container.querySelector(".workbench-detail__selection")).toHaveAttribute("inert");
   });
 
   it("cancels only the active request for the selected record", async () => {

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Camera, Clock3, Pin, Settings, Trash2 } from "lucide-react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { Camera, Clock3, LoaderCircle, Pin, Settings, Trash2 } from "lucide-react";
 import appIconUrl from "../../app-icon.png";
 import { modelClient } from "../model/modelClient";
 import type { CaptureMessage, CaptureRecord } from "../captures/types";
@@ -66,6 +66,7 @@ export function WorkbenchView({
   const selected = library.selected && filtered.some((record) => record.id === library.selected?.id)
     ? library.selected
     : null;
+  const selectionPending = Boolean(library.selectedId && library.selected?.id !== library.selectedId);
 
   const fallbackId = selected ? null : filtered[0]?.id ?? null;
   useEffect(() => {
@@ -144,15 +145,24 @@ export function WorkbenchView({
 
       <CaptureList
         records={filtered}
-        selectedId={selected?.id ?? null}
+        selectedId={library.selectedId}
         query={library.query}
         onQueryChange={library.setQuery}
         onSelect={(id) => void library.select(id)}
       />
 
-      <main className="workbench-detail">
+      <main className={`workbench-detail${selectionPending ? " is-switching" : ""}`} aria-busy={selectionPending}>
+        {library.error ? (
+          <div className="workbench-detail__notice" role="status">{library.error}</div>
+        ) : null}
+        {selectionPending ? (
+          <div className="workbench-detail__loading" role="status">
+            <LoaderCircle className="is-spinning" size={18} />
+            <span>正在载入</span>
+          </div>
+        ) : null}
         {selected ? (
-          <>
+          <div className="workbench-detail__selection" inert={selectionPending}>
             <header className="workbench-detail__header">
               <div>
                 <strong>{selected.title || selected.ocrText.split("\n")[0] || "新截图"}</strong>
@@ -193,7 +203,7 @@ export function WorkbenchView({
                 }}
               />
             </div>
-          </>
+          </div>
         ) : filtered.length > 0 ? (
           <div className="workbench-empty">
             <p>正在载入截图</p>
@@ -211,7 +221,7 @@ export function WorkbenchView({
   );
 }
 
-export function WorkbenchShell({ onOpenSettings, onCapture }: Omit<WorkbenchViewProps, "library" | "onAsk">) {
+export const WorkbenchShell = memo(function WorkbenchShell({ onOpenSettings, onCapture }: Omit<WorkbenchViewProps, "library" | "onAsk">) {
   const library = useCaptureLibrary();
   return <WorkbenchView library={library} onOpenSettings={onOpenSettings} onCapture={onCapture} />;
-}
+});

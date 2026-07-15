@@ -19,19 +19,28 @@ function matchesQuery(record: CaptureRecord, query: string) {
   return `${record.title ?? ""}\n${record.ocrText}`.toLocaleLowerCase().includes(needle);
 }
 
+function cacheDetail(cache: Map<string, CaptureRecord>, record: CaptureRecord) {
+  cache.delete(record.id);
+  cache.set(record.id, record);
+  while (cache.size > 4) {
+    const oldest = cache.keys().next().value;
+    if (oldest) cache.delete(oldest);
+  }
+}
+
 export function useCaptureLibrary(api: CaptureClient = captureClient) {
   const [records, setRecords] = useState<CaptureRecord[]>([]);
   const [selected, setSelected] = useState<CaptureRecord | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const selectionRequestRef = useRef(0);
   const refreshRequestRef = useRef(0);
   const selectedIdRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    selectedIdRef.current = selected?.id ?? null;
-  }, [selected?.id]);
+  const selectedRef = useRef<CaptureRecord | null>(null);
+  const detailCacheRef = useRef(new Map<string, CaptureRecord>());
+  const detailRevisionRef = useRef(new Map<string, number>());
 
   const hydrate = useCallback(async (record: CaptureRecord) => {
     const [imageDataUrl, thumbnailDataUrl] = await Promise.all([
@@ -43,22 +52,51 @@ export function useCaptureLibrary(api: CaptureClient = captureClient) {
 
   const select = useCallback(async (id: string) => {
     const request = ++selectionRequestRef.current;
+    const previous = selectedRef.current;
+    const revision = detailRevisionRef.current.get(id) ?? 0;
     selectedIdRef.current = id;
-    const detail = await api.get(id);
-    if (!detail) {
-      return;
+    setSelectedId(id);
+    const cached = detailCacheRef.current.get(id);
+    if (cached) {
+      selectedRef.current = cached;
+      setSelected(cached);
     }
-    const hydrated = await hydrate(detail);
-    if (selectionRequestRef.current === request && selectedIdRef.current === id) {
-      setSelected(hydrated);
+    try {
+      const detail = await api.get(id);
+      if (!detail) throw new Error("截图不存在");
+      const hydrated = await hydrate(cached ? {
+        ...detail,
+        imageDataUrl: cached.imageDataUrl,
+        thumbnailDataUrl: cached.thumbnailDataUrl,
+      } : detail);
+      if (selectionRequestRef.current !== request || selectedIdRef.current !== id) return;
+
+      const latest = detailCacheRef.current.get(id);
+      const next = (detailRevisionRef.current.get(id) ?? 0) === revision || !latest
+        ? hydrated
+        : { ...hydrated, ...latest };
+      cacheDetail(detailCacheRef.current, next);
+      selectedRef.current = next;
+      setSelected(next);
+      setError("");
+    } catch (reason) {
+      if (selectionRequestRef.current !== request || selectedIdRef.current !== id) return;
+      selectedRef.current = previous;
+      setSelected(previous);
+      selectedIdRef.current = previous?.id ?? null;
+      setSelectedId(previous?.id ?? null);
+      setError("这张截图暂时打不开，请重试。");
     }
   }, [api, hydrate]);
 
   const refresh = useCallback(async (preferredId?: string) => {
     const request = ++refreshRequestRef.current;
+    const previousSelected = selectedRef.current;
+    const previousSelectedId = selectedIdRef.current;
     ++selectionRequestRef.current;
     if (preferredId) {
       selectedIdRef.current = preferredId;
+      setSelectedId(preferredId);
     }
     setLoading(true);
     try {
@@ -84,11 +122,19 @@ export function useCaptureLibrary(api: CaptureClient = captureClient) {
       } else {
         ++selectionRequestRef.current;
         selectedIdRef.current = null;
+        setSelectedId(null);
+        selectedRef.current = null;
         setSelected(null);
       }
     } catch (reason) {
       if (refreshRequestRef.current === request) {
-        setError(String(reason));
+        setError("截图列表暂时无法更新，请稍后重试。");
+        if (preferredId && selectedIdRef.current === preferredId) {
+          selectedRef.current = previousSelected;
+          setSelected(previousSelected);
+          selectedIdRef.current = previousSelectedId;
+          setSelectedId(previousSelectedId);
+        }
       }
     } finally {
       if (refreshRequestRef.current === request) {
@@ -115,7 +161,10 @@ export function useCaptureLibrary(api: CaptureClient = captureClient) {
     const hydrated = await hydrate({ ...created, imageDataUrl: input.dataUrl });
     ++selectionRequestRef.current;
     selectedIdRef.current = hydrated.id;
+    setSelectedId(hydrated.id);
+    cacheDetail(detailCacheRef.current, hydrated);
     setRecords((current) => newestFirst([hydrated, ...current.filter((item) => item.id !== hydrated.id)]));
+    selectedRef.current = hydrated;
     setSelected(hydrated);
     return hydrated;
   }, [api, hydrate]);
@@ -125,15 +174,25 @@ export function useCaptureLibrary(api: CaptureClient = captureClient) {
     if (!saved) {
       return;
     }
+    detailRevisionRef.current.set(id, (detailRevisionRef.current.get(id) ?? 0) + 1);
     setRecords((current) => newestFirst(current.map((item) => item.id === id ? { ...item, ...saved } : item)));
-    setSelected((current) => current?.id === id ? { ...current, ...saved } : current);
+    if (selectedRef.current?.id === id) {
+      selectedRef.current = { ...selectedRef.current, ...saved };
+      setSelected(selectedRef.current);
+    }
+    const cached = detailCacheRef.current.get(id);
+    if (cached) cacheDetail(detailCacheRef.current, { ...cached, ...saved });
   }, [api]);
 
   const remove = useCallback(async (id: string) => {
     await api.remove(id);
+    detailCacheRef.current.delete(id);
+    detailRevisionRef.current.delete(id);
     if (selectedIdRef.current === id) {
       ++selectionRequestRef.current;
       selectedIdRef.current = null;
+      setSelectedId(null);
+      selectedRef.current = null;
       setSelected(null);
     }
     await refresh();
@@ -148,6 +207,7 @@ export function useCaptureLibrary(api: CaptureClient = captureClient) {
     records,
     visibleRecords,
     selected,
+    selectedId,
     query,
     setQuery,
     loading,

@@ -92,6 +92,113 @@ describe("useCaptureLibrary", () => {
     expect(result.current.selected?.messages).toEqual([{ role: "assistant", content: "A" }]);
   });
 
+  it("updates the highlighted selection before its full image finishes loading", async () => {
+    let resolveB: ((value: CaptureRecord | null) => void) | undefined;
+    const a = record({ id: "a" });
+    const b = record({ id: "b", createdAtMs: 90 });
+    const api = client([a, b]);
+    api.get = vi.fn((id) => id === "b"
+      ? new Promise((resolve) => { resolveB = resolve; })
+      : Promise.resolve(a));
+    const { result } = renderHook(() => useCaptureLibrary(api));
+    await waitFor(() => expect(result.current.selected?.id).toBe("a"));
+
+    let pending: Promise<void> | undefined;
+    act(() => {
+      pending = result.current.select("b");
+    });
+    expect(result.current.selectedId).toBe("b");
+    expect(result.current.selected?.id).toBe("a");
+
+    resolveB?.(b);
+    await act(async () => pending);
+    expect(result.current.selected?.id).toBe("b");
+  });
+
+  it("rolls back the highlight when a detail cannot be loaded", async () => {
+    const a = record({ id: "a" });
+    const b = record({ id: "b", createdAtMs: 90 });
+    const api = client([a, b]);
+    api.get = vi.fn((id) => Promise.resolve(id === "a" ? a : null));
+    const { result } = renderHook(() => useCaptureLibrary(api));
+    await waitFor(() => expect(result.current.selected?.id).toBe("a"));
+
+    await act(async () => result.current.select("b"));
+
+    expect(result.current.selectedId).toBe("a");
+    expect(result.current.selected?.id).toBe("a");
+    expect(result.current.error).toBe("这张截图暂时打不开，请重试。");
+  });
+
+  it("rolls back the highlight when reading a detail rejects", async () => {
+    const a = record({ id: "a" });
+    const b = record({ id: "b", createdAtMs: 90 });
+    const api = client([a, b]);
+    api.get = vi.fn((id) => id === "a" ? Promise.resolve(a) : Promise.reject(new Error("读取失败")));
+    const { result } = renderHook(() => useCaptureLibrary(api));
+    await waitFor(() => expect(result.current.selected?.id).toBe("a"));
+
+    await act(async () => result.current.select("b"));
+
+    expect(result.current.selectedId).toBe("a");
+    expect(result.current.selected?.id).toBe("a");
+    expect(result.current.error).toBe("这张截图暂时打不开，请重试。");
+  });
+
+  it("does not let a delayed detail overwrite a newer record update", async () => {
+    let resolveStale: ((value: CaptureRecord | null) => void) | undefined;
+    let reads = 0;
+    const a = record({ id: "a", pinned: false });
+    const api = client([a]);
+    api.get = vi.fn(() => {
+      reads += 1;
+      return reads === 1
+        ? Promise.resolve(a)
+        : new Promise((resolve) => { resolveStale = resolve; });
+    });
+    const { result } = renderHook(() => useCaptureLibrary(api));
+    await waitFor(() => expect(result.current.selected?.id).toBe("a"));
+
+    let pending: Promise<void> | undefined;
+    act(() => {
+      pending = result.current.select("a");
+    });
+    await act(async () => result.current.update("a", { pinned: true }));
+    resolveStale?.(a);
+    await act(async () => pending);
+
+    expect(result.current.selected?.pinned).toBe(true);
+  });
+
+  it("restores the previous selection when a preferred refresh fails", async () => {
+    const a = record({ id: "a" });
+    const api = client([a]);
+    const { result } = renderHook(() => useCaptureLibrary(api));
+    await waitFor(() => expect(result.current.selected?.id).toBe("a"));
+    api.list = vi.fn(async () => { throw new Error("刷新失败"); });
+
+    await act(async () => result.current.refresh("new-capture"));
+
+    expect(result.current.selectedId).toBe("a");
+    expect(result.current.selected?.id).toBe("a");
+  });
+
+  it("leaves a cached record when the source reports it was deleted", async () => {
+    const a = record({ id: "a" });
+    const b = record({ id: "b", createdAtMs: 90 });
+    const api = client([a, b]);
+    const { result } = renderHook(() => useCaptureLibrary(api));
+    await waitFor(() => expect(result.current.selected?.id).toBe("a"));
+    await act(async () => result.current.select("b"));
+    await act(async () => result.current.select("a"));
+    api.get = vi.fn(async (id) => id === "b" ? null : a);
+
+    await act(async () => result.current.select("b"));
+
+    expect(result.current.selectedId).toBe("a");
+    expect(result.current.selected?.id).toBe("a");
+  });
+
   it("pins and deletes records without losing a valid selection", async () => {
     const api = client([record({ id: "a" }), record({ id: "b", createdAtMs: 90 })]);
     const { result } = renderHook(() => useCaptureLibrary(api));

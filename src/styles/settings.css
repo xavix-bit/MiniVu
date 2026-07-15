@@ -1,4 +1,49 @@
 /* ── Settings shell ── */
+.main-surface-stack {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #f3f6fb;
+  isolation: isolate;
+}
+
+.main-surface {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 0.16s var(--ease-product),
+    transform 0.2s var(--ease-product),
+    visibility 0s linear 0.2s;
+}
+
+.main-surface--workbench {
+  transform: translateX(-5px);
+}
+
+.main-surface--settings {
+  transform: translateX(5px);
+}
+
+.main-surface.is-active {
+  z-index: 1;
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(0);
+  pointer-events: auto;
+  transition-delay: 0s;
+}
+
+.main-surface:focus,
+.settings-main:focus {
+  outline: none;
+}
+
 .settings-app {
   --background: #f6f8fb;
   --foreground: #17202a;
@@ -389,6 +434,12 @@
   padding: 28px 34px 40px;
 }
 
+.settings-page-stack {
+  position: relative;
+  display: grid;
+  min-width: 0;
+}
+
 .settings-page-shell--home {
   max-width: 1180px;
   margin: 0;
@@ -555,25 +606,29 @@
 }
 
 .settings-page-view {
-  display: none;
+  position: absolute;
+  inset: 0;
+  display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 14px;
-  animation: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(5px);
+  pointer-events: none;
+  transition:
+    opacity 0.14s var(--ease-product),
+    transform 0.18s var(--ease-product);
 }
 
 .settings-page-view.is-active {
-  display: grid;
+  position: relative;
+  inset: auto;
   gap: 20px;
-  animation: settings-view-in 0.18s ease both;
-}
-
-@keyframes settings-view-in {
-  from {
-    opacity: 0.92;
-  }
-  to {
-    opacity: 1;
-  }
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+  pointer-events: auto;
+  transition-delay: 0s;
 }
 
 .home-overview {
