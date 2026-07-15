@@ -2,6 +2,10 @@
 
 MiniVu is a macOS-first screenshot workbench built with Tauri, React, TypeScript, and Rust. Capture is the primary workflow; local OCR and optional local AI operate on durable screenshot records after capture.
 
+[Download MiniVu v0.2.0 for Apple Silicon](https://github.com/xavix-bit/MiniVu/releases/download/v0.2.0/MiniVu_0.2.0_aarch64.dmg)
+
+Open the DMG and drag MiniVu into Applications. macOS 13 or later is recommended.
+
 ## Product Flow
 
 - Press the global shortcut to start macOS region capture immediately.
@@ -56,4 +60,4 @@ npm run tauri build -- --debug
 
 ## Current Scope
 
-MiniVu v0.1 targets Apple Silicon macOS. It includes local screenshot history, OCR, isolated per-screenshot conversations, pinning, search, and optional local image Q&A. It does not include accounts, sync, cloud inference, annotation editing, multi-image comparison, or cross-screenshot AI memory.
+MiniVu v0.2.0 targets Apple Silicon macOS. It includes local screenshot history, OCR, isolated per-screenshot conversations, pinning, search, and optional local image Q&A. It does not include accounts, sync, cloud inference, annotation editing, multi-image comparison, or cross-screenshot AI memory.
