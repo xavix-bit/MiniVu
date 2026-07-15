@@ -159,7 +159,7 @@ export function SettingsSidebar({
             </>
           )}
         </div>
-        <p className="settings-sidebar__version">版本 v0.1.0</p>
+        <p className="settings-sidebar__version">版本 v0.2.0</p>
       </div>
     </aside>
   );
