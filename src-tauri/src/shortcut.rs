@@ -1,4 +1,4 @@
-use crate::window::show_quick_panel_via_shortcut;
+use crate::window::request_capture_via_shortcut;
 use tauri::AppHandle;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
@@ -19,7 +19,7 @@ pub fn register_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), String> 
     app.global_shortcut()
         .on_shortcut(parsed, |app, _shortcut, event| {
             if event.state == ShortcutState::Pressed {
-                let _ = show_quick_panel_via_shortcut(app);
+                let _ = request_capture_via_shortcut(app);
             }
         })
         .map_err(|e| e.to_string())?;

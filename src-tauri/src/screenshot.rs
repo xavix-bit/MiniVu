@@ -1,11 +1,24 @@
-use crate::window::{hide_quick_panel_silent, restore_quick_panel};
+use crate::window::{
+    conceal_quick_panel_for_capture, current_quick_panel_mode, restore_quick_panel_mode,
+};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::Serialize;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
+
+static CAPTURE_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+struct CaptureGuard;
+
+impl Drop for CaptureGuard {
+    fn drop(&mut self) {
+        CAPTURE_IN_PROGRESS.store(false, Ordering::Release);
+    }
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -18,18 +31,26 @@ pub struct CapturedImagePayload {
 pub async fn capture_screen_region(app: AppHandle) -> Result<CapturedImagePayload, String> {
     ensure_screen_capture_access()?;
 
-    hide_quick_panel_silent(&app)?;
+    if CAPTURE_IN_PROGRESS.swap(true, Ordering::AcqRel) {
+        return Err("正在截图".to_string());
+    }
+    let _guard = CaptureGuard;
+    let previous_mode = current_quick_panel_mode(&app);
+
+    conceal_quick_panel_for_capture(&app)?;
     tokio::time::sleep(std::time::Duration::from_millis(380)).await;
 
-    let capture_path = temp_capture_path(&app)?;
-    let path_for_task = capture_path.clone();
+    let result = match temp_capture_path(&app) {
+        Ok(capture_path) => {
+            match tokio::task::spawn_blocking(move || run_interactive_capture(capture_path)).await {
+                Ok(result) => result,
+                Err(error) => Err(error.to_string()),
+            }
+        }
+        Err(error) => Err(error),
+    };
 
-    let result = tokio::task::spawn_blocking(move || run_interactive_capture(path_for_task))
-        .await
-        .map_err(|error| error.to_string())?;
-
-    restore_quick_panel(&app)?;
-
+    restore_quick_panel_mode(&app, previous_mode)?;
     result
 }
 

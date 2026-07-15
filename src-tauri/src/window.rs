@@ -9,6 +9,8 @@ const MAIN_WINDOW_LABEL: &str = "main";
 const PANEL_WIDTH: f64 = 380.0;
 const PANEL_HEIGHT: f64 = 620.0;
 const PET_SIZE: f64 = 56.0;
+const LAUNCHER_WIDTH: f64 = 252.0;
+const LAUNCHER_HEIGHT: f64 = 64.0;
 const MAIN_WIDTH: f64 = 1200.0;
 const MAIN_HEIGHT: f64 = 800.0;
 
@@ -16,8 +18,13 @@ const MAIN_HEIGHT: f64 = 800.0;
 #[serde(rename_all = "lowercase")]
 pub enum QuickPanelMode {
     Expanded,
+    Launcher,
     Pet,
     Hidden,
+}
+
+pub fn current_quick_panel_mode(app: &AppHandle) -> QuickPanelMode {
+    read_panel_state(app, |state| state.mode)
 }
 
 pub struct QuickPanelState {
@@ -78,6 +85,12 @@ fn present_window(window: &WebviewWindow, app: &AppHandle) -> Result<(), String>
     Ok(())
 }
 
+fn present_window_passive(window: &WebviewWindow) -> Result<(), String> {
+    window.show().map_err(|error| error.to_string())?;
+    let _ = window.set_always_on_top(true);
+    Ok(())
+}
+
 pub fn expand_quick_panel(app: &AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window(QUICK_PANEL_LABEL)
@@ -88,6 +101,7 @@ pub fn expand_quick_panel(app: &AppHandle) -> Result<(), String> {
     window
         .set_size(expanded_size)
         .map_err(|error| error.to_string())?;
+    let _ = window.set_resizable(true);
     let _ = window.set_always_on_top(true);
     present_window(&window, app)?;
 
@@ -107,14 +121,49 @@ pub fn collapse_quick_panel_to_pet(app: &AppHandle) -> Result<(), String> {
     window
         .set_size(LogicalSize::new(PET_SIZE, PET_SIZE))
         .map_err(|error| error.to_string())?;
+    let _ = window.set_resizable(false);
     let _ = window.set_always_on_top(true);
-    present_window(&window, app)?;
+    present_window_passive(&window)?;
 
     with_panel_state(app, |state| {
         state.mode = QuickPanelMode::Pet;
         Ok(())
     })?;
     emit_panel_mode(app, QuickPanelMode::Pet)
+}
+
+pub fn show_quick_launcher(app: &AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window(QUICK_PANEL_LABEL)
+        .ok_or_else(|| "quick panel window not found".to_string())?;
+
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let current = window.outer_position().ok();
+    let (screen_w, _) = primary_screen_size()?;
+    let mut x = current
+        .map(|position| position.x as f64 / scale)
+        .unwrap_or(20.0);
+    let y = current
+        .map(|position| position.y as f64 / scale)
+        .unwrap_or(20.0);
+    if x + LAUNCHER_WIDTH > screen_w as f64 {
+        x = (x - (LAUNCHER_WIDTH - PET_SIZE)).max(0.0);
+    }
+
+    window
+        .set_size(LogicalSize::new(LAUNCHER_WIDTH, LAUNCHER_HEIGHT))
+        .map_err(|error| error.to_string())?;
+    window
+        .set_position(LogicalPosition::new(x, y))
+        .map_err(|error| error.to_string())?;
+    let _ = window.set_resizable(false);
+    present_window_passive(&window)?;
+
+    with_panel_state(app, |state| {
+        state.mode = QuickPanelMode::Launcher;
+        Ok(())
+    })?;
+    emit_panel_mode(app, QuickPanelMode::Launcher)
 }
 
 pub fn show_quick_panel_near_cursor(app: &AppHandle) -> Result<(), String> {
@@ -180,6 +229,16 @@ pub fn show_quick_panel_via_shortcut(app: &AppHandle) -> Result<(), String> {
     }
 }
 
+pub fn request_capture_via_shortcut(app: &AppHandle) -> Result<(), String> {
+    let settings = load_settings(app)?;
+    let environment_ready = is_environment_ready(app).unwrap_or(false);
+    if !settings.onboarding_complete || !environment_ready {
+        return show_main_window(app);
+    }
+    app.emit_to(QUICK_PANEL_LABEL, "capture-requested", ())
+        .map_err(|error| error.to_string())
+}
+
 pub fn show_quick_panel_from_main(app: &AppHandle) -> Result<(), String> {
     show_quick_panel_via_shortcut(app)
 }
@@ -240,6 +299,25 @@ pub fn hide_quick_panel_silent(app: &AppHandle) -> Result<(), String> {
     });
     let _ = emit_panel_mode(app, QuickPanelMode::Hidden);
     Ok(())
+}
+
+pub fn conceal_quick_panel_for_capture(app: &AppHandle) -> Result<(), String> {
+    let Some(window) = app.get_webview_window(QUICK_PANEL_LABEL) else {
+        return Ok(());
+    };
+    if window.is_visible().unwrap_or(false) {
+        window.hide().map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+pub fn restore_quick_panel_mode(app: &AppHandle, mode: QuickPanelMode) -> Result<(), String> {
+    match mode {
+        QuickPanelMode::Expanded => expand_quick_panel(app),
+        QuickPanelMode::Launcher => show_quick_launcher(app),
+        QuickPanelMode::Pet => collapse_quick_panel_to_pet(app),
+        QuickPanelMode::Hidden => hide_quick_panel_silent(app),
+    }
 }
 
 pub fn restore_quick_panel(app: &AppHandle) -> Result<(), String> {
@@ -309,6 +387,11 @@ pub fn hide_quick_panel_command(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn expand_quick_panel_command(app: AppHandle) -> Result<(), String> {
     expand_quick_panel(&app)
+}
+
+#[tauri::command]
+pub fn show_quick_launcher_command(app: AppHandle) -> Result<(), String> {
+    show_quick_launcher(&app)
 }
 
 #[tauri::command]

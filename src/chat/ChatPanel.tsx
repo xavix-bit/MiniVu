@@ -19,6 +19,8 @@ import {
   readFileAsDataUrl,
 } from "../image/imageIntake";
 import { loadSettings } from "../settings/settingsStore";
+import type { AcceptedImage } from "../image/imageInput";
+import { captureClient } from "../captures/captureClient";
 
 function formatShortcut(raw: string): string {
   return raw
@@ -45,7 +47,15 @@ function formatShortcut(raw: string): string {
     .join("");
 }
 
-export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
+export function ChatPanel({
+  onCollapse,
+  initialImage,
+  recordId,
+}: {
+  onCollapse?: () => void;
+  initialImage?: AcceptedImage | null;
+  recordId?: string | null;
+}) {
   const [input, setInput] = useState("");
   const [notice, setNotice] = useState("");
   const [capturing, setCapturing] = useState(false);
@@ -73,6 +83,25 @@ export function ChatPanel({ onCollapse }: { onCollapse?: () => void }) {
   const hasConversation = state.messages.length > 0 || Boolean(streamingText);
   const showQuickActions = Boolean(state.image) && !hasConversation;
   const banner = error || notice;
+
+  useEffect(() => {
+    if (initialImage) {
+      void setImage(initialImage);
+    }
+  }, [initialImage, setImage]);
+
+  useEffect(() => {
+    if (!recordId || !state.image || ocrLoading) return;
+    void captureClient.update(recordId, {
+      ocrText: state.ocrText,
+      ocrState: error ? "failed" : "ready",
+    });
+  }, [error, ocrLoading, recordId, state.image, state.ocrText]);
+
+  useEffect(() => {
+    if (!recordId || !state.image) return;
+    void captureClient.update(recordId, { messages: state.messages });
+  }, [recordId, state.image, state.messages]);
 
   useEffect(() => {
     let active = true;

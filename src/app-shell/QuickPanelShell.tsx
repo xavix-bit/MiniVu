@@ -9,13 +9,47 @@ import appIconUrl from "../../app-icon.png";
 import { startWindowDrag } from "../window/panelChrome";
 import { ChatPanel } from "../chat/ChatPanel";
 import { PanelChrome } from "../window/panelChrome";
+import { ClipboardPaste, History, ScanLine } from "lucide-react";
+import { captureScreenRegion } from "../image/captureScreen";
+import { readClipboardImage } from "../image/imageIntake";
+import { captureClient } from "../captures/captureClient";
+import type { AcceptedImage } from "../image/imageInput";
 
-type PanelMode = "expanded" | "pet" | "hidden";
+type PanelMode = "expanded" | "launcher" | "pet" | "hidden";
 
 const PET_DRAG_THRESHOLD_PX = 4;
 
+export function QuickLauncher({
+  onCapture,
+  onPaste,
+  onRecent,
+}: {
+  onCapture: () => void;
+  onPaste: () => void;
+  onRecent: () => void;
+}) {
+  return (
+    <div className="quick-launcher" aria-label="快捷操作">
+      <button type="button" onClick={onCapture}>
+        <ScanLine size={19} aria-hidden="true" />
+        <span>截图</span>
+      </button>
+      <button type="button" onClick={onPaste}>
+        <ClipboardPaste size={18} aria-hidden="true" />
+        <span>粘贴</span>
+      </button>
+      <button type="button" onClick={onRecent}>
+        <History size={18} aria-hidden="true" />
+        <span>最近</span>
+      </button>
+    </div>
+  );
+}
+
 export function QuickPanelShell() {
   const [mode, setMode] = useState<PanelMode>("expanded");
+  const [initialImage, setInitialImage] = useState<AcceptedImage | null>(null);
+  const [recordId, setRecordId] = useState<string | null>(null);
   const petDragStartRef = useRef<{ x: number; y: number } | null>(null);
   const suppressPetClickRef = useRef(false);
 
@@ -33,6 +67,10 @@ export function QuickPanelShell() {
 
     void listen<PanelMode>("quick-panel-mode", (event) => {
       setMode(event.payload);
+    }).then((cleanup) => unlisteners.push(cleanup));
+
+    void listen("capture-requested", () => {
+      void handleCapture();
     }).then((cleanup) => unlisteners.push(cleanup));
 
     return () => {
@@ -80,8 +118,40 @@ export function QuickPanelShell() {
       }, 250);
       return;
     }
-    void invoke("expand_quick_panel_command");
+    void invoke("show_quick_launcher_command");
   }
+
+  async function showResult(image: AcceptedImage, source: "capture" | "paste") {
+    const record = await captureClient.create({ dataUrl: image.dataUrl, source, retention: "24h" });
+    setRecordId(record.id);
+    setInitialImage(image);
+    await invoke("expand_quick_panel_command");
+  }
+
+  async function handleCapture() {
+    try {
+      const image = await captureScreenRegion();
+      await showResult(image, "capture");
+    } catch (error) {
+      if (!String(error).includes("已取消截图")) console.warn(error);
+    }
+  }
+
+  async function handlePaste() {
+    const image = await readClipboardImage();
+    if (image) {
+      await showResult(image, "paste");
+    }
+  }
+
+  useEffect(() => {
+    if (mode !== "launcher") return;
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") void invoke("close_quick_panel_command");
+    }
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [mode]);
 
   if (mode === "pet") {
     return (
@@ -103,10 +173,26 @@ export function QuickPanelShell() {
     );
   }
 
+  if (mode === "launcher") {
+    return (
+      <main className="quick-panel-shell quick-panel-shell--launcher">
+        <QuickLauncher
+          onCapture={() => void handleCapture()}
+          onPaste={() => void handlePaste()}
+          onRecent={() => void invoke("show_main")}
+        />
+      </main>
+    );
+  }
+
   return (
     <main className="quick-panel-shell">
       <PanelChrome>
-        <ChatPanel onCollapse={() => void invoke("close_quick_panel_command")} />
+        <ChatPanel
+          initialImage={initialImage}
+          recordId={recordId}
+          onCollapse={() => void invoke("close_quick_panel_command")}
+        />
       </PanelChrome>
     </main>
   );

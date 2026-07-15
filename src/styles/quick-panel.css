@@ -4,6 +4,12 @@ html.quick-panel-window[data-panel-mode="pet"] #root {
   background: transparent;
 }
 
+html.quick-panel-window[data-panel-mode="launcher"],
+html.quick-panel-window[data-panel-mode="launcher"] body,
+html.quick-panel-window[data-panel-mode="launcher"] #root {
+  background: transparent;
+}
+
 .quick-panel-shell--pet {
   display: grid;
   place-items: center;
@@ -47,6 +53,56 @@ html.quick-panel-window[data-panel-mode="pet"] #root {
   border-radius: 12px;
   object-fit: cover;
   pointer-events: none;
+}
+
+.quick-panel-shell--launcher {
+  display: grid;
+  place-items: center;
+  padding: 5px;
+}
+
+.quick-launcher {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  width: 100%;
+  height: 100%;
+  padding: 4px;
+  border: 1px solid rgba(23, 32, 42, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 10px 30px rgba(23, 32, 42, 0.18), 0 2px 6px rgba(23, 32, 42, 0.08);
+  backdrop-filter: blur(16px);
+  -webkit-app-region: drag;
+}
+
+.quick-launcher button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  height: 44px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #526176;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.quick-launcher button:hover {
+  border-color: #dde4ef;
+  background: #f2f5f9;
+  color: #1f2937;
+}
+
+.quick-launcher button:first-child {
+  background: #edf3ff;
+  color: #285fd6;
 }
 
 /* ── Quick panel ── */
