@@ -1,3 +1,4 @@
+mod capture_store;
 mod commands;
 mod download_http;
 mod environment;
@@ -42,6 +43,13 @@ pub fn run() {
             tray::create_tray(app.handle())?;
             window::show_entry_window(app.handle())?;
 
+            let cleanup_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = capture_store::cleanup_capture_records(cleanup_handle).await {
+                    eprintln!("capture record cleanup failed: {error}");
+                }
+            });
+
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 // 先让主窗口渲染，再注册快捷键与可选预热，避免启动时 IPC 拥塞。
@@ -61,6 +69,13 @@ pub fn run() {
             commands::load_app_settings,
             commands::save_app_settings,
             commands::get_device_info,
+            capture_store::list_capture_records,
+            capture_store::get_capture_record,
+            capture_store::read_capture_image,
+            capture_store::create_capture_record,
+            capture_store::update_capture_record,
+            capture_store::delete_capture_record,
+            capture_store::cleanup_capture_records,
             export::export_session,
             export::app_data_dir,
             model_sidecar::get_model_status,
@@ -82,6 +97,7 @@ pub fn run() {
             window::close_quick_panel_command,
             window::hide_quick_panel_command,
             window::expand_quick_panel_command,
+            window::show_quick_launcher_command,
             window::open_screen_recording_settings,
             screenshot::capture_screen_region,
         ])

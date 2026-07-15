@@ -25,7 +25,13 @@ export const captureClient: CaptureClient = {
   },
 
   create(input: CreateCaptureInput) {
-    return invoke<CaptureRecord>("create_capture_record", { input });
+    return invoke<CaptureRecord>("create_capture_record", {
+      input: {
+        imageDataUrl: input.dataUrl,
+        source: input.source,
+        retention: input.retention ?? "24h",
+      },
+    });
   },
 
   update(id: string, patch: CaptureRecordPatch) {

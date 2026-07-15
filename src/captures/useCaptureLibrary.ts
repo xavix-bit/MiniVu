@@ -55,7 +55,11 @@ export function useCaptureLibrary(api: CaptureClient = captureClient) {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const next = newestFirst(await api.list());
+      const listed = newestFirst(await api.list());
+      const next = await Promise.all(listed.map(async (record) => ({
+        ...record,
+        thumbnailDataUrl: record.thumbnailDataUrl || await api.readImage(record.id, true),
+      })));
       setRecords(next);
       setError("");
 

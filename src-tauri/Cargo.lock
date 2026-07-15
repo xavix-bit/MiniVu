@@ -779,6 +779,7 @@ dependencies = [
  "base64 0.22.1",
  "core-graphics 0.24.0",
  "futures-util",
+ "image",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -792,6 +793,7 @@ dependencies = [
  "tauri-plugin-store",
  "thiserror 2.0.18",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -1894,6 +1896,8 @@ dependencies = [
  "num-traits",
  "png 0.18.1",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
