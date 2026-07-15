@@ -4,7 +4,7 @@ MiniVu is a macOS-first screenshot workbench built with Tauri, React, TypeScript
 
 [Download MiniVu v0.2.0 for Apple Silicon](https://github.com/xavix-bit/MiniVu/releases/download/v0.2.0/MiniVu_0.2.0_aarch64.dmg)
 
-Open the DMG and drag MiniVu into Applications. macOS 13 or later is recommended.
+Open the DMG and drag MiniVu into Applications. On first launch, Control-click MiniVu, choose **Open**, then confirm once. macOS 13 or later is recommended.
 
 ## Product Flow
 
