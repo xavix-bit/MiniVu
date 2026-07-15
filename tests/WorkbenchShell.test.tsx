@@ -55,8 +55,8 @@ describe("WorkbenchView", () => {
     render(<WorkbenchView library={api} onOpenSettings={vi.fn()} onCapture={vi.fn()} />);
 
     fireEvent.click(screen.getByRole("button", { name: "固定" }));
-    expect(screen.getByRole("button", { name: /固定截图/ })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /登录页/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("listitem", { name: /固定截图/ })).toBeInTheDocument();
+    expect(screen.queryByRole("listitem", { name: /登录页/ })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: "文字" }));
     expect(screen.getByText("欢迎回来")).toBeInTheDocument();
