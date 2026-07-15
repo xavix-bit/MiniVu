@@ -1,116 +1,113 @@
-# MiniVu 领域术语
+# MiniVu 领域上下文
 
-本地识图问答应用（Tauri + React + Rust）。以下术语在前后端共用，修改时需保持对齐。
+MiniVu 是 screenshot-first 的本地截图工作台（Tauri + React + Rust）。截图是持久化领域对象，OCR 与 AI 是对截图记录的异步增强。
 
-## ImageSession
+## CaptureRecord
 
-快捷面板内一次识图会话：图片、OCR、对话历史、推理状态机。
+每次截图、粘贴、拖入或选择文件都创建独立记录：
 
-Rust: 无（纯前端）
-Hook: `chat/useImageSession.ts` — `useImageSession()` 导出会话状态、`ask`、`statusBar`（模型加载 UX）
+- `id`, `source`, `title`
+- `ocrText`, `ocrState`
+- `messages`
+- `createdAtMs`, `updatedAtMs`, `expiresAtMs`
+- `pinned`
 
-## InferenceBackend
+Rust 唯一负责持久化，目录为：
 
-推理后端枚举：
+```text
+<app-data>/captures/<record-id>/
+  image.png
+  thumbnail.jpg
+  metadata.json
+```
 
-| 值 | 含义 | 侧车端口 | 体积与加速 |
-|---|---|---|---|
-| `llama` | 内置 Metal 路径：llama.cpp + MiniCPM-V 4.6 GGUF 档位 + mmproj | 18765 | 当前打包资源约 21 MB；模型约 1.6 GB；Apple Silicon 上通过 `-ngl` 使用 **Metal** |
-| `mlx` | 实验加速路径：MLX VLM（Apple Silicon） | 18766 | 运行时约 300 MB（Python venv）；需额外安装与独立权重 |
+`metadata.json` 经临时文件、`sync_all`、rename 原子替换。默认保留 24 小时，固定记录不清理；启动和创建新记录时清理过期数据。前端通过 `capture-record-changed` 同步两个 Webview，事件不携带 base64 图片。
 
-**默认后端**：`llama`。产品文案对用户称为「内置 Metal 本地推理」：运行时随安装包提供，用户只下载模型。`mlx` 保留为高级/实验加速选项，不进入默认引导主路径。
+Rust: `capture_store.rs`
 
-Rust: `settings::InferenceBackend`  
-前端: `"llama" | "mlx"`
-
-## EnvironmentStatus
-
-环境是否「可正常使用」的单一判定来源（替代仅检查 GGUF 的 `is_model_ready`）。
-
-- `onboardingComplete` — 用户完成引导
-- `runtimeReady` — 当前后端的推理引擎已安装（llama-server 或 MLX venv）
-- `modelReady` — 当前后端的模型权重可用
-- `environmentReady` — 以上全部满足
-
-Rust: `environment::EnvironmentStatus`  
-命令: `get_environment_status`, `is_app_environment_ready`
+Frontend: `captures/types.ts`, `captureClient.ts`, `useCaptureLibrary.ts`
 
 ## QuickPanelMode
 
-快捷面板窗口状态：
+同一个 `quick-panel` 物理窗口在四种模式间切换：
 
-| 值 | 含义 |
+| 值 | 用途 |
 |---|---|
-| `expanded` | 380 x 620 左右的完整快捷面板，靠近鼠标打开，置顶显示 |
-| `pet` | 56 x 56 的悬浮入口，点击后恢复完整面板 |
-| `hidden` | 窗口隐藏；隐藏前会发出 `quick-panel-closing` 清空临时会话 |
+| `hidden` | 完全隐藏 |
+| `pet` | 56 x 56 可拖动悬浮入口 |
+| `launcher` | 横向 `截图 / 粘贴 / 最近` 工具条 |
+| `expanded` | 当前截图的轻量结果面板 |
 
-Rust: `window::QuickPanelMode`
-前端: `"expanded" | "pet" | "hidden"`
-事件: `quick-panel-mode`, `quick-panel-closing`
+全局快捷键在配置完成后发出 `capture-requested`，直接进入系统框选，不先展示空面板。截图取消恢复之前的窗口模式；并发框选由 Rust guard 拒绝。
 
-## ModelArtifacts
+Rust: `window.rs`, `shortcut.rs`, `screenshot.rs`
 
-| 后端 | 所需文件 |
-|---|---|
-| Llama | MiniCPM-V 4.6 Q4_K_M / Q5_K_M / Q6_K 主模型 + `mmproj*.gguf` |
-| MLX | HuggingFace hub 缓存 |
+Frontend: `app-shell/QuickPanelShell.tsx`
 
-Rust: `ModelPaths`, `MlxModelRef`  
-就绪判断: `environment::models_ready_for_backend`
+## Workbench
 
-## 内置 llama 运行时（bundled runtime）
+主窗口完成 onboarding 后进入三列工作台：
 
-llama-server 及其依赖 dylib 随安装包内置，用户无需下载引擎或安装 Homebrew/Python，只需下载 GGUF 模型。面向用户时优先称为「内置 Metal 引擎」，避免把新用户暴露在后端实现细节里。
+- 64px rail：最近、固定、设置
+- 260px searchable list：缩略图、标题/OCR 摘要、时间
+- flexible detail：截图画布 + 320px AI/文字 inspector
 
-- 位置：`src-tauri/resources/llama/`（已提交入库，当前约 21 MB：`llama-server` + 9 个 `.0.dylib`）
-- 链接：`@rpath` + `LC_RPATH=@loader_path` → 与同目录 dylib 平铺即可运行；Metal 已内嵌进 `libggml-metal`
-- 打包：`tauri.conf.json` 的 `bundle.resources` 映射 `resources/llama/* → llama/`，落到 `<app>/Contents/Resources/llama/`
-- 解析优先级：`runtime_installer::resolve_llama_server` 先查内置资源目录（去隔离 + 补可执行位），再退回下载缓存 / PATH
-- 升级引擎：替换 `src-tauri/resources/llama/` 下文件并对齐 `LLAMA_RELEASE_TAG`
-- MLX 不内置（Python venv 体积大且依赖系统 Python），仍为运行时可选安装
+每条记录拥有独立消息。AI 只保留一个 composer `问这张截图…` 和一个默认动作 `帮我看懂`。不建立翻译、总结、问图等并列模式。
 
-## 进度事件
+Frontend: `workbench/`
 
-| 事件名 | 用途 |
-|---|---|
-| `model-download-progress` | GGUF / MLX 权重下载（统一 payload） |
-| `setup-progress` | 引导页各阶段（device / runtime / model / mmproj / shortcut） |
-| `sidecar-load-progress` | 侧车首次加载 / 权重载入内存 |
-| `model-stream` | 推理流式输出 chunk |
+## InferenceBackend
 
-下载进度 percent 应在前端用 `shared/downloadProgress` 按字节单调计算，避免回跳。`onboardingProgress.ts` 负责引导多 phase 加权总体进度（消费 `downloadBytes`，不重复单文件 percent 逻辑）。
+内部仍保留 `llama | mlx` 两种后端。用户主流程称为「默认」与「实验加速」，不暴露 Metal、运行时、端口或侧车状态。
 
-## 模块边界（Rust）
+- `llama`: bundled llama.cpp + MiniCPM-V 4.6 GGUF + mmproj，端口 18765
+- `mlx`: optional MLX VLM，端口 18766
 
+流式事件携带 `recordId + requestId`，两个 Webview 只消费匹配请求的 token。
+
+## Model Lifecycle
+
+- 应用启动不加载 VLM。
+- 图片先渲染，OCR IPC 先发出，随后才可选后台 warmup。
+- `backgroundWarmup` 控制截图后准备；显式提问始终可以冷启动。
+- active warmup/inference 通过 `SidecarActivity` 计数，绝不会被 idle unloader 中断。
+- 最后一个 activity 结束时重置 idle 计时；空闲 10 分钟后释放进程。
+
+Rust: `sidecar/process.rs`, `sidecar/lifecycle.rs`, `model_sidecar/mod.rs`
+
+Frontend: `chat/useImageSession.ts`, `captures/processCapture.ts`
+
+## Settings
+
+用户可见核心设置：
+
+- `shortcut`
+- `theme`
+- `captureRetention`: `none | 24h | 7d | forever`
+- `backgroundWarmup`
+- model selection/download and optional acceleration
+
+旧字段 `modelWarmMinutes`, `saveHistoryByDefault`, `preloadModel` 暂留在序列化结构中用于升级兼容，但不再驱动用户界面或模型生命周期。
+
+## 模块边界
+
+```text
+src/captures/             前端记录 IPC 与 library state
+src/workbench/            主截图工作台
+src/chat/                 快捷结果面板会话
+src-tauri/src/capture_store.rs
+                          图片/缩略图/metadata 持久化与清理
+src-tauri/src/screenshot.rs
+                          macOS 交互框选
+src-tauri/src/inference/  请求构造、健康检查、流式输出
+src-tauri/src/sidecar/    问图进程与 10 分钟生命周期
+src-tauri/src/settings.rs 设置序列化与迁移默认值
 ```
-platform_caps/     — 硬件探测
-environment/       — EnvironmentStatus、models_ready_for_backend
-model_download/    — GGUF / MLX 下载 + progress 发射
-inference/
-  context.rs       — ActiveInferenceContext（settings + ModelCache 解析）
-  session.rs       — ask_image 编排（ensure sidecar → stream → fallback）
-  backends/        — SidecarBackend trait
-  health.rs        — 侧车就绪轮询
-  messages.rs      — 对话消息构建
-  stream.rs        — SSE 流式输出
-sidecar/
-  process.rs       — ModelSidecar 进程生命周期
-  lifecycle.rs     — 空闲卸载、预热、设置变更时 stop
-model_sidecar/     — Tauri 命令 facade（薄层，委托 inference/session）
-setup/             — 引导编排（安装运行时 + 下载权重）
-```
 
-## 前端 seam
+## 不在 v0.1 范围
 
-- `model/modelClient.ts` — 推理与状态查询的唯一 IPC 入口：
-  - 推理：`askImage` / `cancelGeneration` / `unloadWhenIdle` + `model-stream` 事件
-  - 环境判定：`getEnvironmentStatus` / `isAppEnvironmentReady`（`EnvironmentStatus`，单一就绪来源）
-  - 运维详情：`getModelStatus`（侧车、路径、后端细项）
-  - 加载进度：`onSidecarLoadProgress`（`sidecar-load-progress` 事件）
-- `model/types.ts` — 与 Rust 响应对齐的类型；`environmentReadinessPercent` 计算首页就绪度环
-- `shared/modelConstants.ts` — 预期下载字节数
-- `shared/downloadProgress.ts` — GGUF / MLX 单文件 percent 单调计算
-- `app-shell/onboardingProgress.ts` — 引导多 phase 加权总体进度
-- `image/captureScreen.ts` — 调用 Rust `capture_screen_region`，通过 macOS 本地交互截图把图片送入当前会话
-- `image/imageIntake.ts` — 剪贴板、拖放、文件选择的图片读取与类型过滤
+- 云端推理或账号同步
+- 完整标注编辑器
+- 多截图比较
+- 跨截图 AI 记忆
+- 自动 AI 标签或标题
