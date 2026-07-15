@@ -23,9 +23,9 @@ type NavItem = {
 };
 
 const NAV_ITEMS: NavItem[] = [
-  { key: "home", label: "首页", icon: "home" },
-  { key: "setup", label: "环境配置", icon: "template" },
-  { key: "model", label: "模型文件", icon: "model" },
+  { key: "home", label: "工作台", icon: "home" },
+  { key: "setup", label: "初始设置", icon: "template" },
+  { key: "model", label: "模型", icon: "model" },
   { key: "settings", label: "偏好设置", icon: "settings" },
   { key: "privacy", label: "隐私", icon: "privacy" },
 ];

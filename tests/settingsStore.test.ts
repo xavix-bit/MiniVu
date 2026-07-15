@@ -6,14 +6,16 @@ describe("settingsStore", () => {
     const settings = createDefaultSettings();
 
     expect(settings.shortcut).toBe("Control+Option+Space");
-    expect(settings.modelWarmMinutes).toBe(-1);
+    expect(settings.modelWarmMinutes).toBe(10);
     expect(settings.theme).toBe("system");
     expect(settings.preloadModel).toBe(false);
     expect(settings.inferenceBackend).toBe("llama");
     expect(settings.ggufModelVariant).toBe("q4_k_m");
     expect(settings.mlxModelId).toBe("mlx-community/MiniCPM-V-4.6-4bit");
     expect(settings.autoCheckModelUpdates).toBe(false);
-    expect(settings.saveHistoryByDefault).toBe(false);
+    expect(settings.saveHistoryByDefault).toBe(true);
+    expect(settings.captureRetention).toBe("24h");
+    expect(settings.backgroundWarmup).toBe(false);
     expect(settings.allowCloudFallback).toBe(false);
     expect(settings.onboardingComplete).toBe(false);
     expect(settings.downloadMirror).toBe("auto");

@@ -11,6 +11,8 @@ use std::sync::atomic::Ordering;
 use tauri::AppHandle;
 
 pub struct AskImageRequest {
+    pub record_id: String,
+    pub request_id: String,
     pub image_data_url: String,
     pub ocr_text: String,
     pub prompt: String,
@@ -37,6 +39,8 @@ async fn ensure_sidecar_ready(
     sidecar: &SidecarState,
     backend: InferenceBackend,
     cancel_flag: &GenerationFlag,
+    record_id: &str,
+    request_id: &str,
 ) -> Result<(u16, bool), String> {
     {
         let mut guard = lock_sidecar(sidecar);
@@ -61,7 +65,7 @@ async fn ensure_sidecar_ready(
         wait_for_sidecar_ready(app, port, backend, cancel_flag, &sidecar_state).await
     {
         if cancel_flag.load(Ordering::SeqCst) {
-            emit_chunk(app, "", true)?;
+            emit_chunk(app, record_id, request_id, "", true)?;
             return Ok((port, false));
         }
         return Err(error);
@@ -82,11 +86,19 @@ pub async fn run_ask_image(
         return Err(model_not_ready_message(ctx.backend, app));
     }
 
-    let (port, sidecar_warm_for_infer) =
-        match ensure_sidecar_ready(app, sidecar, ctx.backend, cancel_flag).await {
-            Ok((port, warm)) => (port, warm),
-            Err(error) => return Err(error),
-        };
+    let (port, sidecar_warm_for_infer) = match ensure_sidecar_ready(
+        app,
+        sidecar,
+        ctx.backend,
+        cancel_flag,
+        &request.record_id,
+        &request.request_id,
+    )
+    .await
+    {
+        Ok((port, warm)) => (port, warm),
+        Err(error) => return Err(error),
+    };
 
     // 取消发生在加载等待阶段时 ensure_sidecar_ready 已 emit done chunk。
     if cancel_flag.load(Ordering::SeqCst) && !sidecar_warm_for_infer {
@@ -109,12 +121,14 @@ pub async fn run_ask_image(
         &messages,
         cancel_flag,
         sidecar_warm_for_infer,
+        &request.record_id,
+        &request.request_id,
     )
     .await;
 
     if let Err(error) = infer_result {
         if cancel_flag.load(Ordering::SeqCst) {
-            emit_chunk(app, "", true)?;
+            emit_chunk(app, &request.record_id, &request.request_id, "", true)?;
             return Ok(());
         }
 
@@ -133,6 +147,8 @@ pub async fn run_ask_image(
                 &fallback_messages,
                 cancel_flag,
                 sidecar_warm_for_infer,
+                &request.record_id,
+                &request.request_id,
             )
             .await
             .is_ok()

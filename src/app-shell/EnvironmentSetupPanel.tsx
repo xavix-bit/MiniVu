@@ -32,9 +32,9 @@ type EnvironmentSetupPanelProps = {
 
 const PHASE_LABELS: Record<string, string> = {
   device: "设备检测",
-  runtime: "内置 Metal",
-  model: "主模型",
-  mmproj: "视觉投影",
+  runtime: "基础组件",
+  model: "问图模型",
+  mmproj: "配套文件",
   shortcut: "快捷键",
   done: "完成",
 };
@@ -162,7 +162,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
           return mergeProgress(current, {
             phase: "model",
             status: "running",
-            message: `正在下载 MLX 模型 ${resolvedPercent}%${sourceHint}`,
+            message: `正在下载实验模型 ${resolvedPercent}%${sourceHint}`,
             percent: resolvedPercent,
             speedMbps: speed,
           });
@@ -260,7 +260,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
         mergeProgress(current, {
           phase: "done",
           status: "done",
-          message: "环境配置完成",
+          message: "准备完成",
           percent: 100,
         }),
       );
@@ -348,7 +348,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
 
   const statusItems = [
     {
-      label: status?.inferenceBackend === "mlx" ? "MLX 实验包" : "内置 Metal",
+      label: status?.inferenceBackend === "mlx" ? "加速组件" : "基础组件",
       value:
         status?.inferenceBackend === "mlx"
           ? status?.mlxRuntimeAvailable
@@ -365,19 +365,19 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
     ...(status?.inferenceBackend === "mlx"
       ? [
           {
-            label: "MLX 模型",
+            label: "实验模型",
             value: status?.mlxModelReady ? "已下载" : "未下载",
             ok: status?.mlxModelReady,
           },
         ]
       : [
           {
-            label: "主模型",
+            label: "问图模型",
             value: status?.modelDownloaded ? "已下载" : "未下载",
             ok: status?.modelDownloaded,
           },
           {
-            label: "视觉投影",
+            label: "配套文件",
             value: status?.mmprojDownloaded ? "已下载" : "未下载",
             ok: status?.mmprojDownloaded,
           },
@@ -407,10 +407,10 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
           <p className="setup-panel__success-lead">配置完成</p>
           <ul className="onboarding-checklist">
             <li className={result?.runtimeReady ? "is-done" : ""}>
-              内置 Metal {result?.runtimeReady ? "已安装" : "未完成"}
+              基础组件 {result?.runtimeReady ? "已安装" : "未完成"}
             </li>
             <li className={result?.modelReady ? "is-done" : ""}>
-              视觉模型 {result?.modelReady ? "已下载" : "未完成"}
+              问图模型 {result?.modelReady ? "已下载" : "未完成"}
             </li>
             <li className="is-done">快捷键：{result?.shortcut ?? "Control+Option+Space"}</li>
           </ul>
@@ -437,10 +437,10 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
         {phase === "success" && showWelcome ? (
           <>
             <button type="button" className="settings-btn settings-btn--primary" onClick={() => void finishAndContinue(true)}>
-              打开面板
+              开始使用
             </button>
             <button type="button" className="settings-btn settings-btn--secondary" onClick={() => void finishAndContinue(false)}>
-              进入首页
+              打开工作台
             </button>
           </>
         ) : null}

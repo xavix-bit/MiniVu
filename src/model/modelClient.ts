@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import type { EnvironmentStatus, ModelStatusResponse } from "./types";
 
 export type AskImageRequest = {
+  recordId?: string;
+  requestId?: string;
   imageDataUrl: string;
   ocrText: string;
   prompt: string;
@@ -10,6 +12,8 @@ export type AskImageRequest = {
 };
 
 export type StreamChunk = {
+  recordId: string;
+  requestId: string;
   text: string;
   done: boolean;
 };
@@ -34,11 +38,17 @@ export function createModelClient(): ModelClient {
   return {
     async askImage(request, onChunk) {
       let unlisten: UnlistenFn | undefined;
+      const recordId = request.recordId ?? "transient";
+      const requestId = request.requestId ?? crypto.randomUUID();
       try {
         unlisten = await listen<StreamChunk>("model-stream", (event) => {
-          onChunk(event.payload);
+          if (event.payload.recordId === recordId && event.payload.requestId === requestId) {
+            onChunk(event.payload);
+          }
         });
         await invoke("ask_image", {
+          recordId,
+          requestId,
           imageDataUrl: request.imageDataUrl,
           ocrText: request.ocrText,
           prompt: request.prompt,

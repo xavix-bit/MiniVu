@@ -8,14 +8,24 @@ use tauri::{AppHandle, Emitter};
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct StreamChunk {
+    pub record_id: String,
+    pub request_id: String,
     pub text: String,
     pub done: bool,
 }
 
-pub fn emit_chunk(app: &AppHandle, text: &str, done: bool) -> Result<(), String> {
+pub fn emit_chunk(
+    app: &AppHandle,
+    record_id: &str,
+    request_id: &str,
+    text: &str,
+    done: bool,
+) -> Result<(), String> {
     app.emit(
         "model-stream",
         StreamChunk {
+            record_id: record_id.to_string(),
+            request_id: request_id.to_string(),
             text: text.to_string(),
             done,
         },
@@ -41,6 +51,8 @@ pub async fn stream_from_sidecar(
     messages: &[serde_json::Value],
     cancel: &AtomicBool,
     sidecar_warm: bool,
+    record_id: &str,
+    request_id: &str,
 ) -> Result<(), String> {
     let body = serde_json::json!({
         "model": model,
@@ -95,7 +107,7 @@ pub async fn stream_from_sidecar(
 
     while let Some(chunk) = stream.next().await {
         if cancel.load(Ordering::SeqCst) {
-            emit_chunk(app, "", true)?;
+            emit_chunk(app, record_id, request_id, "", true)?;
             return Ok(());
         }
         let chunk = chunk.map_err(|e| e.to_string())?;
@@ -112,7 +124,7 @@ pub async fn stream_from_sidecar(
                 if !emitted_any {
                     return Err("没有生成结果，请重试。".to_string());
                 }
-                emit_chunk(app, "", true)?;
+                emit_chunk(app, record_id, request_id, "", true)?;
                 return Ok(());
             }
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(payload) {
@@ -120,7 +132,7 @@ pub async fn stream_from_sidecar(
                     if !content.is_empty() {
                         emitted_any = true;
                     }
-                    emit_chunk(app, content, false)?;
+                    emit_chunk(app, record_id, request_id, content, false)?;
                 }
             }
         }
@@ -130,6 +142,6 @@ pub async fn stream_from_sidecar(
         return Err("没有生成结果，请重试。".to_string());
     }
 
-    emit_chunk(app, "", true)?;
+    emit_chunk(app, record_id, request_id, "", true)?;
     Ok(())
 }

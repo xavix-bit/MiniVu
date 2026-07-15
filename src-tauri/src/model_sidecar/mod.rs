@@ -7,7 +7,9 @@ use crate::inference_backend::{backend_label, mlx_runtime_ready, resolve_active_
 use crate::model_cache::ModelCache;
 use crate::runtime_installer::resolve_llama_server;
 use crate::settings::{load_settings, GgufModelVariant, InferenceBackend};
-use crate::sidecar::{init_sidecar_state as sidecar_init, lock_sidecar, SidecarState};
+use crate::sidecar::{
+    begin_sidecar_activity, init_sidecar_state as sidecar_init, lock_sidecar, SidecarState,
+};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::AppHandle;
@@ -96,11 +98,14 @@ pub async fn ask_image(
     app: AppHandle,
     sidecar: tauri::State<'_, SidecarState>,
     cancel: tauri::State<'_, GenerationFlag>,
+    record_id: String,
+    request_id: String,
     image_data_url: String,
     ocr_text: String,
     prompt: String,
     history: Vec<HistoryMessage>,
 ) -> Result<(), String> {
+    let _activity = begin_sidecar_activity(sidecar.inner());
     let cancel_flag = cancel.inner().clone();
     cancel_flag.store(false, Ordering::SeqCst);
     run_ask_image(
@@ -108,6 +113,8 @@ pub async fn ask_image(
         sidecar.inner(),
         &cancel_flag,
         AskImageRequest {
+            record_id,
+            request_id,
             image_data_url,
             ocr_text,
             prompt,
@@ -122,6 +129,11 @@ pub async fn warmup_model(
     app: AppHandle,
     sidecar: tauri::State<'_, SidecarState>,
 ) -> Result<(), String> {
+    let settings = load_settings(&app)?;
+    if !settings.background_warmup {
+        return Ok(());
+    }
+    let _activity = begin_sidecar_activity(sidecar.inner());
     let ctx = ActiveInferenceContext::load(&app)?;
     if !ctx.models_ready {
         return Ok(());
@@ -149,12 +161,11 @@ pub async fn warmup_model(
 
 #[tauri::command]
 pub fn unload_model_if_idle(
-    app: AppHandle,
+    _app: AppHandle,
     sidecar: tauri::State<SidecarState>,
 ) -> Result<(), String> {
-    let settings = load_settings(&app)?;
     let mut guard = lock_sidecar(sidecar.inner());
-    if guard.should_unload(settings.model_warm_minutes) {
+    if guard.should_unload() {
         guard.stop();
     }
     Ok(())

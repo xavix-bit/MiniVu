@@ -28,7 +28,7 @@ type SettingsPanelProps = {
 };
 
 function backendLabel(backend: InferenceBackend) {
-  return backend === "mlx" ? "MLX 实验加速" : "内置 Metal 本地推理";
+  return backend === "mlx" ? "实验加速" : "默认模式";
 }
 
 const MIRROR_LABELS: Record<AppSettings["downloadMirror"], string> = {
@@ -138,7 +138,7 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
     setMlxInstallError("");
     try {
       await invoke("install_mlx_runtime_command");
-      setSavedMessage("MLX 推理引擎已安装");
+      setSavedMessage("加速组件已安装");
     } catch (error) {
       setMlxInstallError(String(error));
     } finally {
@@ -153,7 +153,7 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
     try {
       await saveSettings(settings);
       await invoke("download_mlx_model", { force: false });
-      setSavedMessage("MLX 模型权重已下载");
+      setSavedMessage("实验模型已下载");
       onSaved?.();
     } catch (error) {
       setMlxDownloadError(String(error));
@@ -164,10 +164,6 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
 
   return (
     <form className="settings-form settings-form--stack" aria-label="设置" onSubmit={(event) => void handleSave(event)}>
-      {deviceInfo ? (
-        <p className="callout callout--info settings-device-info">{deviceInfo.message}（{deviceInfo.platform} · {deviceInfo.memoryGb.toFixed(1)} GB）</p>
-      ) : null}
-
       <section className="settings-section">
         <h2 className="settings-section__title">外观与快捷</h2>
         <label className="settings-field">
@@ -197,9 +193,9 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
 
       {deviceInfo?.isAppleSilicon ? (
         <section className="settings-section">
-          <h2 className="settings-section__title">本地推理</h2>
+          <h2 className="settings-section__title">问图方式</h2>
           <label className="settings-field">
-            <span>推理模式</span>
+            <span>处理方式</span>
             <select
               value={settings.inferenceBackend ?? "llama"}
               onChange={(event) => {
@@ -207,8 +203,8 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
                 setSettings((current) => ({ ...current, inferenceBackend }));
               }}
             >
-              <option value="llama">内置 Metal</option>
-              <option value="mlx">MLX 实验加速</option>
+              <option value="llama">默认</option>
+              <option value="mlx">实验加速</option>
             </select>
             <span className="field-hint">
               {isMlx
@@ -221,7 +217,7 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
           {isMlx ? (
             <>
               <label className="settings-field">
-                <span>MLX 模型 ID</span>
+                <span>实验模型来源</span>
                 <input
                   value={settings.mlxModelId ?? "mlx-community/MiniCPM-V-4.6-4bit"}
                   onChange={(event) =>
@@ -232,7 +228,7 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
               </label>
 
               <div className="settings-field">
-                <span>MLX 实验环境</span>
+                <span>实验加速</span>
                 <div className="settings-actions-row">
                   <button
                     type="button"
@@ -240,7 +236,7 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
                     disabled={installingMlx}
                     onClick={() => void installMlxRuntime()}
                   >
-                    {installingMlx ? "安装中…" : "1. 安装实验加速包"}
+                    {installingMlx ? "安装中…" : "1. 安装加速组件"}
                   </button>
                   <button
                     type="button"
@@ -262,45 +258,39 @@ export function SettingsPanel({ onSaved }: SettingsPanelProps) {
       ) : null}
 
       <section className="settings-section">
-        <h2 className="settings-section__title">性能</h2>
+        <h2 className="settings-section__title">截图</h2>
         <label className="settings-field">
-          <span>模型保活时间（分钟）</span>
+          <span>自动保留</span>
           <select
-            value={settings.modelWarmMinutes}
+            value={settings.captureRetention ?? "24h"}
             onChange={(event) =>
               setSettings((current) => ({
                 ...current,
-                modelWarmMinutes: Number(event.target.value) as AppSettings["modelWarmMinutes"],
+                captureRetention: event.target.value as AppSettings["captureRetention"],
               }))
             }
           >
-            <option value={5}>5</option>
-            <option value={15}>15</option>
-            <option value={30}>30</option>
-            <option value={-1}>永不卸载</option>
+            <option value="none">不保留</option>
+            <option value="24h">24 小时</option>
+            <option value="7d">7 天</option>
+            <option value="forever">一直保留</option>
           </select>
-          <span className="field-hint">时间越长，下次响应越快。</span>
+          <span className="field-hint">固定的截图不会自动删除。</span>
         </label>
 
         <label className="settings-field settings-field--checkbox">
           <input
             type="checkbox"
-            checked={settings.preloadModel ?? false}
+            checked={settings.backgroundWarmup ?? false}
             onChange={(event) =>
               setSettings((current) => ({
                 ...current,
-                preloadModel: event.target.checked,
+                backgroundWarmup: event.target.checked,
               }))
             }
           />
-          <span>启动时预加载模型</span>
-          <span className="field-hint">
-            {deviceInfo && deviceInfo.memoryGb < 16
-              ? "内存不足 16 GB，建议关闭。"
-              : isMlx
-                ? "首次提问更快，约占 2–3 GB 内存。"
-                : "首次提问更快，约占 2 GB 内存。"}
-          </span>
+          <span>截图后提前准备问图</span>
+          <span className="field-hint">打开后，第一次提问会更快。</span>
         </label>
       </section>
 

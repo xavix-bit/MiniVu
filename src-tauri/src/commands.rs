@@ -19,9 +19,27 @@ pub fn load_app_settings(app: tauri::AppHandle) -> Result<AppSettings, String> {
 
 #[tauri::command]
 pub fn save_app_settings(app: tauri::AppHandle, settings: AppSettings) -> Result<(), String> {
-    save_settings(&app, &settings)?;
-    crate::shortcut::register_shortcut(&app, &settings.shortcut)?;
-    on_settings_saved(&app);
+    let previous = load_settings(&app)?;
+    if previous.shortcut != settings.shortcut {
+        if let Err(error) = crate::shortcut::register_shortcut(&app, &settings.shortcut) {
+            let _ = crate::shortcut::register_shortcut(&app, &previous.shortcut);
+            return Err(error);
+        }
+    }
+    if let Err(error) = save_settings(&app, &settings) {
+        if previous.shortcut != settings.shortcut {
+            let _ = crate::shortcut::register_shortcut(&app, &previous.shortcut);
+        }
+        return Err(error);
+    }
+
+    let inference_changed = previous.inference_backend != settings.inference_backend
+        || previous.gguf_model_variant != settings.gguf_model_variant
+        || previous.mlx_model_id != settings.mlx_model_id
+        || (previous.background_warmup && !settings.background_warmup);
+    if inference_changed {
+        on_settings_saved(&app);
+    }
     Ok(())
 }
 

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { HomeOverview } from "./HomeOverview";
 import { EnvironmentSetupPanel } from "./EnvironmentSetupPanel";
 import { SettingsSidebar, type SettingsSection } from "./SettingsSidebar";
 import { PrivacyNotice } from "../privacy/PrivacyNotice";
@@ -13,15 +12,16 @@ import { loadSettings } from "../settings/settingsStore";
 import { WorkbenchShell } from "../workbench/WorkbenchShell";
 import { captureScreenRegion } from "../image/captureScreen";
 import { captureClient } from "../captures/captureClient";
+import { processCaptureInBackground } from "../captures/processCapture";
 
 const PAGE_META: Record<SettingsSection, { title: string; subtitle: string }> = {
   home: { title: "", subtitle: "" },
   setup: {
-    title: "环境配置",
+    title: "初始设置",
     subtitle: "",
   },
   model: {
-    title: "模型文件",
+    title: "模型",
     subtitle: "",
   },
   settings: {
@@ -140,11 +140,13 @@ export function MainWindowShell() {
 
   async function handleWorkbenchCapture() {
     const image = await captureScreenRegion();
-    await captureClient.create({
+    const settings = await loadSettings();
+    const record = await captureClient.create({
       dataUrl: image.dataUrl,
       source: "capture",
-      retention: "24h",
+      retention: settings.captureRetention ?? "24h",
     });
+    processCaptureInBackground(record.id, image.dataUrl);
   }
 
   if (onboardingDone && activeSection === "home") {
@@ -187,15 +189,6 @@ export function MainWindowShell() {
               </button>
             </div>
           ) : null}
-
-          <div className={`settings-page-view${activeSection === "home" ? " is-active" : ""}`}>
-            <HomeOverview
-              environmentStatus={environmentStatus}
-              onOpenSetup={() => handleNavigate("setup")}
-              onOpenModel={() => handleNavigate("model")}
-              onOpenSettings={() => handleNavigate("settings")}
-            />
-          </div>
 
           <div className={`settings-page-view${activeSection === "setup" ? " is-active" : ""}`}>
             <SubpageLead section="setup" />

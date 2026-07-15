@@ -320,10 +320,6 @@ pub fn restore_quick_panel_mode(app: &AppHandle, mode: QuickPanelMode) -> Result
     }
 }
 
-pub fn restore_quick_panel(app: &AppHandle) -> Result<(), String> {
-    expand_quick_panel(app)
-}
-
 #[cfg(target_os = "macos")]
 fn cursor_position() -> Result<(i32, i32), String> {
     use core_graphics::event::CGEvent;

@@ -1,7 +1,7 @@
 pub mod lifecycle;
 pub mod process;
 
-pub use lifecycle::{on_settings_saved, spawn_idle_unloader, spawn_model_warmup};
+pub use lifecycle::{on_settings_saved, spawn_idle_unloader};
 pub use process::{default_sidecar_port, ModelSidecar};
 
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -20,5 +20,22 @@ pub fn lock_sidecar(sidecar: &SidecarState) -> MutexGuard<'_, ModelSidecar> {
             eprintln!("sidecar state lock was poisoned, recovering");
             poisoned.into_inner()
         }
+    }
+}
+
+pub struct SidecarActivity {
+    sidecar: SidecarState,
+}
+
+impl Drop for SidecarActivity {
+    fn drop(&mut self) {
+        lock_sidecar(&self.sidecar).finish_activity();
+    }
+}
+
+pub fn begin_sidecar_activity(sidecar: &SidecarState) -> SidecarActivity {
+    lock_sidecar(sidecar).begin_activity();
+    SidecarActivity {
+        sidecar: sidecar.clone(),
     }
 }

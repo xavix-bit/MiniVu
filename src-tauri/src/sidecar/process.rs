@@ -12,6 +12,7 @@ pub struct ModelSidecar {
     pub port: u16,
     child: Option<Child>,
     last_used: Mutex<Option<Instant>>,
+    active_jobs: Mutex<usize>,
     service_ready: Mutex<bool>,
     active_backend: Mutex<Option<InferenceBackend>>,
 }
@@ -22,6 +23,7 @@ impl ModelSidecar {
             port,
             child: None,
             last_used: Mutex::new(None),
+            active_jobs: Mutex::new(0),
             service_ready: Mutex::new(false),
             active_backend: Mutex::new(None),
         }
@@ -68,15 +70,37 @@ impl ModelSidecar {
         }
     }
 
-    pub fn should_unload(&self, warm_minutes: i32) -> bool {
-        if warm_minutes < 0 {
+    pub fn begin_activity(&self) {
+        if let Ok(mut guard) = self.active_jobs.lock() {
+            *guard += 1;
+        }
+        self.touch();
+    }
+
+    pub fn finish_activity(&self) {
+        if let Ok(mut guard) = self.active_jobs.lock() {
+            *guard = guard.saturating_sub(1);
+        }
+        self.touch();
+    }
+
+    pub fn should_unload(&self) -> bool {
+        self.should_unload_after(Duration::from_secs(10 * 60))
+    }
+
+    fn should_unload_after(&self, idle_timeout: Duration) -> bool {
+        if self
+            .active_jobs
+            .lock()
+            .map(|guard| *guard > 0)
+            .unwrap_or(true)
+        {
             return false;
         }
-        let warm = Duration::from_secs((warm_minutes as u64) * 60);
         self.last_used
             .lock()
             .ok()
-            .and_then(|guard| guard.map(|instant| instant.elapsed() > warm))
+            .and_then(|guard| guard.map(|instant| instant.elapsed() >= idle_timeout))
             .unwrap_or(false)
     }
 
@@ -123,6 +147,30 @@ impl ModelSidecar {
         self.set_active_backend(Some(backend));
         self.set_service_ready(false);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unloads_only_after_ten_idle_minutes() {
+        let sidecar = ModelSidecar::new(9000);
+        *sidecar.last_used.lock().unwrap() = Some(Instant::now() - Duration::from_secs(599));
+        assert!(!sidecar.should_unload());
+        *sidecar.last_used.lock().unwrap() = Some(Instant::now() - Duration::from_secs(600));
+        assert!(sidecar.should_unload());
+    }
+
+    #[test]
+    fn active_work_never_unloads_and_resets_the_idle_clock() {
+        let sidecar = ModelSidecar::new(9000);
+        *sidecar.last_used.lock().unwrap() = Some(Instant::now() - Duration::from_secs(900));
+        sidecar.begin_activity();
+        assert!(!sidecar.should_unload());
+        sidecar.finish_activity();
+        assert!(!sidecar.should_unload());
     }
 }
 

@@ -51,6 +51,7 @@ export function useImageSession() {
   const [loadProgress, setLoadProgress] = useState("");
   const [elapsed, setElapsed] = useState(0);
   const warmupStartedRef = useRef(false);
+  const imageRequestRef = useRef(0);
 
   const clearError = useCallback(() => setError(""), []);
 
@@ -72,6 +73,7 @@ export function useImageSession() {
   }, []);
 
   const resetSession = useCallback(() => {
+    imageRequestRef.current += 1;
     setState(createImageSessionState());
     setStreamingText("");
     setIsAnswering(false);
@@ -85,6 +87,7 @@ export function useImageSession() {
   }, []);
 
   const applyImage = useCallback(async (image: ImageAttachment, replaceConversation: boolean) => {
+    const request = ++imageRequestRef.current;
     if (replaceConversation) {
       setState({ ...createImageSessionState(), image, ocrText: "" });
       setStreamingText("");
@@ -95,16 +98,23 @@ export function useImageSession() {
 
     setError("");
     setOcrLoading(true);
-    kickModelWarmup();
     try {
-      const ocr = await invoke<{ text: string }>("recognize_text_from_image_data_url", {
+      const ocrRequest = invoke<{ text: string }>("recognize_text_from_image_data_url", {
         dataUrl: image.dataUrl,
       });
-      setState((current) => ({ ...current, ocrText: ocr.text }));
+      queueMicrotask(kickModelWarmup);
+      const ocr = await ocrRequest;
+      if (imageRequestRef.current === request) {
+        setState((current) => ({ ...current, ocrText: ocr.text }));
+      }
     } catch (err) {
-      setError(`文字识别失败：${String(err)}`);
+      if (imageRequestRef.current === request) {
+        setError(`文字识别失败：${String(err)}`);
+      }
     } finally {
-      setOcrLoading(false);
+      if (imageRequestRef.current === request) {
+        setOcrLoading(false);
+      }
     }
     return true;
   }, [kickModelWarmup]);

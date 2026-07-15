@@ -5,6 +5,7 @@ export const GGUF_MODEL_VARIANTS: Record<
   GgufModelVariant,
   {
     label: string;
+    modelName: string;
     badge: string;
     description: string;
     modelBytes: number;
@@ -13,6 +14,7 @@ export const GGUF_MODEL_VARIANTS: Record<
 > = {
   q4_k_m: {
     label: "均衡",
+    modelName: "OpenBMB MiniCPM-V 4.6 · Q4_K_M",
     badge: "推荐",
     description: "下载最快，适合日常截图、翻译和问图。",
     modelBytes: 529_101_504,
@@ -20,6 +22,7 @@ export const GGUF_MODEL_VARIANTS: Record<
   },
   q5_k_m: {
     label: "清晰",
+    modelName: "OpenBMB MiniCPM-V 4.6 · Q5_K_M",
     badge: "更稳",
     description: "文字和细节更稳，体积只多一点。",
     modelBytes: 577_802_944,
@@ -27,6 +30,7 @@ export const GGUF_MODEL_VARIANTS: Record<
   },
   q6_k: {
     label: "高质量",
+    modelName: "OpenBMB MiniCPM-V 4.6 · Q6_K",
     badge: "更准",
     description: "适合复杂界面和更细的图像理解。",
     modelBytes: 629_548_224,

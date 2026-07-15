@@ -2232,7 +2232,7 @@
 .model-variant-option {
   display: grid;
   gap: 8px;
-  min-height: 128px;
+  min-height: 154px;
   padding: 14px;
   border: 1px solid #dfe7f2;
   border-radius: 8px;
@@ -2288,6 +2288,16 @@
   color: #4f5f73;
   font-size: 13px;
   line-height: 1.45;
+}
+
+.model-variant-option__name {
+  overflow: hidden;
+  color: #69778a;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .model-variant-option__meta {

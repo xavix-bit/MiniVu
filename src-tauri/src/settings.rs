@@ -28,6 +28,19 @@ pub enum AppTheme {
     Dark,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CaptureRetentionSetting {
+    #[serde(rename = "none")]
+    None,
+    #[default]
+    #[serde(rename = "24h")]
+    Hours24,
+    #[serde(rename = "7d")]
+    Days7,
+    #[serde(rename = "forever")]
+    Forever,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum InferenceBackend {
@@ -83,6 +96,10 @@ pub struct AppSettings {
     #[serde(default = "default_preload_model")]
     pub preload_model: bool,
     #[serde(default)]
+    pub capture_retention: CaptureRetentionSetting,
+    #[serde(default)]
+    pub background_warmup: bool,
+    #[serde(default)]
     pub inference_backend: InferenceBackend,
     #[serde(default = "default_mlx_model_id")]
     pub mlx_model_id: String,
@@ -95,9 +112,7 @@ fn default_preload_model() -> bool {
 impl AppSettings {
     pub fn default_for_device() -> Self {
         let mut settings = Self::default();
-        if crate::platform_caps::system_memory_gb() < 16.0 {
-            settings.model_warm_minutes = 15;
-        }
+        settings.background_warmup = crate::platform_caps::system_memory_gb() >= 16.0;
         settings
     }
 }
@@ -106,9 +121,9 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             shortcut: "Control+Option+Space".to_string(),
-            model_warm_minutes: -1,
+            model_warm_minutes: 10,
             auto_check_model_updates: false,
-            save_history_by_default: false,
+            save_history_by_default: true,
             allow_cloud_fallback: false,
             onboarding_complete: false,
             gguf_model_variant: GgufModelVariant::default(),
@@ -117,6 +132,8 @@ impl Default for AppSettings {
             last_speed_test_at: None,
             theme: AppTheme::System,
             preload_model: default_preload_model(),
+            capture_retention: CaptureRetentionSetting::default(),
+            background_warmup: false,
             inference_backend: InferenceBackend::default(),
             mlx_model_id: default_mlx_model_id(),
         }

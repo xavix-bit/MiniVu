@@ -3,10 +3,11 @@ export type MirrorId = "modelscope" | "huggingface";
 export type AppTheme = "system" | "light" | "dark";
 export type InferenceBackend = "llama" | "mlx";
 export type GgufModelVariant = "q4_k_m" | "q5_k_m" | "q6_k";
+export type CaptureRetentionSetting = "none" | "24h" | "7d" | "forever";
 
 export type AppSettings = {
   shortcut: string;
-  modelWarmMinutes: 5 | 15 | 30 | -1;
+  modelWarmMinutes: 5 | 10 | 15 | 30 | -1;
   autoCheckModelUpdates: boolean;
   saveHistoryByDefault: boolean;
   allowCloudFallback: boolean;
@@ -17,6 +18,8 @@ export type AppSettings = {
   lastSpeedTestAt: string | null;
   theme: AppTheme;
   preloadModel: boolean;
+  captureRetention: CaptureRetentionSetting;
+  backgroundWarmup: boolean;
   inferenceBackend: InferenceBackend;
   mlxModelId: string;
 };
@@ -39,9 +42,9 @@ export type MirrorBenchmarkResponse = {
 export function createDefaultSettings(): AppSettings {
   return {
     shortcut: "Control+Option+Space",
-    modelWarmMinutes: -1,
+    modelWarmMinutes: 10,
     autoCheckModelUpdates: false,
-    saveHistoryByDefault: false,
+    saveHistoryByDefault: true,
     allowCloudFallback: false,
     onboardingComplete: false,
     ggufModelVariant: "q4_k_m",
@@ -50,6 +53,8 @@ export function createDefaultSettings(): AppSettings {
     lastSpeedTestAt: null,
     theme: "system",
     preloadModel: false,
+    captureRetention: "24h",
+    backgroundWarmup: false,
     inferenceBackend: "llama",
     mlxModelId: "mlx-community/MiniCPM-V-4.6-4bit",
   };

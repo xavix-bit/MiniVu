@@ -14,6 +14,7 @@ import { captureScreenRegion } from "../image/captureScreen";
 import { readClipboardImage } from "../image/imageIntake";
 import { captureClient } from "../captures/captureClient";
 import type { AcceptedImage } from "../image/imageInput";
+import { loadSettings } from "../settings/settingsStore";
 
 type PanelMode = "expanded" | "launcher" | "pet" | "hidden";
 
@@ -122,7 +123,12 @@ export function QuickPanelShell() {
   }
 
   async function showResult(image: AcceptedImage, source: "capture" | "paste") {
-    const record = await captureClient.create({ dataUrl: image.dataUrl, source, retention: "24h" });
+    const settings = await loadSettings();
+    const record = await captureClient.create({
+      dataUrl: image.dataUrl,
+      source,
+      retention: settings.captureRetention ?? "24h",
+    });
     setRecordId(record.id);
     setInitialImage(image);
     await invoke("expand_quick_panel_command");

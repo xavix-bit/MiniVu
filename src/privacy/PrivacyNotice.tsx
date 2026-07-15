@@ -13,14 +13,14 @@ export function PrivacyNotice() {
           <p>本机读取图片文字。</p>
         </article>
         <article>
-          <span aria-hidden="true">LLM</span>
-          <strong>本地视觉推理</strong>
+          <span aria-hidden="true">AI</span>
+          <strong>本地问图</strong>
           <p>本机回答图片问题。</p>
         </article>
         <article>
-          <span aria-hidden="true">MD</span>
-          <strong>导出路径可控</strong>
-          <p>主动导出时才写入文件。</p>
+          <span aria-hidden="true">24h</span>
+          <strong>记录由你控制</strong>
+          <p>截图默认保留 24 小时，固定后不会自动删除。</p>
         </article>
       </div>
     </section>

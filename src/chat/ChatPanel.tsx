@@ -304,7 +304,7 @@ export function ChatPanel({
     clearError();
     try {
       const image = await captureScreenRegion();
-      await setImage(image);
+      void setImage(image);
     } catch (err) {
       const message = String(err);
       if (!message.includes("已取消截图")) {

@@ -93,7 +93,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
           return {
             status: downloadStatus === "done" ? "done" : "running",
             percent,
-            detail: message ?? "正在下载 MLX 权重…",
+            detail: message ?? "正在下载实验模型…",
           };
         });
         return;
@@ -241,19 +241,19 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
       ? [
           {
             label: "实验加速包",
-            value: status.mlxRuntimeAvailable ? "MLX 已安装" : "未安装",
+            value: status.mlxRuntimeAvailable ? "已安装" : "未安装",
             ok: status.mlxRuntimeAvailable,
-            meta: status.activeBackend ?? "MLX",
+            meta: "实验加速",
           },
           {
-            label: "MLX 模型",
+            label: "实验模型",
             value: status.mlxModelReady ? "已下载" : "未下载",
             ok: status.mlxModelReady,
             meta: shortenPath(status.mlxModelId),
           },
           {
-            label: "推理进程",
-            value: status.sidecarRunning ? "运行中" : "未运行",
+            label: "问图准备",
+            value: status.sidecarRunning ? "使用中" : "需要时启动",
             ok: status.sidecarRunning,
             meta: status.mlxModelReady ? "权重已缓存" : "需先下载权重",
           },
@@ -266,14 +266,14 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
             meta: status.modelPath ? shortenPath(status.modelPath) : "—",
           },
           {
-            label: "视觉投影",
+            label: "配套文件",
             value: status.mmprojDownloaded ? "已下载" : "未下载",
             ok: status.mmprojDownloaded,
             meta: status.mmprojPath ? shortenPath(status.mmprojPath) : "—",
           },
           {
-            label: "推理进程",
-            value: status.sidecarRunning ? "运行中" : "未运行",
+            label: "问图准备",
+            value: status.sidecarRunning ? "使用中" : "需要时启动",
             ok: status.sidecarRunning,
             meta: status.modelSize ? `合计 ${status.modelSize}` : "—",
           },
@@ -284,10 +284,10 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
     <div className="model-panel">
       {!runtimeReady ? (
         <div className="callout callout--attention" role="status">
-          <p>{isMlx ? "MLX 未安装。" : "内置 Metal 未就绪。"}</p>
+          <p>{isMlx ? "加速组件未安装。" : "基础组件还没准备好。"}</p>
           {onOpenSetup ? (
             <button type="button" className="callout__action" onClick={onOpenSetup}>
-              去环境配置
+              去初始设置
             </button>
           ) : null}
         </div>
@@ -304,6 +304,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
                 key={variant}
                 type="button"
                 className={`model-variant-option${selected ? " is-selected" : ""}`}
+                title={`${spec.modelName}\n${spec.description}\n模型 ${formatBytes(spec.modelBytes)}，共享配套文件 ${formatBytes(1_108_746_944)}，${spec.memoryHint}`}
                 disabled={downloading || savingVariant !== null}
                 onClick={() => void selectVariant(variant)}
               >
@@ -311,9 +312,10 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
                   <strong>{spec.label}</strong>
                   <span>{spec.badge}</span>
                 </span>
+                <span className="model-variant-option__name">{spec.modelName}</span>
                 <span className="model-variant-option__desc">{spec.description}</span>
                 <span className="model-variant-option__meta">
-                  {formatBytes(spec.modelBytes)} · {spec.memoryHint}
+                  模型 {formatBytes(spec.modelBytes)} · 共享文件 1.0 GB · {spec.memoryHint}
                 </span>
               </button>
             );
@@ -342,7 +344,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
       <section className="surface model-panel__actions-card">
         <p className="setup-panel__lead">
           {isMlx
-            ? "下载 MLX 权重。"
+            ? "下载实验模型。"
             : "下载或更新本地视觉模型。"}
         </p>
         <div className="model-actions">
@@ -352,7 +354,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
             disabled={downloading || !runtimeReady}
             onClick={() => void downloadModel()}
           >
-            {downloading ? "下载中…" : isMlx ? "下载 MLX 权重" : "下载 / 更新模型"}
+            {downloading ? "下载中…" : isMlx ? "下载实验模型" : "下载 / 更新模型"}
           </button>
           <button type="button" className="settings-btn settings-btn--secondary" onClick={() => void refresh()}>
             刷新状态
@@ -360,10 +362,10 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
         </div>
         {downloadError ? <p className="onboarding-error">{downloadError}</p> : null}
         {isMlx && mlxProgress.status !== "idle" ? (
-          <div className="model-download-progress" aria-label="MLX 下载进度">
+          <div className="model-download-progress" aria-label="实验模型下载进度">
             <div className={`model-download-progress__item is-${mlxProgress.status}`}>
               <div className="model-download-progress__head">
-                <span className="model-download-progress__label">MLX 权重</span>
+                <span className="model-download-progress__label">实验模型</span>
                 <span className="model-download-progress__percent">
                   {mlxProgress.status === "done" ? "完成" : `${mlxProgress.percent}%`}
                 </span>
@@ -408,7 +410,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
           </div>
         ) : null}
         <p className="field-hint">
-          {isMlx ? "模型 ID 在「偏好设置 → 本地推理」。" : "视觉投影器会自动下载并复用。"}
+          {isMlx ? "模型来源在「偏好设置 → 问图方式」。" : "配套文件会自动准备。"}
         </p>
       </section>
     </div>

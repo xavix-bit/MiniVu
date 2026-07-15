@@ -18,6 +18,7 @@ type WorkbenchViewProps = {
 async function askModel(record: CaptureRecord, prompt: string, onChunk: (text: string) => void) {
   let answer = "";
   await modelClient.askImage({
+    recordId: record.id,
     imageDataUrl: record.imageDataUrl ?? "",
     ocrText: record.ocrText,
     prompt,
@@ -42,7 +43,9 @@ export function WorkbenchView({ library, onOpenSettings, onCapture, onAsk = askM
     return library.records.filter((record) => visibleIds.has(record.id) && (scope === "recent" || record.pinned));
   }, [library.records, library.visibleRecords, scope]);
 
-  const selected = library.selected;
+  const selected = library.selected && filtered.some((record) => record.id === library.selected?.id)
+    ? library.selected
+    : filtered[0] ?? null;
 
   async function ask(record: CaptureRecord, prompt: string) {
     if (answering[record.id] || !record.imageDataUrl) return;

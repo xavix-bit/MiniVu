@@ -477,7 +477,15 @@ pub async fn create_capture_record(
     input: CreateCaptureInput,
 ) -> Result<CaptureRecord, String> {
     let now_ms = current_time_ms()?;
-    let record = run_store_operation(&app, move |store| store.create(input, now_ms)).await?;
+    let (record, removed) = run_store_operation(&app, move |store| {
+        let removed = store.cleanup(now_ms)?;
+        let record = store.create(input, now_ms)?;
+        Ok((record, removed))
+    })
+    .await?;
+    for expired in &removed {
+        emit_record_changed(&app, CaptureRecordAction::Deleted, expired);
+    }
     emit_record_changed(&app, CaptureRecordAction::Created, &record);
     Ok(record)
 }

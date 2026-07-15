@@ -10,11 +10,11 @@ pub fn to_tauri_shortcut(shortcut: &str) -> String {
 }
 
 pub fn register_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), String> {
-    let _ = app.global_shortcut().unregister_all();
-
     let parsed = to_tauri_shortcut(shortcut)
         .parse::<Shortcut>()
         .map_err(|e| format!("快捷键格式无效: {e}"))?;
+
+    let _ = app.global_shortcut().unregister_all();
 
     app.global_shortcut()
         .on_shortcut(parsed, |app, _shortcut, event| {

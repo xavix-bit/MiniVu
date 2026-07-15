@@ -23,7 +23,7 @@ mod tray;
 mod window;
 
 use model_sidecar::{init_generation_flag, init_sidecar_state};
-use sidecar::{lock_sidecar, spawn_idle_unloader, spawn_model_warmup};
+use sidecar::{lock_sidecar, spawn_idle_unloader};
 use std::sync::Mutex;
 use tauri::Manager;
 
@@ -58,7 +58,6 @@ pub fn run() {
                     eprintln!("快捷键注册失败（可在设置中修改）: {error}");
                 }
                 spawn_idle_unloader(handle.clone());
-                spawn_model_warmup(handle);
             });
 
             Ok(())
