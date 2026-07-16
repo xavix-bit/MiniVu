@@ -501,7 +501,7 @@ Expected: Tauri debug application and DMG build successfully, including bundled 
 
 Launch the debug application and inspect welcome, successful capture, cancelled capture, permission recovery, empty workbench, selected capture, settings transitions, model-required routing, and reduced-motion behavior. Check desktop and the narrowest supported window width. Confirm fit and 1:1 visibly produce different results on a large screenshot.
 
-- [ ] **Step 6: Update README screenshots or workflow copy only when behavior changed**
+- [x] **Step 6: Update README screenshots or workflow copy only when behavior changed**
 
 Document first-run capture and on-demand model installation without adding technical setup prose to the product UI.
 

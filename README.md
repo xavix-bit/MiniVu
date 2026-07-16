@@ -6,6 +6,8 @@ MiniVu is a screenshot workbench for macOS. Capture part of the screen, copy its
 
 Open the DMG and drag MiniVu into Applications. On first launch, Control-click MiniVu, choose **Open**, then confirm once. macOS 13 or later is recommended.
 
+![MiniVu screenshot workbench](docs/images/minivu-workbench.png)
+
 ## Start With A Screenshot
 
 1. Open MiniVu and choose **开始截图**. macOS may ask for screen-recording permission once.

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type {
   MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
@@ -58,7 +58,7 @@ export function QuickPanelShell() {
   const petDragStartRef = useRef<{ x: number; y: number } | null>(null);
   const suppressPetClickRef = useRef(false);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     document.documentElement.classList.add("quick-panel-window");
     document.documentElement.dataset.panelMode = mode;
     return () => {
