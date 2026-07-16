@@ -1,5 +1,5 @@
-import { useRef, useState } from "react";
-import { Copy, LoaderCircle, Send, Square } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Copy, LoaderCircle, Send, Square, X } from "lucide-react";
 import { TranscriptPanel } from "../chat/TranscriptPanel";
 import type { CaptureRecord } from "../captures/types";
 
@@ -8,8 +8,11 @@ type CaptureInspectorProps = {
   draft: string;
   streamingText: string;
   answering: boolean;
+  checkingModel: boolean;
+  showTips: boolean;
   onDraftChange: (value: string) => void;
   onAsk: (prompt: string) => void;
+  onTipsComplete: () => void;
   onStop: () => void;
 };
 
@@ -18,14 +21,22 @@ export function CaptureInspector({
   draft,
   streamingText,
   answering,
+  checkingModel,
+  showTips,
   onDraftChange,
   onAsk,
+  onTipsComplete,
   onStop,
 }: CaptureInspectorProps) {
   const [tab, setTab] = useState<"ai" | "text">("ai");
   const [copied, setCopied] = useState(false);
+  const [tipStep, setTipStep] = useState<"text" | "composer">("text");
   const tabRefs = useRef<Record<"ai" | "text", HTMLButtonElement | null>>({ ai: null, text: null });
   const hasConversation = record.messages.length > 0 || Boolean(streamingText);
+
+  useEffect(() => {
+    if (showTips) setTipStep("text");
+  }, [record.id, showTips]);
 
   function moveToTab(next: "ai" | "text") {
     setTab(next);
@@ -46,7 +57,7 @@ export function CaptureInspector({
 
   function submit() {
     const value = draft.trim();
-    if (value && !answering) onAsk(value);
+    if (value && !answering && !checkingModel) onAsk(value);
   }
 
   return (
@@ -109,6 +120,7 @@ export function CaptureInspector({
                 <strong>从这张截图开始</strong>
                 <button
                   type="button"
+                  disabled={checkingModel}
                   onClick={() => onAsk("请简洁说明这张截图的重点，并指出值得关注的内容。")}
                 >
                   帮我看懂
@@ -116,7 +128,7 @@ export function CaptureInspector({
               </div>
             )}
           </div>
-          <div className="capture-inspector__composer">
+          <div className="capture-inspector__composer" aria-busy={checkingModel}>
             <textarea
               rows={3}
               value={draft}
@@ -138,10 +150,14 @@ export function CaptureInspector({
                 type="button"
                 className="capture-inspector__send"
                 aria-label="发送"
-                disabled={!draft.trim()}
+                disabled={!draft.trim() || checkingModel}
                 onClick={submit}
               >
-                <Send size={16} />
+                {checkingModel ? (
+                  <LoaderCircle className="is-spinning" size={16} aria-hidden="true" />
+                ) : (
+                  <Send size={16} />
+                )}
               </button>
             )}
           </div>
@@ -170,6 +186,42 @@ export function CaptureInspector({
           )}
         </div>
       </div>
+
+      {showTips ? (
+        <div
+          className={`capture-inspector__tip capture-inspector__tip--${tipStep}`}
+          role="note"
+          aria-label="新手提示"
+        >
+          <div className="capture-inspector__tip-head">
+            <strong>
+              {tipStep === "text" ? "识别出的文字在这里" : "也可以直接问这张截图"}
+            </strong>
+            <button type="button" aria-label="关闭新手提示" onClick={onTipsComplete}>
+              <X size={14} aria-hidden="true" />
+            </button>
+          </div>
+          <p>
+            {tipStep === "text"
+              ? "查看、复制截图里的文字。"
+              : "输入你的问题，原图和文字会一起作为参考。"}
+          </p>
+          <button
+            type="button"
+            className="capture-inspector__tip-action"
+            onClick={() => {
+              if (tipStep === "text") {
+                setTab("ai");
+                setTipStep("composer");
+              } else {
+                onTipsComplete();
+              }
+            }}
+          >
+            {tipStep === "text" ? "下一步" : "知道了"}
+          </button>
+        </div>
+      ) : null}
     </aside>
   );
 }

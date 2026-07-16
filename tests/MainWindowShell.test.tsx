@@ -54,6 +54,9 @@ const { shellState, settingsPanelState, getEnvironmentStatus } = vi.hoisted(() =
   settingsPanelState: { mounts: 0 },
   getEnvironmentStatus: vi.fn(async () => ({
     onboardingComplete: true,
+    inferenceBackend: "llama" as const,
+    runtimeReady: true,
+    modelReady: true,
     environmentReady: true,
   })),
 }));
@@ -130,11 +133,13 @@ vi.mock("../src/settings/ModelPanel", () => ({
   ModelPanel: ({
     onRepairRuntime,
     onBusyChange,
+    onStatusChange,
     refreshToken,
     disabled,
   }: {
     onRepairRuntime?: () => void;
     onBusyChange?: (busy: boolean) => void;
+    onStatusChange?: (status: { modelReady: boolean }) => void;
     refreshToken?: number;
     disabled?: boolean;
   }) => (
@@ -152,6 +157,9 @@ vi.mock("../src/settings/ModelPanel", () => ({
       </button>
       <button type="button" onClick={() => onBusyChange?.(false)}>
         模拟结束模型下载
+      </button>
+      <button type="button" onClick={() => onStatusChange?.({ modelReady: true })}>
+        模拟模型就绪
       </button>
     </div>
   ),
@@ -205,11 +213,20 @@ vi.mock("../src/workbench/WorkbenchShell", async () => {
     scope,
     requestedRecordId,
     onCapture,
+    modelReady,
+    onRequireModel,
+    showTips,
+    onTipsComplete,
   }: {
     scope: "recent" | "pinned";
     requestedRecordId?: string | null;
     onCapture?: () => void;
+    modelReady?: boolean;
+    onRequireModel?: (context: { recordId: string; prompt: string }) => void | Promise<boolean>;
+    showTips?: boolean;
+    onTipsComplete?: () => void;
   }) => {
+    const [draft, setDraft] = React.useState("");
     shellState.renders += 1;
     React.useEffect(() => {
       shellState.mounts += 1;
@@ -219,8 +236,24 @@ vi.mock("../src/workbench/WorkbenchShell", async () => {
         data-testid="workbench-instance"
         data-scope={scope}
         data-requested-record-id={requestedRecordId ?? ""}
+        data-model-ready={String(Boolean(modelReady))}
+        data-show-tips={String(Boolean(showTips))}
       >
         <button type="button" onClick={onCapture}>工作台截图</button>
+        <input
+          aria-label="模拟问题"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+        />
+        <button
+          type="button"
+          onClick={() => void onRequireModel?.({ recordId: "one", prompt: draft })}
+        >
+          模拟需要模型
+        </button>
+        {showTips ? (
+          <button type="button" onClick={onTipsComplete}>模拟完成提示</button>
+        ) : null}
       </div>
     );
   });
@@ -243,6 +276,13 @@ describe("MainWindowShell navigation", () => {
       onboardingComplete: true,
       shortcut: "Control+Option+Space",
     } as Awaited<ReturnType<typeof updateSettings>>);
+    getEnvironmentStatus.mockResolvedValue({
+      onboardingComplete: true,
+      inferenceBackend: "llama",
+      runtimeReady: true,
+      modelReady: true,
+      environmentReady: true,
+    });
   });
 
   it("shows no welcome or setup surface while settings are loading", async () => {
@@ -309,31 +349,33 @@ describe("MainWindowShell navigation", () => {
     expect(loadSettings).toHaveBeenCalledTimes(2);
   });
 
-  it("takes an existing user straight to the workbench without checking model readiness", async () => {
-    getEnvironmentStatus.mockResolvedValue({
-      onboardingComplete: false,
-      environmentReady: false,
-    });
+  it("takes an existing user straight to the workbench without waiting for model status", async () => {
+    const modelStatus = deferred<Awaited<ReturnType<typeof getEnvironmentStatus>>>();
+    getEnvironmentStatus.mockReturnValue(modelStatus.promise);
     vi.mocked(loadSettings).mockResolvedValue({
       onboardingComplete: true,
       shortcut: "Control+Option+Space",
     } as Awaited<ReturnType<typeof loadSettings>>);
 
-    try {
-      render(<MainWindowShell />);
+    render(<MainWindowShell />);
 
-      await waitFor(() => {
-        expect(screen.getByTestId("workbench-instance").closest(".main-surface")).not.toHaveAttribute("inert");
-      });
-      expect(screen.queryByRole("heading", { name: "从一张截图开始" })).not.toBeInTheDocument();
-      expect(screen.queryByTestId("environment-setup")).not.toBeInTheDocument();
-      expect(getEnvironmentStatus).not.toHaveBeenCalled();
-    } finally {
-      getEnvironmentStatus.mockResolvedValue({
-        onboardingComplete: true,
-        environmentReady: true,
-      });
-    }
+    await waitFor(() => {
+      expect(screen.getByTestId("workbench-instance").closest(".main-surface")).not.toHaveAttribute("inert");
+    });
+    expect(screen.queryByRole("heading", { name: "从一张截图开始" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("environment-setup")).not.toBeInTheDocument();
+    expect(getEnvironmentStatus).toHaveBeenCalledOnce();
+
+    await act(async () => modelStatus.resolve({
+      onboardingComplete: true,
+      inferenceBackend: "llama",
+      runtimeReady: true,
+      modelReady: true,
+      environmentReady: true,
+    }));
+    await waitFor(() => {
+      expect(screen.getByTestId("workbench-instance")).toHaveAttribute("data-model-ready", "true");
+    });
   });
 
   it("shows a useful notice when a workbench capture needs screen-recording permission", async () => {
@@ -376,10 +418,12 @@ describe("MainWindowShell navigation", () => {
     vi.mocked(loadSettings)
       .mockResolvedValueOnce({
         onboardingComplete: true,
+        workbenchTipsComplete: true,
         shortcut: "Control+Option+Space",
       } as Awaited<ReturnType<typeof loadSettings>>)
       .mockResolvedValueOnce({
         onboardingComplete: true,
+        workbenchTipsComplete: true,
         shortcut: "Control+Option+Space",
         captureRetention: "7d",
         backgroundWarmup: true,
@@ -404,6 +448,85 @@ describe("MainWindowShell navigation", () => {
     expect(processCaptureInBackground).toHaveBeenCalledWith(created.id, image.dataUrl, {
       warmup: true,
     });
+    expect(screen.getByTestId("workbench-instance")).toHaveAttribute("data-show-tips", "false");
+  });
+
+  it("shows tips only after a new capture and persists their completion", async () => {
+    const image = { name: "tips.png", dataUrl: "data:image/png;base64,TIPS" };
+    const created = {
+      id: "tips-record",
+      source: "capture",
+      title: null,
+      ocrText: "",
+      ocrState: "pending",
+      messages: [],
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      expiresAtMs: 2,
+      pinned: false,
+    } as const;
+    vi.mocked(loadSettings)
+      .mockResolvedValueOnce({
+        onboardingComplete: true,
+        workbenchTipsComplete: false,
+        shortcut: "Control+Option+Space",
+      } as Awaited<ReturnType<typeof loadSettings>>)
+      .mockResolvedValueOnce({
+        onboardingComplete: true,
+        workbenchTipsComplete: false,
+        shortcut: "Control+Option+Space",
+      } as Awaited<ReturnType<typeof loadSettings>>);
+    vi.mocked(captureScreenRegion).mockResolvedValue(image);
+    vi.mocked(captureClient.create).mockResolvedValue(created);
+
+    render(<MainWindowShell />);
+    const workbench = await screen.findByTestId("workbench-instance");
+    expect(workbench).toHaveAttribute("data-show-tips", "false");
+
+    fireEvent.click(screen.getByRole("button", { name: "工作台截图" }));
+    await waitFor(() => expect(workbench).toHaveAttribute("data-show-tips", "true"));
+    fireEvent.click(screen.getByRole("button", { name: "模拟完成提示" }));
+
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({
+      workbenchTipsComplete: true,
+    }));
+    expect(workbench).toHaveAttribute("data-show-tips", "false");
+  });
+
+  it("returns to the original screenshot and draft after installing a required model", async () => {
+    getEnvironmentStatus.mockResolvedValue({
+      onboardingComplete: true,
+      inferenceBackend: "llama",
+      runtimeReady: true,
+      modelReady: false,
+      environmentReady: false,
+    });
+
+    render(<MainWindowShell />);
+    const draft = await screen.findByRole("textbox", { name: "模拟问题" });
+    fireEvent.change(draft, { target: { value: "解释这个错误" } });
+    fireEvent.click(screen.getByRole("button", { name: "模拟需要模型" }));
+
+    const settingsNav = await screen.findByRole("navigation", { name: "设置导航" });
+    await waitFor(() => {
+      expect(within(settingsNav).getByRole("button", { name: "模型" })).toHaveAttribute(
+        "aria-current",
+        "page",
+      );
+    });
+    expect(screen.getByTestId("workbench-instance").closest(".main-surface")).toHaveAttribute("inert");
+    expect(draft).toHaveValue("解释这个错误");
+
+    fireEvent.click(screen.getByRole("button", { name: "模拟模型就绪" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("workbench-instance").closest(".main-surface")).not.toHaveAttribute("inert");
+      expect(screen.getByTestId("workbench-instance")).toHaveAttribute(
+        "data-requested-record-id",
+        "one",
+      );
+    });
+    expect(draft).toHaveValue("解释这个错误");
   });
 
   it("captures, stores, processes, saves, and selects the first screenshot in order", async () => {
@@ -450,6 +573,7 @@ describe("MainWindowShell navigation", () => {
     });
     expect(processCaptureInBackground).toHaveBeenCalledWith(created.id, image.dataUrl);
     expect(updateSettings).toHaveBeenCalledWith({ onboardingComplete: true });
+    expect(screen.getByTestId("workbench-instance")).toHaveAttribute("data-show-tips", "true");
 
     const order = [
       vi.mocked(captureScreenRegion).mock.invocationCallOrder[0],
@@ -822,7 +946,7 @@ describe("MainWindowShell navigation", () => {
     render(<MainWindowShell />);
 
     const workbench = await screen.findByTestId("workbench-instance");
-    await waitFor(() => expect(shellState.renders).toBeGreaterThan(0));
+    await waitFor(() => expect(workbench).toHaveAttribute("data-model-ready", "true"));
     const initialRenders = shellState.renders;
 
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
@@ -854,7 +978,9 @@ describe("MainWindowShell navigation", () => {
 
   it("composes model tasks as siblings and expands repair inline", async () => {
     render(<MainWindowShell />);
-    await screen.findByTestId("workbench-instance");
+    const workbench = await screen.findByTestId("workbench-instance");
+    await waitFor(() => expect(workbench).toHaveAttribute("data-model-ready", "true"));
+    const initialStatusChecks = getEnvironmentStatus.mock.calls.length;
     expect(screen.queryByTestId("environment-setup")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
@@ -881,7 +1007,7 @@ describe("MainWindowShell navigation", () => {
       expect(within(modelView).queryByTestId("environment-setup")).not.toBeInTheDocument(),
     );
     expect(model).toHaveAttribute("data-refresh-token", "2");
-    expect(getEnvironmentStatus).toHaveBeenCalledTimes(1);
+    expect(getEnvironmentStatus).toHaveBeenCalledTimes(initialStatusChecks + 1);
   });
 
   it("disables every model action as soon as inline repair opens", async () => {
@@ -995,7 +1121,8 @@ describe("MainWindowShell navigation", () => {
 
   it("restores each settings section scroll position across mode changes", async () => {
     render(<MainWindowShell />);
-    await screen.findByTestId("workbench-instance");
+    const workbench = await screen.findByTestId("workbench-instance");
+    await waitFor(() => expect(workbench).toHaveAttribute("data-model-ready", "true"));
 
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
     const settingsMain = screen.getByRole("main");
@@ -1046,6 +1173,9 @@ describe("MainWindowShell navigation", () => {
     );
     expect(workbenchCss).toMatch(
       /@media \(prefers-reduced-motion:\s*reduce\)[\s\S]*?\.first-run-welcome \.is-spinning\s*{[^}]*animation:\s*none/,
+    );
+    expect(workbenchCss).toMatch(
+      /@media \(prefers-reduced-motion:\s*reduce\)[\s\S]*?\.capture-inspector__tip\s*{[^}]*animation:\s*none/,
     );
     expect(cssRuleBody(workbenchCss, ".first-run-welcome__primary")).toMatch(
       /min-width:\s*174px[\s\S]*height:\s*44px/,

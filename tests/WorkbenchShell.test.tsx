@@ -40,9 +40,25 @@ function library(records: CaptureRecord[] = []): CaptureLibraryState {
   } as CaptureLibraryState;
 }
 
+function modelAvailableProps() {
+  return {
+    modelReady: true,
+    onRequireModel: vi.fn(async () => true),
+    showTips: false,
+    onTipsComplete: vi.fn(),
+  };
+}
+
 function RealLibraryHarness({ api, scope }: { api: CaptureClient; scope: "recent" | "pinned" }) {
   const state = useCaptureLibrary(api);
-  return <WorkbenchView library={state} scope={scope} onCapture={vi.fn()} />;
+  return (
+    <WorkbenchView
+      library={state}
+      scope={scope}
+      onCapture={vi.fn()}
+      {...modelAvailableProps()}
+    />
+  );
 }
 
 describe("WorkbenchView", () => {
@@ -63,6 +79,7 @@ describe("WorkbenchView", () => {
       <WorkbenchShell
         scope="recent"
         onCapture={vi.fn()}
+        {...modelAvailableProps()}
         requestedRecordId={null}
         captureApi={api}
       />,
@@ -74,6 +91,7 @@ describe("WorkbenchView", () => {
       <WorkbenchShell
         scope="recent"
         onCapture={vi.fn()}
+        {...modelAvailableProps()}
         requestedRecordId={requested.id}
         captureApi={api}
       />,
@@ -85,7 +103,14 @@ describe("WorkbenchView", () => {
   });
 
   it("shows a capture-first empty state without readiness cards", () => {
-    render(<WorkbenchView library={library()} scope="recent" onCapture={vi.fn()} />);
+    render(
+      <WorkbenchView
+        library={library()}
+        scope="recent"
+        onCapture={vi.fn()}
+        {...modelAvailableProps()}
+      />,
+    );
 
     expect(screen.getByRole("heading", { name: "还没有截图" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "截图" })).toBeInTheDocument();
@@ -96,15 +121,36 @@ describe("WorkbenchView", () => {
     const first = record();
     const pinned = record({ id: "two", title: "固定截图", pinned: true });
     const api = library([first, pinned]);
-    const view = render(<WorkbenchView library={api} scope="recent" onCapture={vi.fn()} />);
+    const view = render(
+      <WorkbenchView
+        library={api}
+        scope="recent"
+        onCapture={vi.fn()}
+        {...modelAvailableProps()}
+      />,
+    );
 
-    view.rerender(<WorkbenchView library={api} scope="pinned" onCapture={vi.fn()} />);
+    view.rerender(
+      <WorkbenchView
+        library={api}
+        scope="pinned"
+        onCapture={vi.fn()}
+        {...modelAvailableProps()}
+      />,
+    );
     expect(screen.getByRole("listitem", { name: /固定截图/ })).toBeInTheDocument();
     expect(screen.queryByRole("listitem", { name: /登录页/ })).not.toBeInTheDocument();
     await waitFor(() => expect(api.select).toHaveBeenCalledWith(pinned.id));
 
     api.selected = pinned;
-    view.rerender(<WorkbenchView library={api} scope="pinned" onCapture={vi.fn()} />);
+    view.rerender(
+      <WorkbenchView
+        library={api}
+        scope="pinned"
+        onCapture={vi.fn()}
+        {...modelAvailableProps()}
+      />,
+    );
 
     fireEvent.click(screen.getByRole("tab", { name: "文字" }));
     expect(screen.getByText("欢迎回来")).toBeInTheDocument();
@@ -118,6 +164,7 @@ describe("WorkbenchView", () => {
         library={api}
         scope="recent"
         onCapture={vi.fn()}
+        {...modelAvailableProps()}
         onAsk={ask}
       />,
     );
@@ -134,8 +181,155 @@ describe("WorkbenchView", () => {
     ));
   });
 
+  it("keeps the draft and requests a model before writing any AI message", async () => {
+    const api = library([record()]);
+    const ask = vi.fn(async () => "不应发送");
+    const requireModel = vi.fn(async () => false);
+    render(
+      <WorkbenchView
+        library={api}
+        scope="recent"
+        onCapture={vi.fn()}
+        modelReady={false}
+        onRequireModel={requireModel}
+        onAsk={ask}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("问这张截图…"), {
+      target: { value: "解释这个错误" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => expect(requireModel).toHaveBeenCalledWith({
+      recordId: "one",
+      prompt: "解释这个错误",
+    }));
+    expect(ask).not.toHaveBeenCalled();
+    expect(api.update).not.toHaveBeenCalled();
+    expect(screen.getByDisplayValue("解释这个错误")).toBeVisible();
+  });
+
+  it("shows one pending model check and prevents duplicate submits", async () => {
+    let finishCheck: ((ready: boolean) => void) | undefined;
+    const requireModel = vi.fn(() => new Promise<boolean>((resolve) => {
+      finishCheck = resolve;
+    }));
+    render(
+      <WorkbenchView
+        library={library([record()])}
+        scope="recent"
+        onCapture={vi.fn()}
+        modelReady={false}
+        onRequireModel={requireModel}
+        showTips={false}
+        onTipsComplete={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("问这张截图…"), {
+      target: { value: "解释这个错误" },
+    });
+    const send = screen.getByRole("button", { name: "发送" });
+    fireEvent.click(send);
+
+    await waitFor(() => expect(requireModel).toHaveBeenCalledOnce());
+    expect(send).toBeDisabled();
+    expect(send.closest(".capture-inspector__composer")).toHaveAttribute("aria-busy", "true");
+    fireEvent.click(send);
+    expect(requireModel).toHaveBeenCalledOnce();
+
+    await act(async () => finishCheck?.(false));
+    await waitFor(() => expect(send).toBeEnabled());
+    expect(screen.getByDisplayValue("解释这个错误")).toBeVisible();
+  });
+
+  it("continues the same submit when the readiness check finds an installed model", async () => {
+    const api = library([record()]);
+    const ask = vi.fn(async () => "已经可以使用");
+    const requireModel = vi.fn(async () => true);
+    render(
+      <WorkbenchView
+        library={api}
+        scope="recent"
+        onCapture={vi.fn()}
+        modelReady={false}
+        onRequireModel={requireModel}
+        showTips={false}
+        onTipsComplete={vi.fn()}
+        onAsk={ask}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("问这张截图…"), {
+      target: { value: "解释这个错误" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => expect(ask).toHaveBeenCalledOnce());
+    expect(requireModel).toHaveBeenCalledOnce();
+    expect(ask.mock.calls[0][1]).toBe("解释这个错误");
+    await waitFor(() => expect(api.update).toHaveBeenCalledWith(
+      "one",
+      expect.objectContaining({ messages: expect.arrayContaining([
+        expect.objectContaining({ role: "assistant", content: "已经可以使用" }),
+      ]) }),
+    ));
+  });
+
+  it("reveals two dismissible tips only after recognized text is ready", async () => {
+    const pending = record({ ocrState: "pending", ocrText: "" });
+    const api = library([pending]);
+    const tipsComplete = vi.fn();
+    const view = render(
+      <WorkbenchView
+        library={api}
+        scope="recent"
+        onCapture={vi.fn()}
+        {...modelAvailableProps()}
+        showTips
+        onTipsComplete={tipsComplete}
+      />,
+    );
+
+    expect(screen.queryByText("识别出的文字在这里")).not.toBeInTheDocument();
+
+    const ready = record({ ocrState: "ready", ocrText: "欢迎回来" });
+    api.records = [ready];
+    api.visibleRecords = [ready];
+    api.selected = ready;
+    api.selectedId = ready.id;
+    view.rerender(
+      <WorkbenchView
+        library={api}
+        scope="recent"
+        onCapture={vi.fn()}
+        {...modelAvailableProps()}
+        showTips
+        onTipsComplete={tipsComplete}
+      />,
+    );
+
+    expect(screen.getByText("识别出的文字在这里")).toBeVisible();
+    expect(screen.getByRole("tab", { name: "文字" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+
+    expect(screen.queryByText("识别出的文字在这里")).not.toBeInTheDocument();
+    expect(screen.getByText("也可以直接问这张截图")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "知道了" }));
+
+    expect(tipsComplete).toHaveBeenCalledOnce();
+  });
+
   it("switches inspector tabs with the arrow keys", async () => {
-    render(<WorkbenchView library={library([record()])} scope="recent" onCapture={vi.fn()} />);
+    render(
+      <WorkbenchView
+        library={library([record()])}
+        scope="recent"
+        onCapture={vi.fn()}
+        {...modelAvailableProps()}
+      />,
+    );
 
     const aiTab = screen.getByRole("tab", { name: "AI" });
     aiTab.focus();
@@ -159,7 +353,12 @@ describe("WorkbenchView", () => {
     api.selectedId = second.id;
 
     const { container } = render(
-      <WorkbenchView library={api} scope="recent" onCapture={vi.fn()} />,
+      <WorkbenchView
+        library={api}
+        scope="recent"
+        onCapture={vi.fn()}
+        {...modelAvailableProps()}
+      />,
     );
 
     expect(screen.getByRole("status", { name: "" })).toHaveTextContent("正在载入");
@@ -178,6 +377,7 @@ describe("WorkbenchView", () => {
         library={api}
         scope="recent"
         onCapture={vi.fn()}
+        {...modelAvailableProps()}
         onAsk={ask}
         onCancel={cancel}
       />,
@@ -205,7 +405,14 @@ describe("WorkbenchView", () => {
     const api = library([current, summary]);
     api.visibleRecords = [summary];
 
-    render(<WorkbenchView library={api} scope="recent" onCapture={vi.fn()} />);
+    render(
+      <WorkbenchView
+        library={api}
+        scope="recent"
+        onCapture={vi.fn()}
+        {...modelAvailableProps()}
+      />,
+    );
 
     await waitFor(() => expect(api.select).toHaveBeenCalledWith(summary.id));
     expect(within(screen.getByRole("main")).queryByText("搜索结果")).not.toBeInTheDocument();
@@ -218,13 +425,34 @@ describe("WorkbenchView", () => {
     api.selected = null;
     api.selectedId = null;
 
-    const view = render(<WorkbenchView library={api} scope="recent" onCapture={vi.fn()} />);
+    const view = render(
+      <WorkbenchView
+        library={api}
+        scope="recent"
+        onCapture={vi.fn()}
+        {...modelAvailableProps()}
+      />,
+    );
     await waitFor(() => expect(api.select).toHaveBeenCalledTimes(1));
 
-    view.rerender(<WorkbenchView library={api} scope="pinned" onCapture={vi.fn()} />);
+    view.rerender(
+      <WorkbenchView
+        library={api}
+        scope="pinned"
+        onCapture={vi.fn()}
+        {...modelAvailableProps()}
+      />,
+    );
     await waitFor(() => expect(api.select).toHaveBeenCalledTimes(2));
 
-    view.rerender(<WorkbenchView library={api} scope="recent" onCapture={vi.fn()} />);
+    view.rerender(
+      <WorkbenchView
+        library={api}
+        scope="recent"
+        onCapture={vi.fn()}
+        {...modelAvailableProps()}
+      />,
+    );
     await waitFor(() => expect(api.select).toHaveBeenCalledTimes(3));
     expect(api.select).toHaveBeenNthCalledWith(1, sharedFallback.id);
     expect(api.select).toHaveBeenNthCalledWith(2, sharedFallback.id);

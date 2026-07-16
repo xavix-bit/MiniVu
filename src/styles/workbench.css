@@ -731,12 +731,97 @@
 }
 
 .capture-inspector {
+  position: relative;
   display: grid;
   grid-template-rows: 48px minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   border-left: 1px solid var(--wb-border);
   background: var(--wb-panel);
+}
+
+.capture-inspector__tip {
+  position: absolute;
+  right: 12px;
+  z-index: 8;
+  width: min(260px, calc(100% - 24px));
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 28%, var(--wb-border));
+  border-radius: 8px;
+  background: var(--wb-panel);
+  color: var(--wb-text);
+  box-shadow: 0 12px 30px rgba(24, 32, 43, 0.16);
+  animation: workbench-tip-in 0.18s var(--ease-product) both;
+}
+
+.capture-inspector__tip--text {
+  top: 54px;
+}
+
+.capture-inspector__tip--composer {
+  bottom: 108px;
+}
+
+.capture-inspector__tip-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.capture-inspector__tip-head strong {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.capture-inspector__tip-head button {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  margin: -10px -10px -10px 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--wb-muted);
+  cursor: pointer;
+}
+
+.capture-inspector__tip p {
+  margin: 4px 0 10px;
+  color: var(--wb-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.capture-inspector__tip-action {
+  min-width: 72px;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 32%, var(--wb-border));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--wb-accent) 9%, var(--wb-panel));
+  color: var(--wb-accent);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.capture-inspector__tip button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 62%, transparent);
+  outline-offset: 2px;
+}
+
+@keyframes workbench-tip-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .capture-inspector__tabs {
@@ -1059,6 +1144,10 @@
   }
 
   .first-run-welcome .is-spinning {
+    animation: none;
+  }
+
+  .capture-inspector__tip {
     animation: none;
   }
 }

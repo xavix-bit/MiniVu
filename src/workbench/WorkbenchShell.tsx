@@ -11,6 +11,13 @@ type WorkbenchViewProps = {
   library: CaptureLibraryState;
   scope: "recent" | "pinned";
   onCapture: () => void;
+  modelReady: boolean;
+  onRequireModel: (context: {
+    recordId: string;
+    prompt: string;
+  }) => boolean | Promise<boolean>;
+  showTips: boolean;
+  onTipsComplete: () => void;
   onAsk?: (
     record: CaptureRecord,
     prompt: string,
@@ -47,13 +54,19 @@ export function WorkbenchView({
   library,
   scope,
   onCapture,
+  modelReady,
+  onRequireModel,
+  showTips,
+  onTipsComplete,
   onAsk = askModel,
   onCancel = (requestId) => modelClient.cancelGeneration(requestId),
 }: WorkbenchViewProps) {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [streaming, setStreaming] = useState<Record<string, string>>({});
   const [activeRequestIds, setActiveRequestIds] = useState<Record<string, string>>({});
+  const [checkingModelIds, setCheckingModelIds] = useState<Record<string, boolean>>({});
   const activeRequestIdsRef = useRef<Record<string, string>>({});
+  const modelChecksRef = useRef(new Set<string>());
   const fallbackSelectionRef = useRef<{ scope: WorkbenchViewProps["scope"]; id: string } | null>(null);
   const previousScopeRef = useRef(scope);
 
@@ -93,9 +106,38 @@ export function WorkbenchView({
   }, [fallbackId, library.select, scope]);
 
   async function ask(record: CaptureRecord, prompt: string) {
-    if (activeRequestIdsRef.current[record.id] || !record.imageDataUrl) return;
+    if (
+      activeRequestIdsRef.current[record.id]
+      || modelChecksRef.current.has(record.id)
+      || !record.imageDataUrl
+    ) return;
+    const normalizedPrompt = prompt.trim();
+    if (!normalizedPrompt) return;
+
+    if (!modelReady) {
+      setDrafts((current) => ({ ...current, [record.id]: normalizedPrompt }));
+      modelChecksRef.current.add(record.id);
+      setCheckingModelIds((current) => ({ ...current, [record.id]: true }));
+      try {
+        const ready = await onRequireModel({
+          recordId: record.id,
+          prompt: normalizedPrompt,
+        });
+        if (!ready) return;
+      } catch {
+        return;
+      } finally {
+        modelChecksRef.current.delete(record.id);
+        setCheckingModelIds((current) => {
+          const remaining = { ...current };
+          delete remaining[record.id];
+          return remaining;
+        });
+      }
+    }
+
     const requestId = crypto.randomUUID();
-    const userMessage: CaptureMessage = { role: "user", content: prompt.trim() };
+    const userMessage: CaptureMessage = { role: "user", content: normalizedPrompt };
     const nextMessages = [...record.messages, userMessage];
     activeRequestIdsRef.current = { ...activeRequestIdsRef.current, [record.id]: requestId };
     setDrafts((current) => ({ ...current, [record.id]: "" }));
@@ -103,7 +145,7 @@ export function WorkbenchView({
     setStreaming((current) => ({ ...current, [record.id]: "" }));
     try {
       await library.update(record.id, { messages: nextMessages });
-      const answer = await onAsk(record, prompt, requestId, (text) => {
+      const answer = await onAsk(record, normalizedPrompt, requestId, (text) => {
         setStreaming((current) => ({ ...current, [record.id]: text }));
       });
       if (answer) {
@@ -181,8 +223,11 @@ export function WorkbenchView({
                 draft={drafts[selected.id] ?? ""}
                 streamingText={streaming[selected.id] ?? ""}
                 answering={Boolean(activeRequestIds[selected.id])}
+                checkingModel={Boolean(checkingModelIds[selected.id])}
                 onDraftChange={(value) => setDrafts((current) => ({ ...current, [selected.id]: value }))}
                 onAsk={(prompt) => void ask(selected, prompt)}
+                showTips={showTips && selected.ocrState === "ready"}
+                onTipsComplete={onTipsComplete}
                 onStop={() => {
                   const requestId = activeRequestIdsRef.current[selected.id];
                   if (requestId) void onCancel(requestId);
@@ -207,7 +252,15 @@ export function WorkbenchView({
   );
 }
 
-type WorkbenchShellProps = Pick<WorkbenchViewProps, "scope" | "onCapture"> & {
+type WorkbenchShellProps = Pick<
+  WorkbenchViewProps,
+  | "scope"
+  | "onCapture"
+  | "modelReady"
+  | "onRequireModel"
+  | "showTips"
+  | "onTipsComplete"
+> & {
   requestedRecordId?: string | null;
   captureApi?: CaptureClient;
 };
@@ -215,6 +268,10 @@ type WorkbenchShellProps = Pick<WorkbenchViewProps, "scope" | "onCapture"> & {
 export const WorkbenchShell = memo(function WorkbenchShell({
   scope,
   onCapture,
+  modelReady,
+  onRequireModel,
+  showTips,
+  onTipsComplete,
   requestedRecordId = null,
   captureApi,
 }: WorkbenchShellProps) {
@@ -231,5 +288,15 @@ export const WorkbenchShell = memo(function WorkbenchShell({
     void library.refresh(requestedRecordId);
   }, [library.refresh, requestedRecordId]);
 
-  return <WorkbenchView library={library} scope={scope} onCapture={onCapture} />;
+  return (
+    <WorkbenchView
+      library={library}
+      scope={scope}
+      onCapture={onCapture}
+      modelReady={modelReady}
+      onRequireModel={onRequireModel}
+      showTips={showTips && requestedRecordId === library.selected?.id}
+      onTipsComplete={onTipsComplete}
+    />
+  );
 });

@@ -10,6 +10,7 @@ import {
 } from "./SettingsNavigationPane";
 import { PrivacyNotice } from "../privacy/PrivacyNotice";
 import { modelClient } from "../model/modelClient";
+import type { ModelStatusResponse } from "../model/types";
 import { ModelPanel } from "../settings/ModelPanel";
 import { ModelPreferencesPanel } from "../settings/ModelPreferencesPanel";
 import { SettingsPanel } from "../settings/SettingsPanel";
@@ -25,6 +26,7 @@ import { processCaptureInBackground } from "../captures/processCapture";
 
 type AppMode = "workbench" | "settings";
 type WorkbenchScope = "recent" | "pinned";
+type ModelReturnContext = { recordId: string; prompt: string };
 type StartupState =
   | { kind: "loading" }
   | { kind: "load-error" }
@@ -61,12 +63,17 @@ export function MainWindowShell() {
   const welcomeGenerationRef = useRef(0);
   const welcomePendingRef = useRef(false);
   const settingsOpenPendingRef = useRef(false);
+  const workbenchTipsCompleteRef = useRef(true);
+  const tipsSavePendingRef = useRef(false);
   const [startupState, setStartupState] = useState<StartupState>({ kind: "loading" });
   const [welcomeState, setWelcomeState] = useState<FirstRunWelcomeState>({ kind: "idle" });
   const [mode, setMode] = useState<AppMode>("settings");
   const [workbenchScope, setWorkbenchScope] = useState<WorkbenchScope>("recent");
   const [requestedRecordId, setRequestedRecordId] = useState<string | null>(null);
+  const [tipsRecordId, setTipsRecordId] = useState<string | null>(null);
   const [workbenchNotice, setWorkbenchNotice] = useState("");
+  const [modelReady, setModelReady] = useState<boolean | null>(null);
+  const [modelReturnContext, setModelReturnContext] = useState<ModelReturnContext | null>(null);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("setup");
   const [warmupNotice, setWarmupNotice] = useState("");
   const [runtimeRepairOpen, setRuntimeRepairOpen] = useState(false);
@@ -88,6 +95,8 @@ export function MainWindowShell() {
     void loadSettings()
       .then((settings) => {
         if (!mountedRef.current || startupGenerationRef.current !== generation) return;
+        workbenchTipsCompleteRef.current = settings.workbenchTipsComplete ?? false;
+        setTipsRecordId(null);
         if (settings.onboardingComplete) {
           setSettingsSection("general");
           setMode("workbench");
@@ -111,6 +120,7 @@ export function MainWindowShell() {
       welcomeGenerationRef.current += 1;
       welcomePendingRef.current = false;
       settingsOpenPendingRef.current = false;
+      tipsSavePendingRef.current = false;
     };
   }, [loadStartupSettings]);
 
@@ -181,11 +191,18 @@ export function MainWindowShell() {
 
   const refreshEnvironmentStatus = useCallback(async () => {
     try {
-      await modelClient.getEnvironmentStatus();
+      const status = await modelClient.getEnvironmentStatus();
+      if (mountedRef.current) setModelReady(status.modelReady);
+      return status;
     } catch {
       // The active settings view remains usable if a status refresh fails.
+      return null;
     }
   }, []);
+
+  useEffect(() => {
+    if (onboardingDone) void refreshEnvironmentStatus();
+  }, [onboardingDone, refreshEnvironmentStatus]);
 
   const handleModelPreferencesSaved = useCallback(() => {
     setModelRefreshToken((current) => current + 1);
@@ -210,6 +227,44 @@ export function MainWindowShell() {
     setRuntimeRepairOpen(false);
   }, []);
 
+  const handleRequireModel = useCallback(async (context: ModelReturnContext) => {
+    const status = await refreshEnvironmentStatus();
+    if (status?.modelReady) return true;
+    if (!mountedRef.current) return false;
+
+    setModelReturnContext(context);
+    setSettingsSection("model");
+    setMode("settings");
+    return false;
+  }, [refreshEnvironmentStatus]);
+
+  const handleModelStatusChange = useCallback((status: ModelStatusResponse) => {
+    setModelReady(status.modelReady);
+    if (!status.modelReady || !modelReturnContext) return;
+
+    setWorkbenchScope("recent");
+    setRequestedRecordId(modelReturnContext.recordId);
+    setModelReturnContext(null);
+    setMode("workbench");
+  }, [modelReturnContext]);
+
+  const handleTipsComplete = useCallback(() => {
+    setTipsRecordId(null);
+    if (workbenchTipsCompleteRef.current || tipsSavePendingRef.current) return;
+
+    workbenchTipsCompleteRef.current = true;
+    tipsSavePendingRef.current = true;
+    void updateSettings({ workbenchTipsComplete: true })
+      .catch(() => {
+        if (mountedRef.current) {
+          setWorkbenchNotice("提示已关闭，但暂时无法记住这个选择。");
+        }
+      })
+      .finally(() => {
+        tipsSavePendingRef.current = false;
+      });
+  }, []);
+
   const handleWorkbenchCapture = useCallback(async () => {
     try {
       const image = await captureScreenRegion();
@@ -221,6 +276,9 @@ export function MainWindowShell() {
       });
       setRequestedRecordId(record.id);
       setWorkbenchNotice("");
+      if (!workbenchTipsCompleteRef.current && !(settings.workbenchTipsComplete ?? false)) {
+        setTipsRecordId(record.id);
+      }
       processCaptureInBackground(record.id, image.dataUrl, {
         warmup: settings.backgroundWarmup ?? false,
       });
@@ -266,6 +324,9 @@ export function MainWindowShell() {
       if (!isCurrent()) return;
 
       setRequestedRecordId(record.id);
+      if (!workbenchTipsCompleteRef.current && !(settings.workbenchTipsComplete ?? false)) {
+        setTipsRecordId(record.id);
+      }
       processCaptureInBackground(record.id, image.dataUrl);
 
       let saveFailed = false;
@@ -360,6 +421,10 @@ export function MainWindowShell() {
             scope={workbenchScope}
             onCapture={handleCapture}
             requestedRecordId={requestedRecordId}
+            modelReady={modelReady === true}
+            onRequireModel={handleRequireModel}
+            showTips={tipsRecordId !== null}
+            onTipsComplete={handleTipsComplete}
           />
           {workbenchNotice ? (
             <div className="workbench-onboarding-notice" role="status">
@@ -419,6 +484,11 @@ export function MainWindowShell() {
                     <div className="settings-page-body unified-settings-detail">
                       {activeSection !== "setup" ? (
                         <div className="unified-settings-surface">
+                          {modelReturnContext ? (
+                            <div className="callout callout--attention" role="status">
+                              <p>安装一个模型后，会回到刚才的问题。</p>
+                            </div>
+                          ) : null}
                           <ModelPreferencesPanel
                             disabled={modelControlsDisabled}
                             onBusyChange={setModelPreferencesBusy}
@@ -428,7 +498,7 @@ export function MainWindowShell() {
                             disabled={modelControlsDisabled}
                             onBusyChange={setModelPanelBusy}
                             onRepairRuntime={handleRepairRuntime}
-                            onStatusChange={() => void refreshEnvironmentStatus()}
+                            onStatusChange={handleModelStatusChange}
                             refreshToken={modelRefreshToken}
                           />
                           {runtimeRepairOpen ? (

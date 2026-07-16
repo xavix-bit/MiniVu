@@ -86,6 +86,8 @@ pub struct AppSettings {
     pub allow_cloud_fallback: bool,
     pub onboarding_complete: bool,
     #[serde(default)]
+    pub workbench_tips_complete: bool,
+    #[serde(default)]
     pub gguf_model_variant: GgufModelVariant,
     #[serde(default)]
     pub download_mirror: DownloadMirror,
@@ -126,6 +128,7 @@ impl Default for AppSettings {
             save_history_by_default: true,
             allow_cloud_fallback: false,
             onboarding_complete: false,
+            workbench_tips_complete: false,
             gguf_model_variant: GgufModelVariant::default(),
             download_mirror: DownloadMirror::Auto,
             preferred_mirror: None,
@@ -161,4 +164,22 @@ pub fn save_settings(app: &AppHandle, settings: &AppSettings) -> Result<(), Stri
     }
     let raw = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
     fs::write(path, raw).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppSettings;
+
+    #[test]
+    fn legacy_settings_default_workbench_tips_to_incomplete() {
+        let mut legacy = serde_json::to_value(AppSettings::default()).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("workbenchTipsComplete");
+
+        let settings: AppSettings = serde_json::from_value(legacy).unwrap();
+
+        assert!(!settings.workbench_tips_complete);
+    }
 }

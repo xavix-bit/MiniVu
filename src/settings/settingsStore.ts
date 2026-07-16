@@ -14,6 +14,7 @@ export type AppSettings = {
   saveHistoryByDefault: boolean;
   allowCloudFallback: boolean;
   onboardingComplete: boolean;
+  workbenchTipsComplete: boolean;
   ggufModelVariant: GgufModelVariant;
   downloadMirror: DownloadMirror;
   preferredMirror: MirrorId | null;
@@ -49,6 +50,7 @@ export function createDefaultSettings(): AppSettings {
     saveHistoryByDefault: true,
     allowCloudFallback: false,
     onboardingComplete: false,
+    workbenchTipsComplete: false,
     ggufModelVariant: "q4_k_m",
     downloadMirror: "auto",
     preferredMirror: null,

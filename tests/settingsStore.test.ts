@@ -38,6 +38,7 @@ describe("settingsStore", () => {
     expect(settings.backgroundWarmup).toBe(false);
     expect(settings.allowCloudFallback).toBe(false);
     expect(settings.onboardingComplete).toBe(false);
+    expect(settings.workbenchTipsComplete).toBe(false);
     expect(settings.downloadMirror).toBe("auto");
     expect(settings.preferredMirror).toBeNull();
     expect(settings.lastSpeedTestAt).toBeNull();
