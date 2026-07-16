@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   createDefaultSettings,
   loadSettings,
-  saveSettings,
+  updateSettings,
   type AppSettings,
   type MirrorBenchmarkResponse,
   type MirrorId,
@@ -37,27 +37,24 @@ function formatSourceName(source: MirrorId | null | undefined) {
   return "—";
 }
 
-function mergeOwnedSettings(latest: AppSettings, draft: AppSettings): AppSettings {
-  return {
-    ...latest,
-    inferenceBackend: draft.inferenceBackend,
-    mlxModelId: draft.mlxModelId,
-    downloadMirror: draft.downloadMirror,
-    preferredMirror: draft.preferredMirror,
-    lastSpeedTestAt: draft.lastSpeedTestAt,
-  };
-}
-
 export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
   const mountedRef = useRef(false);
+  const unsupportedFallbackAttemptedRef = useRef(false);
   const [settings, setSettings] = useState<AppSettings>(createDefaultSettings());
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
+  const [deviceInfoLoading, setDeviceInfoLoading] = useState(true);
+  const [deviceInfoError, setDeviceInfoError] = useState("");
   const [savedMessage, setSavedMessage] = useState("");
+  const [saveError, setSaveError] = useState("");
+  const [savingBackend, setSavingBackend] = useState(false);
+  const [backendError, setBackendError] = useState("");
   const [installingMlx, setInstallingMlx] = useState(false);
   const [installError, setInstallError] = useState("");
   const [benchmark, setBenchmark] = useState<MirrorBenchmarkResponse | null>(null);
   const [benchmarking, setBenchmarking] = useState(false);
   const [benchmarkError, setBenchmarkError] = useState("");
+  const [savingSource, setSavingSource] = useState(false);
+  const [sourceError, setSourceError] = useState("");
 
   useEffect(() => {
     mountedRef.current = true;
@@ -74,7 +71,10 @@ export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
       }
       if (deviceResult.status === "fulfilled") {
         setDeviceInfo(deviceResult.value);
+      } else {
+        setDeviceInfoError("暂时无法检测设备，仍可使用默认方式。");
       }
+      setDeviceInfoLoading(false);
     });
 
     return () => {
@@ -84,19 +84,20 @@ export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
 
   async function handleSave(event: FormEvent) {
     event.preventDefault();
-    const latest = await loadSettings();
-    const ownedDraft =
-      deviceInfo?.isAppleSilicon === false
-        ? { ...settings, inferenceBackend: "llama" as const }
-        : settings;
-    const next = mergeOwnedSettings(latest, ownedDraft);
-    await saveSettings(next);
-    if (!mountedRef.current) {
-      return;
+    setSaveError("");
+    try {
+      const next = await updateSettings({ mlxModelId: settings.mlxModelId });
+      if (!mountedRef.current) {
+        return;
+      }
+      setSettings((current) => ({ ...current, mlxModelId: next.mlxModelId }));
+      setSavedMessage("设置已保存");
+      onSaved?.(next);
+    } catch {
+      if (mountedRef.current) {
+        setSaveError("无法保存模型设置，请重试。");
+      }
     }
-    setSettings(next);
-    setSavedMessage("设置已保存");
-    onSaved?.(next);
   }
 
   async function installMlxRuntime() {
@@ -109,9 +110,9 @@ export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
       }
       setSavedMessage("加速组件已安装");
       onSaved?.();
-    } catch (error) {
+    } catch {
       if (mountedRef.current) {
-        setInstallError(String(error));
+        setInstallError("无法安装加速组件，请重试。");
       }
     } finally {
       if (mountedRef.current) {
@@ -120,16 +121,66 @@ export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
     }
   }
 
-  async function changeDownloadSource(downloadMirror: AppSettings["downloadMirror"]) {
-    setSettings((current) => ({ ...current, downloadMirror }));
-    const latest = await loadSettings();
-    const next = { ...latest, downloadMirror };
-    await saveSettings(next);
-    if (!mountedRef.current) {
+  async function changeBackend(inferenceBackend: AppSettings["inferenceBackend"]) {
+    if (inferenceBackend === settings.inferenceBackend) {
       return;
     }
-    setSavedMessage("下载来源已保存");
-    onSaved?.(next);
+    setSavingBackend(true);
+    setBackendError("");
+    setSavedMessage("");
+    try {
+      const next = await updateSettings({ inferenceBackend });
+      if (!mountedRef.current) {
+        return;
+      }
+      setSettings((current) => ({
+        ...current,
+        inferenceBackend: next.inferenceBackend,
+      }));
+      onSaved?.(next);
+    } catch {
+      if (mountedRef.current) {
+        setBackendError("无法保存问图方式，请重试。");
+      }
+    } finally {
+      if (mountedRef.current) {
+        setSavingBackend(false);
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (
+      deviceInfo?.isAppleSilicon !== false ||
+      settings.inferenceBackend !== "mlx" ||
+      unsupportedFallbackAttemptedRef.current
+    ) {
+      return;
+    }
+    unsupportedFallbackAttemptedRef.current = true;
+    void changeBackend("llama");
+  }, [deviceInfo, settings.inferenceBackend]);
+
+  async function changeDownloadSource(downloadMirror: AppSettings["downloadMirror"]) {
+    setSavingSource(true);
+    setSourceError("");
+    try {
+      const next = await updateSettings({ downloadMirror });
+      if (!mountedRef.current) {
+        return;
+      }
+      setSettings((current) => ({ ...current, downloadMirror: next.downloadMirror }));
+      setSavedMessage("下载来源已保存");
+      onSaved?.(next);
+    } catch {
+      if (mountedRef.current) {
+        setSourceError("无法保存下载来源，请重试。");
+      }
+    } finally {
+      if (mountedRef.current) {
+        setSavingSource(false);
+      }
+    }
   }
 
   async function runBenchmark() {
@@ -137,27 +188,24 @@ export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
     setBenchmarkError("");
     try {
       const result = await invoke<MirrorBenchmarkResponse>("benchmark_download_mirrors");
-      const latest = await loadSettings();
-      const next = {
-        ...latest,
+      const next = await updateSettings({
         preferredMirror: result.recommended,
         lastSpeedTestAt: String(result.testedAtUnix),
-      };
-      await saveSettings(next);
+      });
       if (!mountedRef.current) {
         return;
       }
       setBenchmark(result);
       setSettings((current) => ({
         ...current,
-        preferredMirror: result.recommended,
-        lastSpeedTestAt: String(result.testedAtUnix),
+        preferredMirror: next.preferredMirror,
+        lastSpeedTestAt: next.lastSpeedTestAt,
       }));
       setSavedMessage("下载速度测试完成");
       onSaved?.(next);
-    } catch (error) {
+    } catch {
       if (mountedRef.current) {
-        setBenchmarkError(String(error));
+        setBenchmarkError("下载测速失败，请稍后重试。");
       }
     } finally {
       if (mountedRef.current) {
@@ -167,8 +215,9 @@ export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
   }
 
   const supportsMlx = deviceInfo?.isAppleSilicon ?? false;
-  const backend = supportsMlx ? settings.inferenceBackend : "llama";
+  const backend = settings.inferenceBackend;
   const isMlx = backend === "mlx";
+  const showMlxOption = supportsMlx || isMlx;
 
   return (
     <form
@@ -182,15 +231,21 @@ export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
           <span>问图方式</span>
           <select
             value={backend}
-            disabled={deviceInfo === null}
+            disabled={deviceInfoLoading || savingBackend}
             onChange={(event) => {
               const inferenceBackend = event.target.value as AppSettings["inferenceBackend"];
-              setSettings((current) => ({ ...current, inferenceBackend }));
+              void changeBackend(inferenceBackend);
             }}
           >
             <option value="llama">默认</option>
-            {supportsMlx ? <option value="mlx">实验加速</option> : null}
+            {showMlxOption ? (
+              <option value="mlx" disabled={!supportsMlx}>
+                实验加速
+              </option>
+            ) : null}
           </select>
+          {deviceInfoError ? <p className="field-hint">{deviceInfoError}</p> : null}
+          {backendError ? <p className="onboarding-error">{backendError}</p> : null}
         </label>
 
         {isMlx ? (
@@ -226,6 +281,7 @@ export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
             <select
               id="model-download-source"
               value={settings.downloadMirror}
+              disabled={savingSource}
               onChange={(event) =>
                 void changeDownloadSource(event.target.value as AppSettings["downloadMirror"])
               }
@@ -238,6 +294,7 @@ export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
                 ),
               )}
             </select>
+            {sourceError ? <p className="onboarding-error">{sourceError}</p> : null}
             <div className="mirror-benchmark">
               <button
                 type="button"
@@ -267,7 +324,7 @@ export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
                         {benchmark.recommended === item.mirror ? " · 推荐" : ""}
                       </span>
                     ) : (
-                      <span>{item.error ?? "测试失败"}</span>
+                      <span>暂时无法测试此下载来源。</span>
                     )}
                   </li>
                 ))}
@@ -283,6 +340,7 @@ export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
           保存设置
         </button>
         {savedMessage ? <p className="saved-message">{savedMessage}</p> : null}
+        {saveError ? <p className="onboarding-error">{saveError}</p> : null}
       </div>
     </form>
   );

@@ -8,6 +8,29 @@ const tokensCss = readFileSync(`${process.cwd()}/src/styles/tokens.css`, "utf8")
 const settingsCss = readFileSync(`${process.cwd()}/src/styles/settings.css`, "utf8");
 const workbenchCss = readFileSync(`${process.cwd()}/src/styles/workbench.css`, "utf8");
 
+function cssRuleBody(css: string, selector: string) {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return css.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+}
+
+function contrastRatio(foreground: string, background: string) {
+  const luminance = (hex: string) => {
+    const channels = hex
+      .slice(1)
+      .match(/.{2}/g)!
+      .map((channel) => Number.parseInt(channel, 16) / 255)
+      .map((channel) =>
+        channel <= 0.04045
+          ? channel / 12.92
+          : ((channel + 0.055) / 1.055) ** 2.4,
+      );
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+  };
+  const lighter = Math.max(luminance(foreground), luminance(background));
+  const darker = Math.min(luminance(foreground), luminance(background));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
 const { shellState, settingsPanelState, getEnvironmentStatus } = vi.hoisted(() => ({
   shellState: { mounts: 0, renders: 0 },
   settingsPanelState: { mounts: 0 },
@@ -317,5 +340,43 @@ describe("MainWindowShell navigation", () => {
     expect(settingsCss).toMatch(
       /\.unified-settings-detail :is\(\.settings-btn, \.shortcut-recorder__btn, \.callout__action\)\s*{[^}]*min-height:\s*44px/,
     );
+  });
+
+  it("retokenizes every inline setup state after the legacy light rules", () => {
+    const foregroundRules = [
+      [".unified-settings-detail .setup-panel__metrics span", "var(--wb-muted)"],
+      [".unified-settings-detail .setup-panel__metrics strong", "var(--wb-text)"],
+      [".unified-settings-detail .setup-panel__metrics strong.is-positive", "var(--wb-accent)"],
+      [".unified-settings-detail .onboarding-overall-progress__label", "var(--wb-muted)"],
+      [".unified-settings-detail .onboarding-overall-progress__speed", "var(--wb-accent)"],
+      [".unified-settings-detail .onboarding-progress-item strong", "var(--wb-text)"],
+      [".unified-settings-detail .onboarding-progress-item p", "var(--wb-muted)"],
+      [".unified-settings-detail .onboarding-progress-item__percent", "var(--wb-muted)"],
+      [".unified-settings-detail .onboarding-progress-item__speed", "var(--wb-accent)"],
+      [".unified-settings-detail .setup-panel__running-hint", "var(--wb-muted)"],
+      [".unified-settings-detail .setup-panel__success-lead", "var(--wb-accent)"],
+      [".unified-settings-detail .setup-panel__success .onboarding-checklist li", "var(--wb-muted)"],
+      [".unified-settings-detail .setup-panel__success .onboarding-checklist li.is-done", "var(--wb-text)"],
+      [".unified-settings-detail .onboarding-error", "var(--danger-text)"],
+    ] as const;
+
+    for (const [selector, token] of foregroundRules) {
+      const body = cssRuleBody(settingsCss, selector);
+      expect(body, `missing exact selector ${selector}`).not.toBe("");
+      expect(body).toContain(`color: ${token}`);
+      expect(body).not.toMatch(/color:\s*#[0-9a-f]{3,8}/i);
+    }
+
+    expect(settingsCss.lastIndexOf(foregroundRules[0][0])).toBeGreaterThan(
+      settingsCss.indexOf(".setup-panel__metrics span"),
+    );
+    expect(cssRuleBody(settingsCss, ".unified-settings-detail .onboarding-error")).toContain(
+      "background: var(--danger-soft)",
+    );
+
+    for (const foreground of ["#f5f5f7", "#a1a1a6", "#7894ff", "#ff6961"]) {
+      expect(contrastRatio(foreground, "#2a2a2c")).toBeGreaterThanOrEqual(4.5);
+      expect(tokensCss).toContain(foreground);
+    }
   });
 });

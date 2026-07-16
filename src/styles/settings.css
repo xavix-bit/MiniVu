@@ -2869,6 +2869,84 @@
   display: none;
 }
 
+.unified-settings-detail .setup-panel__metrics span {
+  color: var(--wb-muted);
+}
+
+.unified-settings-detail .setup-panel__metrics strong {
+  color: var(--wb-text);
+}
+
+.unified-settings-detail .setup-panel__metrics strong.is-positive {
+  color: var(--wb-accent);
+}
+
+.unified-settings-detail .onboarding-overall-progress__label {
+  color: var(--wb-muted);
+}
+
+.unified-settings-detail .onboarding-overall-progress__speed {
+  color: var(--wb-accent);
+}
+
+.unified-settings-detail .onboarding-progress-item strong {
+  color: var(--wb-text);
+}
+
+.unified-settings-detail .onboarding-progress-item p {
+  color: var(--wb-muted);
+}
+
+.unified-settings-detail .onboarding-progress-item__percent {
+  color: var(--wb-muted);
+}
+
+.unified-settings-detail .onboarding-progress-item__speed {
+  color: var(--wb-accent);
+}
+
+.unified-settings-detail .setup-panel__running-hint {
+  color: var(--wb-muted);
+}
+
+.unified-settings-detail .setup-panel__success-lead {
+  background: color-mix(in srgb, var(--wb-accent) 12%, var(--wb-panel));
+  color: var(--wb-accent);
+}
+
+.unified-settings-detail .setup-panel__success .onboarding-checklist li {
+  border: 0;
+  border-bottom: 1px solid var(--wb-border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--wb-muted);
+}
+
+.unified-settings-detail .setup-panel__success .onboarding-checklist li:last-child {
+  border-bottom: 0;
+}
+
+.unified-settings-detail .setup-panel__success .onboarding-checklist li::before {
+  border-color: var(--wb-muted);
+}
+
+.unified-settings-detail .setup-panel__success .onboarding-checklist li.is-done {
+  border-color: var(--wb-border);
+  background: color-mix(in srgb, var(--wb-accent) 8%, transparent);
+  color: var(--wb-text);
+}
+
+.unified-settings-detail .setup-panel__success .onboarding-checklist li.is-done::before {
+  border-color: var(--wb-accent);
+  background: var(--wb-accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--wb-accent) 12%, transparent);
+}
+
+.unified-settings-detail .onboarding-error {
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
 .unified-settings-detail .privacy-product__hero {
   padding: 18px 20px;
 }

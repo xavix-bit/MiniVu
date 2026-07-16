@@ -4,7 +4,7 @@ import { settingsThemeToMode } from "../theme/useAppTheme";
 import {
   createDefaultSettings,
   loadSettings,
-  saveSettings,
+  updateSettings,
   type AppSettings,
 } from "./settingsStore";
 import { ShortcutRecorder } from "./shortcutRecorder";
@@ -13,16 +13,6 @@ type SettingsPanelProps = {
   view: "general" | "shortcut";
   onSaved?: () => void;
 };
-
-function mergeOwnedSettings(latest: AppSettings, draft: AppSettings): AppSettings {
-  return {
-    ...latest,
-    shortcut: draft.shortcut,
-    theme: draft.theme,
-    captureRetention: draft.captureRetention,
-    backgroundWarmup: draft.backgroundWarmup,
-  };
-}
 
 export function SettingsPanel({ view, onSaved }: SettingsPanelProps) {
   const [settings, setSettings] = useState<AppSettings>(createDefaultSettings());
@@ -44,9 +34,13 @@ export function SettingsPanel({ view, onSaved }: SettingsPanelProps) {
 
   async function handleSave(event: React.FormEvent) {
     event.preventDefault();
-    const latest = await loadSettings();
-    const next = mergeOwnedSettings(latest, settings);
-    await saveSettings(next);
+    const next = await updateSettings({
+      shortcut: settings.shortcut,
+      theme: settings.theme,
+      captureRetention: settings.captureRetention,
+      backgroundWarmup: settings.backgroundWarmup,
+    });
+    setSettings(next);
     setSavedMessage("设置已保存");
     onSaved?.();
   }

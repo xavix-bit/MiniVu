@@ -5,7 +5,7 @@ import { modelClient } from "../model/modelClient";
 import type { ModelStatusResponse } from "../model/types";
 import { resolveGgufPercent, resolveMlxPercent } from "../shared/downloadProgress";
 import { expectedGgufBytesForVariant, GGUF_MODEL_VARIANTS } from "../shared/modelConstants";
-import { loadSettings, saveSettings, type GgufModelVariant } from "./settingsStore";
+import { updateSettings, type GgufModelVariant } from "./settingsStore";
 
 type ModelStatus = ModelStatusResponse;
 
@@ -46,11 +46,14 @@ function createIdleProgress(): Record<"model" | "mmproj", FileProgressState> {
 export function ModelPanel({ onRepairRuntime, onStatusChange, refreshToken }: ModelPanelProps) {
   const mountedRef = useRef(false);
   const previousRefreshTokenRef = useRef(refreshToken);
+  const refreshGenerationRef = useRef(0);
   const [status, setStatus] = useState<ModelStatus | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [selectedVariant, setSelectedVariant] = useState<GgufModelVariant>("q4_k_m");
   const [savingVariant, setSavingVariant] = useState<GgufModelVariant | null>(null);
   const [downloadError, setDownloadError] = useState("");
+  const [statusError, setStatusError] = useState("");
+  const [refreshingStatus, setRefreshingStatus] = useState(false);
   const [fileProgress, setFileProgress] = useState<Record<FileKey, FileProgressState>>(createIdleProgress);
   const [mlxProgress, setMlxProgress] = useState<MlxProgressState>({
     status: "idle",
@@ -59,11 +62,27 @@ export function ModelPanel({ onRepairRuntime, onStatusChange, refreshToken }: Mo
   });
 
   async function refresh() {
-    const next = await modelClient.getModelStatus();
+    const generation = ++refreshGenerationRef.current;
     if (mountedRef.current) {
-      setStatus(next);
-      setSelectedVariant(next.ggufModelVariant);
+      setRefreshingStatus(true);
     }
+    let next: ModelStatusResponse;
+    try {
+      next = await modelClient.getModelStatus();
+    } catch {
+      if (mountedRef.current && generation === refreshGenerationRef.current) {
+        setStatusError("暂时无法读取模型状态，请重试。");
+        setRefreshingStatus(false);
+      }
+      return null;
+    }
+    if (!mountedRef.current || generation !== refreshGenerationRef.current) {
+      return null;
+    }
+    setStatusError("");
+    setRefreshingStatus(false);
+    setStatus(next);
+    setSelectedVariant(next.ggufModelVariant);
     return next;
   }
 
@@ -82,6 +101,9 @@ export function ModelPanel({ onRepairRuntime, onStatusChange, refreshToken }: Mo
       source?: string;
       speedMbps?: number;
     }>("model-download-progress", (event) => {
+      if (!mountedRef.current) {
+        return;
+      }
       const { file, status: downloadStatus, message, downloaded, total, source, speedMbps } =
         event.payload;
       const fileKey: FileKey = file === "mmproj" ? "mmproj" : "model";
@@ -192,16 +214,23 @@ export function ModelPanel({ onRepairRuntime, onStatusChange, refreshToken }: Mo
       setMlxProgress({ status: "running", percent: 0, detail: "准备下载…" });
       try {
         await invoke<string>("download_mlx_model", { force: true });
+        if (!mountedRef.current) {
+          return;
+        }
         setMlxProgress({ status: "done", percent: 100, detail: "下载完成" });
         const nextStatus = await refresh();
-        if (mountedRef.current) {
+        if (mountedRef.current && nextStatus) {
           onStatusChange?.(nextStatus);
         }
-      } catch (error) {
-        setDownloadError(String(error));
-        setMlxProgress({ status: "idle", percent: 0, detail: "" });
+      } catch {
+        if (mountedRef.current) {
+          setDownloadError("实验模型下载失败，请重试。");
+          setMlxProgress({ status: "idle", percent: 0, detail: "" });
+        }
       } finally {
-        setDownloading(false);
+        if (mountedRef.current) {
+          setDownloading(false);
+        }
       }
       return;
     }
@@ -213,45 +242,60 @@ export function ModelPanel({ onRepairRuntime, onStatusChange, refreshToken }: Mo
       mmproj: { status: "waiting", percent: 0, downloaded: 0, speedMbps: null, detail: "等待主模型完成…" },
     });
     try {
-      const settings = await loadSettings();
-      await saveSettings({ ...settings, ggufModelVariant: selectedVariant });
+      await updateSettings({ ggufModelVariant: selectedVariant });
+      if (!mountedRef.current) {
+        return;
+      }
       await invoke<string>("download_model", { force: true });
+      if (!mountedRef.current) {
+        return;
+      }
       const expectedBytes = expectedGgufBytesForVariant(selectedVariant);
       setFileProgress({
         model: { status: "done", percent: 100, downloaded: expectedBytes.model, speedMbps: null, detail: "下载完成" },
         mmproj: { status: "done", percent: 100, downloaded: expectedBytes.mmproj, speedMbps: null, detail: "下载完成" },
       });
       const nextStatus = await refresh();
-      if (mountedRef.current) {
+      if (mountedRef.current && nextStatus) {
         onStatusChange?.(nextStatus);
       }
-    } catch (error) {
-      setDownloadError(String(error));
-      setFileProgress(createIdleProgress());
+    } catch {
+      if (mountedRef.current) {
+        setDownloadError("模型下载失败，请重试。");
+        setFileProgress(createIdleProgress());
+      }
     } finally {
-      setDownloading(false);
+      if (mountedRef.current) {
+        setDownloading(false);
+      }
     }
   }
 
   async function selectVariant(variant: GgufModelVariant) {
-    if (variant === selectedVariant || downloading) {
+    if (variant === selectedVariant || downloading || refreshingStatus || statusError) {
       return;
     }
     setSelectedVariant(variant);
     setSavingVariant(variant);
     setDownloadError("");
     try {
-      const settings = await loadSettings();
-      await saveSettings({ ...settings, ggufModelVariant: variant });
+      await updateSettings({ ggufModelVariant: variant });
+      if (!mountedRef.current) {
+        return;
+      }
       setFileProgress(createIdleProgress());
       const nextStatus = await refresh();
-      if (mountedRef.current) {
+      if (mountedRef.current && nextStatus) {
         onStatusChange?.(nextStatus);
       }
-    } catch (error) {
-      setDownloadError(String(error));
+    } catch {
+      if (mountedRef.current) {
+        setDownloadError("无法保存模型档位，请重试。");
+      }
     } finally {
-      setSavingVariant(null);
+      if (mountedRef.current) {
+        setSavingVariant(null);
+      }
     }
   }
 
@@ -316,7 +360,9 @@ export function ModelPanel({ onRepairRuntime, onStatusChange, refreshToken }: Mo
                 type="button"
                 className={`model-variant-option${selected ? " is-selected" : ""}`}
                 title={`${spec.modelName}\n${spec.description}\n模型 ${formatBytes(spec.modelBytes)}，配套文件 ${formatBytes(1_108_746_944)}，${spec.memoryHint}`}
-                disabled={downloading || savingVariant !== null}
+                disabled={
+                  downloading || savingVariant !== null || refreshingStatus || !!statusError
+                }
                 onClick={() => void selectVariant(variant)}
               >
                 <span className="model-variant-option__head">
@@ -347,9 +393,10 @@ export function ModelPanel({ onRepairRuntime, onStatusChange, refreshToken }: Mo
               </li>
             ))}
           </ul>
-        ) : (
+        ) : !statusError ? (
           <p className="placeholder-copy">正在读取模型状态…</p>
-        )}
+        ) : null}
+        {statusError ? <p className="onboarding-error">{statusError}</p> : null}
       </section>
 
       <section className="surface model-panel__actions-card">
@@ -362,7 +409,7 @@ export function ModelPanel({ onRepairRuntime, onStatusChange, refreshToken }: Mo
           <button
             type="button"
             className="settings-btn settings-btn--primary"
-            disabled={downloading || !runtimeReady}
+            disabled={downloading || refreshingStatus || !!statusError || !runtimeReady}
             onClick={() => void downloadModel()}
           >
             {downloading ? "下载中…" : isMlx ? "下载实验模型" : "下载 / 更新模型"}

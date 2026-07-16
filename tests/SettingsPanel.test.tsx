@@ -5,7 +5,7 @@ import { SettingsPanel } from "../src/settings/SettingsPanel";
 import {
   createDefaultSettings,
   loadSettings,
-  saveSettings,
+  updateSettings,
 } from "../src/settings/settingsStore";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -15,7 +15,7 @@ vi.mock("../src/settings/settingsStore", async (importOriginal) => {
   return {
     ...actual,
     loadSettings: vi.fn(),
-    saveSettings: vi.fn(),
+    updateSettings: vi.fn(),
   };
 });
 
@@ -26,6 +26,11 @@ describe("SettingsPanel", () => {
       ...createDefaultSettings(),
       onboardingComplete: true,
     });
+    vi.mocked(updateSettings).mockImplementation(async (patch) => ({
+      ...createDefaultSettings(),
+      onboardingComplete: true,
+      ...patch,
+    }));
   });
 
   it("keeps one loaded form and its edits while switching between general and shortcut", async () => {
@@ -45,21 +50,12 @@ describe("SettingsPanel", () => {
     expect(loadSettings).toHaveBeenCalledTimes(1);
   });
 
-  it("fresh-merges its owned fields when saving and does not register event listeners", async () => {
+  it("saves only its owned fields through the serialized settings API", async () => {
     const initial = {
       ...createDefaultSettings(),
       onboardingComplete: true,
     };
-    const concurrentlyUpdated = {
-      ...initial,
-      inferenceBackend: "mlx" as const,
-      mlxModelId: "mlx-community/updated-model",
-      downloadMirror: "modelscope" as const,
-      ggufModelVariant: "q6_k" as const,
-    };
-    vi.mocked(loadSettings)
-      .mockResolvedValueOnce(initial)
-      .mockResolvedValueOnce(concurrentlyUpdated);
+    vi.mocked(loadSettings).mockResolvedValue(initial);
 
     render(<SettingsPanel view="general" />);
     fireEvent.change(await screen.findByRole("combobox", { name: "外观主题" }), {
@@ -68,14 +64,14 @@ describe("SettingsPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
 
     await waitFor(() =>
-      expect(saveSettings).toHaveBeenCalledWith({
-        ...concurrentlyUpdated,
+      expect(updateSettings).toHaveBeenCalledWith({
         theme: "dark",
         shortcut: initial.shortcut,
         captureRetention: initial.captureRetention,
         backgroundWarmup: initial.backgroundWarmup,
       }),
     );
+    expect(loadSettings).toHaveBeenCalledTimes(1);
     expect(listen).not.toHaveBeenCalled();
   });
 });

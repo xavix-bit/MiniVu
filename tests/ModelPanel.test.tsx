@@ -4,7 +4,11 @@ import { listen } from "@tauri-apps/api/event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ModelPanel } from "../src/settings/ModelPanel";
 import type { ModelStatusResponse } from "../src/model/types";
-import { loadSettings, saveSettings } from "../src/settings/settingsStore";
+import {
+  loadSettings,
+  saveSettings,
+  updateSettings,
+} from "../src/settings/settingsStore";
 
 const { getModelStatus } = vi.hoisted(() => ({
   getModelStatus: vi.fn(),
@@ -21,6 +25,7 @@ vi.mock("../src/settings/settingsStore", async (importOriginal) => {
     ...actual,
     loadSettings: vi.fn(),
     saveSettings: vi.fn(),
+    updateSettings: vi.fn(),
   };
 });
 
@@ -43,6 +48,14 @@ function createStatus(overrides: Partial<ModelStatusResponse> = {}): ModelStatus
     mlxRequiresNetwork: false,
     ...overrides,
   };
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 describe("ModelPanel", () => {
@@ -70,6 +83,10 @@ describe("ModelPanel", () => {
       mlxModelId: "mlx-community/MiniCPM-V-4.6-4bit",
     });
     vi.mocked(saveSettings).mockResolvedValue(undefined);
+    vi.mocked(updateSettings).mockImplementation(async (patch) => ({
+      ...(await vi.mocked(loadSettings)()),
+      ...patch,
+    }));
   });
 
   it("registers once and disposes a listener that resolves after unmount", async () => {
@@ -178,6 +195,117 @@ describe("ModelPanel", () => {
     expect(cleanup).toHaveBeenCalledTimes(1);
   });
 
+  it("shows a recoverable product message when status loading fails", async () => {
+    getModelStatus.mockRejectedValueOnce(
+      new Error("get_model_status IPC rejected: sidecar socket 18765"),
+    );
+
+    render(<ModelPanel />);
+
+    expect(await screen.findByText("暂时无法读取模型状态，请重试。")).toBeVisible();
+    expect(screen.queryByText(/IPC|sidecar|18765/)).not.toBeInTheDocument();
+
+    getModelStatus.mockResolvedValueOnce(createStatus());
+    fireEvent.click(screen.getByRole("button", { name: "刷新状态" }));
+
+    expect(await screen.findByText("主模型 · 均衡")).toBeVisible();
+    expect(screen.queryByText("暂时无法读取模型状态，请重试。")).not.toBeInTheDocument();
+
+    getModelStatus.mockRejectedValueOnce(new Error("stale backend socket closed"));
+    fireEvent.click(screen.getByRole("button", { name: "刷新状态" }));
+
+    expect(await screen.findByText("暂时无法读取模型状态，请重试。")).toBeVisible();
+    expect(screen.getByText("主模型 · 均衡")).toBeVisible();
+    expect(screen.getByRole("button", { name: "下载 / 更新模型" })).toBeDisabled();
+    expect(screen.queryByText(/stale backend|socket closed/)).not.toBeInTheDocument();
+  });
+
+  it("ignores an older refresh that resolves after the latest request", async () => {
+    const older = createDeferred<ModelStatusResponse>();
+    const latest = createDeferred<ModelStatusResponse>();
+    const onStatusChange = vi.fn();
+    getModelStatus
+      .mockReturnValueOnce(older.promise)
+      .mockReturnValueOnce(latest.promise);
+
+    const { rerender } = render(
+      <ModelPanel refreshToken={0} onStatusChange={onStatusChange} />,
+    );
+    await waitFor(() => expect(getModelStatus).toHaveBeenCalledTimes(1));
+
+    rerender(<ModelPanel refreshToken={1} onStatusChange={onStatusChange} />);
+    await waitFor(() => expect(getModelStatus).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      latest.resolve(
+        createStatus({
+          ggufModelVariant: "q6_k",
+          modelDownloaded: false,
+          modelReady: false,
+        }),
+      );
+      await latest.promise;
+    });
+    expect(await screen.findByText("主模型 · 高质量")).toBeVisible();
+    expect(screen.getByText("需要下载模型")).toBeVisible();
+
+    await act(async () => {
+      older.resolve(createStatus({ ggufModelVariant: "q4_k_m" }));
+      await older.promise;
+    });
+
+    expect(screen.getByText("主模型 · 高质量")).toBeVisible();
+    expect(screen.queryByText("主模型 · 均衡")).not.toBeInTheDocument();
+    expect(onStatusChange).not.toHaveBeenCalled();
+    expect(listen).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not emit a callback from a stale action refresh", async () => {
+    const actionRefresh = createDeferred<ModelStatusResponse>();
+    const tokenRefresh = createDeferred<ModelStatusResponse>();
+    const onStatusChange = vi.fn();
+    getModelStatus
+      .mockResolvedValueOnce(
+        createStatus({
+          modelReady: false,
+          modelDownloaded: false,
+          mmprojDownloaded: false,
+        }),
+      )
+      .mockReturnValueOnce(actionRefresh.promise)
+      .mockReturnValueOnce(tokenRefresh.promise);
+
+    const { rerender } = render(
+      <ModelPanel refreshToken={0} onStatusChange={onStatusChange} />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "下载 / 更新模型" }));
+    await waitFor(() => expect(getModelStatus).toHaveBeenCalledTimes(2));
+
+    rerender(<ModelPanel refreshToken={1} onStatusChange={onStatusChange} />);
+    await waitFor(() => expect(getModelStatus).toHaveBeenCalledTimes(3));
+
+    await act(async () => {
+      tokenRefresh.resolve(
+        createStatus({
+          ggufModelVariant: "q6_k",
+          modelDownloaded: false,
+          modelReady: false,
+        }),
+      );
+      await tokenRefresh.promise;
+    });
+    expect(await screen.findByText("主模型 · 高质量")).toBeVisible();
+
+    await act(async () => {
+      actionRefresh.resolve(createStatus({ ggufModelVariant: "q4_k_m" }));
+      await actionRefresh.promise;
+    });
+
+    expect(screen.getByText("主模型 · 高质量")).toBeVisible();
+    expect(onStatusChange).not.toHaveBeenCalled();
+    expect(listen).toHaveBeenCalledTimes(1);
+  });
+
   it("offers an inline repair task without exposing paths or process status", async () => {
     const missingComponent = createStatus({
       modelReady: false,
@@ -220,10 +348,9 @@ describe("ModelPanel", () => {
     fireEvent.click(await screen.findByRole("button", { name: /高质量/ }));
 
     await waitFor(() =>
-      expect(saveSettings).toHaveBeenCalledWith(
-        expect.objectContaining({ ggufModelVariant: "q6_k" }),
-      ),
+      expect(updateSettings).toHaveBeenCalledWith({ ggufModelVariant: "q6_k" }),
     );
+    expect(saveSettings).not.toHaveBeenCalled();
     await waitFor(() => expect(onStatusChange).toHaveBeenCalledWith(refreshed));
   });
 
@@ -251,5 +378,40 @@ describe("ModelPanel", () => {
     );
     await waitFor(() => expect(onStatusChange).toHaveBeenCalledWith(refreshed));
     expect(listen).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops a deferred model action from updating after unmount", async () => {
+    const download = createDeferred<void>();
+    getModelStatus.mockResolvedValue(
+      createStatus({
+        inferenceBackend: "mlx",
+        modelReady: false,
+        mlxRuntimeAvailable: true,
+        mlxModelReady: false,
+      }),
+    );
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "download_mlx_model") {
+        await download.promise;
+      }
+      return undefined;
+    });
+    const onStatusChange = vi.fn();
+
+    const { unmount } = render(<ModelPanel onStatusChange={onStatusChange} />);
+    fireEvent.click(await screen.findByRole("button", { name: "下载实验模型" }));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("download_mlx_model", { force: true }),
+    );
+    unmount();
+
+    await act(async () => {
+      download.resolve(undefined);
+      await download.promise;
+      await Promise.resolve();
+    });
+
+    expect(getModelStatus).toHaveBeenCalledTimes(1);
+    expect(onStatusChange).not.toHaveBeenCalled();
   });
 });

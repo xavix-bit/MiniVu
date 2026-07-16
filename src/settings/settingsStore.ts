@@ -69,3 +69,19 @@ export async function saveSettings(settings: AppSettings): Promise<void> {
   const { invoke } = await import("@tauri-apps/api/core");
   await invoke("save_app_settings", { settings });
 }
+
+let settingsUpdateQueue: Promise<unknown> = Promise.resolve();
+
+export function updateSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
+  const update = settingsUpdateQueue.then(async () => {
+    const current = await loadSettings();
+    const committed = { ...current, ...patch };
+    await saveSettings(committed);
+    return committed;
+  });
+  settingsUpdateQueue = update.then(
+    () => undefined,
+    () => undefined,
+  );
+  return update;
+}

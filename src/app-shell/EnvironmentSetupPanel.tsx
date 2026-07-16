@@ -100,9 +100,22 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
   }, [phase, onSetupSucceeded]);
 
   useEffect(() => {
+    let disposed = false;
     const unlisteners: Array<() => void> = [];
+    const register = (registration: Promise<() => void>) => {
+      void registration.then((cleanup) => {
+        if (disposed) {
+          cleanup();
+        } else {
+          unlisteners.push(cleanup);
+        }
+      });
+    };
 
-    void listen<SetupProgress>("setup-progress", (event) => {
+    register(listen<SetupProgress>("setup-progress", (event) => {
+      if (disposed) {
+        return;
+      }
       const payload = event.payload;
       const status =
         payload.status === "error"
@@ -123,9 +136,9 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
           speedMbps: status === "running" ? undefined : null,
         }),
       );
-    }).then((cleanup) => unlisteners.push(cleanup));
+    }));
 
-    void listen<{
+    register(listen<{
       file: string;
       status?: string;
       message?: string;
@@ -135,6 +148,9 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
       source?: string;
       speedMbps?: number;
     }>("model-download-progress", (event) => {
+      if (disposed) {
+        return;
+      }
       const { file, status: downloadStatus, message, downloaded, total, source, speedMbps } =
         event.payload;
 
@@ -237,9 +253,10 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
           speedMbps: speed,
         });
       });
-    }).then((cleanup) => unlisteners.push(cleanup));
+    }));
 
     return () => {
+      disposed = true;
       for (const cleanup of unlisteners) {
         cleanup();
       }
@@ -269,8 +286,8 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
       if (!showWelcome) {
         onComplete?.();
       }
-    } catch (error) {
-      setInstallError(String(error));
+    } catch {
+      setInstallError("模型配置失败，请重试。");
       setPhase("error");
     }
   }
