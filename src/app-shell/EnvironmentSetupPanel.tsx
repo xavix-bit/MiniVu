@@ -171,7 +171,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
       }
 
       const phaseKey = file === "mmproj" ? "mmproj" : "model";
-      const label = file === "mmproj" ? "视觉投影器" : "主模型";
+      const label = file === "mmproj" ? "配套文件" : "主模型";
 
       if (downloadStatus === "waiting") {
         setProgress((current) =>

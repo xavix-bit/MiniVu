@@ -7,7 +7,9 @@ import {
   type SettingsSection,
 } from "./SettingsNavigationPane";
 import { PrivacyNotice } from "../privacy/PrivacyNotice";
+import { modelClient } from "../model/modelClient";
 import { ModelPanel } from "../settings/ModelPanel";
+import { ModelPreferencesPanel } from "../settings/ModelPreferencesPanel";
 import { SettingsPanel } from "../settings/SettingsPanel";
 import { loadSettings } from "../settings/settingsStore";
 import { WorkbenchShell } from "../workbench/WorkbenchShell";
@@ -29,7 +31,7 @@ const PAGE_META: Record<SettingsSection, { title: string; subtitle: string }> = 
 function SubpageLead({ section }: { section: SettingsSection }) {
   const meta = PAGE_META[section];
   return (
-    <header className="page-header">
+    <header className="page-header page-header--compact">
       <h1 className="page-header__title">{meta.title}</h1>
       {meta.subtitle ? <p className="page-header__subtitle">{meta.subtitle}</p> : null}
     </header>
@@ -47,6 +49,8 @@ export function MainWindowShell() {
   const [workbenchScope, setWorkbenchScope] = useState<WorkbenchScope>("recent");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("setup");
   const [warmupNotice, setWarmupNotice] = useState("");
+  const [runtimeRepairOpen, setRuntimeRepairOpen] = useState(false);
+  const [modelRefreshToken, setModelRefreshToken] = useState(0);
 
   useEffect(() => {
     document.documentElement.classList.add("main-window");
@@ -132,9 +136,30 @@ export function MainWindowShell() {
     setOnboardingDone(true);
   }, []);
 
-  const handleOpenSetup = useCallback(() => {
-    handleSettingsNavigate("setup");
-  }, [handleSettingsNavigate]);
+  const refreshEnvironmentStatus = useCallback(async () => {
+    try {
+      const status = await modelClient.getEnvironmentStatus();
+      if (typeof status.onboardingComplete === "boolean") {
+        setOnboardingDone(status.onboardingComplete);
+      }
+    } catch {
+      // The active settings view remains usable if a status refresh fails.
+    }
+  }, []);
+
+  const handleModelPreferencesSaved = useCallback(() => {
+    setModelRefreshToken((current) => current + 1);
+  }, []);
+
+  const handleRepairRuntime = useCallback(() => {
+    setRuntimeRepairOpen(true);
+  }, []);
+
+  const handleRuntimeRepairSucceeded = useCallback(() => {
+    setRuntimeRepairOpen(false);
+    setModelRefreshToken((current) => current + 1);
+    void refreshEnvironmentStatus();
+  }, [refreshEnvironmentStatus]);
 
   const handleWorkbenchCapture = useCallback(async () => {
     const image = await captureScreenRegion();
@@ -204,11 +229,13 @@ export function MainWindowShell() {
                   >
                     <SubpageLead section="setup" />
                     <div className="settings-page-body">
-                      <EnvironmentSetupPanel
-                        showWelcome={!onboardingDone}
-                        onComplete={handleSetupComplete}
-                        onSetupSucceeded={handleSetupSucceeded}
-                      />
+                      {activeSection === "setup" ? (
+                        <EnvironmentSetupPanel
+                          showWelcome={!onboardingDone}
+                          onComplete={handleSetupComplete}
+                          onSetupSucceeded={handleSetupSucceeded}
+                        />
+                      ) : null}
                     </div>
                   </div>
 
@@ -218,8 +245,23 @@ export function MainWindowShell() {
                     inert={activeSection !== "model"}
                   >
                     <SubpageLead section="model" />
-                    <div className="settings-page-body">
-                      <ModelPanel onOpenSetup={handleOpenSetup} />
+                    <div className="settings-page-body unified-settings-detail">
+                      {activeSection !== "setup" ? (
+                        <div className="unified-settings-surface">
+                          <ModelPreferencesPanel onSaved={handleModelPreferencesSaved} />
+                          <ModelPanel
+                            onRepairRuntime={handleRepairRuntime}
+                            onStatusChange={() => void refreshEnvironmentStatus()}
+                            refreshToken={modelRefreshToken}
+                          />
+                          {runtimeRepairOpen ? (
+                            <EnvironmentSetupPanel
+                              showWelcome={false}
+                              onSetupSucceeded={handleRuntimeRepairSucceeded}
+                            />
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
                   </div>
 
@@ -229,8 +271,10 @@ export function MainWindowShell() {
                     inert={!preferencesActive}
                   >
                     <SubpageLead section={activeSection === "shortcut" ? "shortcut" : "general"} />
-                    <div className="settings-page-body">
-                      <SettingsPanel />
+                    <div className="settings-page-body unified-settings-detail">
+                      <div className="unified-settings-surface">
+                        <SettingsPanel view={activeSection === "shortcut" ? "shortcut" : "general"} />
+                      </div>
                     </div>
                   </div>
 
@@ -240,8 +284,10 @@ export function MainWindowShell() {
                     inert={activeSection !== "privacy"}
                   >
                     <SubpageLead section="privacy" />
-                    <div className="settings-page-body">
-                      <PrivacyNotice />
+                    <div className="settings-page-body unified-settings-detail">
+                      <div className="unified-settings-surface">
+                        <PrivacyNotice />
+                      </div>
                     </div>
                   </div>
                 </div>

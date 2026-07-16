@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { modelClient } from "../model/modelClient";
@@ -10,8 +10,9 @@ import { loadSettings, saveSettings, type GgufModelVariant } from "./settingsSto
 type ModelStatus = ModelStatusResponse;
 
 type ModelPanelProps = {
-  onOpenSetup?: () => void;
-  onStatusChange?: () => void;
+  onRepairRuntime?: () => void;
+  onStatusChange?: (status: ModelStatusResponse) => void;
+  refreshToken?: number;
 };
 
 type FileKey = "model" | "mmproj";
@@ -32,7 +33,7 @@ type FileProgressState = {
 
 const FILE_LABELS: Record<"model" | "mmproj", string> = {
   model: "主模型",
-  mmproj: "视觉投影器",
+  mmproj: "配套文件",
 };
 
 function createIdleProgress(): Record<"model" | "mmproj", FileProgressState> {
@@ -42,14 +43,9 @@ function createIdleProgress(): Record<"model" | "mmproj", FileProgressState> {
   };
 }
 
-function shortenPath(path: string) {
-  if (path.length <= 56) {
-    return path;
-  }
-  return `…${path.slice(-52)}`;
-}
-
-export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
+export function ModelPanel({ onRepairRuntime, onStatusChange, refreshToken }: ModelPanelProps) {
+  const mountedRef = useRef(false);
+  const previousRefreshTokenRef = useRef(refreshToken);
   const [status, setStatus] = useState<ModelStatus | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [selectedVariant, setSelectedVariant] = useState<GgufModelVariant>("q4_k_m");
@@ -64,12 +60,17 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
 
   async function refresh() {
     const next = await modelClient.getModelStatus();
-    setStatus(next);
-    setSelectedVariant(next.ggufModelVariant);
+    if (mountedRef.current) {
+      setStatus(next);
+      setSelectedVariant(next.ggufModelVariant);
+    }
+    return next;
   }
 
   useEffect(() => {
+    mountedRef.current = true;
     void refresh();
+    let disposed = false;
     let unlisten: (() => void) | undefined;
     void listen<{
       file: string;
@@ -155,10 +156,26 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
         };
       });
     }).then((cleanup) => {
-      unlisten = cleanup;
+      if (disposed) {
+        cleanup();
+      } else {
+        unlisten = cleanup;
+      }
     });
-    return () => unlisten?.();
+    return () => {
+      mountedRef.current = false;
+      disposed = true;
+      unlisten?.();
+    };
   }, []);
+
+  useEffect(() => {
+    if (previousRefreshTokenRef.current === refreshToken) {
+      return;
+    }
+    previousRefreshTokenRef.current = refreshToken;
+    void refresh();
+  }, [refreshToken]);
 
   async function downloadModel() {
     const runtimeReady =
@@ -166,7 +183,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
         ? status?.mlxRuntimeAvailable
         : status?.llamaServerAvailable;
     if (!runtimeReady) {
-      onOpenSetup?.();
+      onRepairRuntime?.();
       return;
     }
     if (status?.inferenceBackend === "mlx") {
@@ -176,8 +193,10 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
       try {
         await invoke<string>("download_mlx_model", { force: true });
         setMlxProgress({ status: "done", percent: 100, detail: "下载完成" });
-        await refresh();
-        onStatusChange?.();
+        const nextStatus = await refresh();
+        if (mountedRef.current) {
+          onStatusChange?.(nextStatus);
+        }
       } catch (error) {
         setDownloadError(String(error));
         setMlxProgress({ status: "idle", percent: 0, detail: "" });
@@ -202,8 +221,10 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
         model: { status: "done", percent: 100, downloaded: expectedBytes.model, speedMbps: null, detail: "下载完成" },
         mmproj: { status: "done", percent: 100, downloaded: expectedBytes.mmproj, speedMbps: null, detail: "下载完成" },
       });
-      await refresh();
-      onStatusChange?.();
+      const nextStatus = await refresh();
+      if (mountedRef.current) {
+        onStatusChange?.(nextStatus);
+      }
     } catch (error) {
       setDownloadError(String(error));
       setFileProgress(createIdleProgress());
@@ -223,8 +244,10 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
       const settings = await loadSettings();
       await saveSettings({ ...settings, ggufModelVariant: variant });
       setFileProgress(createIdleProgress());
-      await refresh();
-      onStatusChange?.();
+      const nextStatus = await refresh();
+      if (mountedRef.current) {
+        onStatusChange?.(nextStatus);
+      }
     } catch (error) {
       setDownloadError(String(error));
     } finally {
@@ -240,54 +263,42 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
     ? isMlx
       ? [
           {
-            label: "实验加速包",
+            label: "加速组件",
             value: status.mlxRuntimeAvailable ? "已安装" : "未安装",
             ok: status.mlxRuntimeAvailable,
             meta: "实验加速",
           },
           {
             label: "实验模型",
-            value: status.mlxModelReady ? "已下载" : "未下载",
+            value: status.mlxModelReady ? "模型已下载" : "需要下载模型",
             ok: status.mlxModelReady,
-            meta: shortenPath(status.mlxModelId),
-          },
-          {
-            label: "问图准备",
-            value: status.sidecarRunning ? "使用中" : "需要时启动",
-            ok: status.sidecarRunning,
-            meta: status.mlxModelReady ? "权重已缓存" : "需先下载权重",
+            meta: status.mlxModelId,
           },
         ]
       : [
           {
             label: `主模型 · ${selectedVariantSpec.label}`,
-            value: status.modelDownloaded ? "已下载" : "未下载",
+            value: status.modelDownloaded ? "模型已下载" : "需要下载模型",
             ok: status.modelDownloaded,
-            meta: status.modelPath ? shortenPath(status.modelPath) : "—",
+            meta: `${selectedVariantSpec.modelName} · 下载 ${formatBytes(selectedVariantSpec.modelBytes)}`,
           },
           {
             label: "配套文件",
             value: status.mmprojDownloaded ? "已下载" : "未下载",
             ok: status.mmprojDownloaded,
-            meta: status.mmprojPath ? shortenPath(status.mmprojPath) : "—",
-          },
-          {
-            label: "问图准备",
-            value: status.sidecarRunning ? "使用中" : "需要时启动",
-            ok: status.sidecarRunning,
-            meta: status.modelSize ? `合计 ${status.modelSize}` : "—",
+            meta: `下载 ${formatBytes(1_108_746_944)}${status.modelSize ? ` · 已安装合计 ${status.modelSize}` : ""}`,
           },
         ]
     : [];
 
   return (
     <div className="model-panel">
-      {!runtimeReady ? (
+      {status && !runtimeReady ? (
         <div className="callout callout--attention" role="status">
-          <p>{isMlx ? "加速组件未安装。" : "基础组件还没准备好。"}</p>
-          {onOpenSetup ? (
-            <button type="button" className="callout__action" onClick={onOpenSetup}>
-              去初始设置
+          <p>模型组件需要修复后才能下载。</p>
+          {onRepairRuntime ? (
+            <button type="button" className="callout__action" onClick={onRepairRuntime}>
+              修复模型组件
             </button>
           ) : null}
         </div>
@@ -304,7 +315,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
                 key={variant}
                 type="button"
                 className={`model-variant-option${selected ? " is-selected" : ""}`}
-                title={`${spec.modelName}\n${spec.description}\n模型 ${formatBytes(spec.modelBytes)}，共享配套文件 ${formatBytes(1_108_746_944)}，${spec.memoryHint}`}
+                title={`${spec.modelName}\n${spec.description}\n模型 ${formatBytes(spec.modelBytes)}，配套文件 ${formatBytes(1_108_746_944)}，${spec.memoryHint}`}
                 disabled={downloading || savingVariant !== null}
                 onClick={() => void selectVariant(variant)}
               >
@@ -315,7 +326,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
                 <span className="model-variant-option__name">{spec.modelName}</span>
                 <span className="model-variant-option__desc">{spec.description}</span>
                 <span className="model-variant-option__meta">
-                  模型 {formatBytes(spec.modelBytes)} · 共享文件 1.0 GB · {spec.memoryHint}
+                  模型 {formatBytes(spec.modelBytes)} · 配套文件 1.0 GB · {spec.memoryHint}
                 </span>
               </button>
             );
@@ -323,7 +334,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
         </section>
       ) : null}
 
-      <section className="surface model-panel__files" aria-label="模型文件">
+      <section className="surface model-panel__files" aria-label="模型状态">
         {status ? (
           <ul className="model-file-list">
             {fileItems.map((item) => (
@@ -332,7 +343,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
                   <span className="model-file-list__label">{item.label}</span>
                   <strong className={`model-file-list__value${item.ok ? " is-positive" : ""}`}>{item.value}</strong>
                 </div>
-                <span className="model-file-list__path">{item.meta}</span>
+                <span className="model-file-list__meta">{item.meta}</span>
               </li>
             ))}
           </ul>
@@ -410,7 +421,7 @@ export function ModelPanel({ onOpenSetup, onStatusChange }: ModelPanelProps) {
           </div>
         ) : null}
         <p className="field-hint">
-          {isMlx ? "模型来源在「偏好设置 → 问图方式」。" : "配套文件会自动准备。"}
+          {isMlx ? "模型下载完成后即可使用实验加速。" : "配套文件会自动准备。"}
         </p>
       </section>
     </div>

@@ -2461,7 +2461,7 @@
   }
 }
 
-/* Unified shell semantics override the legacy light-only product pass above. */
+/* Compact task settings inside the unified workbench. */
 .unified-app-shell .settings-app {
   color-scheme: light;
 }
@@ -2476,114 +2476,480 @@
   }
 }
 
-.unified-app-shell .settings-app :is(
-  .page-header,
-  .surface,
-  .ui-card,
-  .callout,
-  .settings-card,
+.unified-app-shell .page-header.page-header--compact {
+  width: min(100%, 760px);
+  margin: 0 auto;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.unified-app-shell .page-header.page-header--compact::after {
+  display: none;
+}
+
+.unified-app-shell .page-header--compact .page-header__title {
+  margin: 0;
+  color: var(--wb-text);
+  font-family: var(--font-ui);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.3;
+}
+
+.unified-settings-detail {
+  width: min(100%, 760px);
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 0 0 24px;
+}
+
+.unified-settings-detail .unified-settings-surface {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+  background: var(--wb-panel);
+  color: var(--wb-text);
+  box-shadow: none;
+}
+
+.unified-settings-detail .unified-settings-surface > * {
+  min-width: 0;
+}
+
+.unified-settings-detail .unified-settings-surface > * + * {
+  border-top: 1px solid var(--wb-border);
+}
+
+.unified-settings-detail :is(
+  .settings-form--stack,
+  .model-panel,
   .setup-panel,
+  .privacy-product
+) {
+  display: grid;
+  gap: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.unified-settings-detail :is(
+  .settings-form--stack > .settings-section,
+  .settings-form--stack > .settings-form__footer,
+  .model-variant-picker,
   .model-panel__files,
   .model-panel__actions-card,
+  .setup-panel,
+  .callout,
   .privacy-product__hero,
-  .privacy-product__grid article,
-  .setup-panel__metrics li,
-  .setup-panel__success .onboarding-checklist li,
-  .model-file-list__item,
-  .model-variant-option,
-  .model-download-progress__item
+  .privacy-product__grid article
 ) {
-  border-color: var(--wb-border);
-  background: var(--wb-panel);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.unified-settings-detail .settings-form--stack > .settings-section {
+  display: grid;
+  gap: 0;
+  padding: 0;
+}
+
+.unified-settings-detail .settings-section__title {
+  margin: 0;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--wb-border);
   color: var(--wb-text);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.4;
+  text-transform: none;
 }
 
-.unified-app-shell .settings-page-shell:not(.settings-page-shell--home) .page-header {
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--wb-accent) 10%, transparent), transparent 48%),
-    var(--wb-panel);
+.unified-settings-detail .settings-field {
+  display: grid;
+  grid-template-columns: 172px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px 16px;
+  min-height: 68px;
+  padding: 14px 20px;
+  border: 0;
+  border-bottom: 1px solid var(--wb-border);
 }
 
-.unified-app-shell .settings-page-shell:not(.settings-page-shell--home) .page-header::after {
-  border-color: color-mix(in srgb, var(--wb-accent) 20%, var(--wb-border));
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--wb-accent) 18%, transparent) 1px, transparent 1px),
-    linear-gradient(color-mix(in srgb, var(--wb-accent) 14%, transparent) 1px, transparent 1px),
-    var(--wb-input);
+.unified-settings-detail .settings-field:last-child {
+  padding-bottom: 14px;
+  border-bottom: 0;
 }
 
-.unified-app-shell .settings-form--stack > .settings-section,
-.unified-app-shell .settings-form--stack > .settings-form__footer {
-  border-color: var(--wb-border);
-  background: var(--wb-panel);
+.unified-settings-detail .settings-field > :is(span, label):first-child {
+  grid-column: 1;
+  padding: 0;
   color: var(--wb-text);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.4;
 }
 
-.unified-app-shell .settings-app :is(
-  .settings-field input,
-  .settings-field select,
-  .path-picker input,
-  .shortcut-recorder__button,
-  .path-picker button,
-  .settings-btn--secondary
-) {
+.unified-settings-detail .settings-field > :is(input:not([type="checkbox"]), select),
+.unified-settings-detail .settings-field > :is(.shortcut-recorder, .settings-actions-row, .mirror-benchmark, .mirror-benchmark__results),
+.unified-settings-detail .settings-field > :is(.field-hint, .onboarding-error) {
+  grid-column: 2;
+  width: min(100%, 520px);
+  margin: 0;
+}
+
+.unified-settings-detail .settings-field input:not([type="checkbox"]),
+.unified-settings-detail .settings-field select {
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--wb-border-strong);
+  border-radius: 6px;
+  background: var(--wb-input);
+  color: var(--wb-text);
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+.unified-settings-detail .settings-field .field-hint,
+.unified-settings-detail :is(.model-file-list__label, .model-file-list__meta, .model-variant-option__desc, .model-variant-option__name, .model-variant-option__meta, .placeholder-copy) {
+  color: var(--wb-muted);
+}
+
+.unified-settings-detail .settings-field--checkbox {
+  grid-template-columns: 172px 22px minmax(0, 1fr);
+  align-items: center;
+}
+
+.unified-settings-detail .settings-field--checkbox > input[type="checkbox"] {
+  grid-column: 2;
+  grid-row: 1;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--wb-accent);
+}
+
+.unified-settings-detail .settings-field--checkbox > span:not(.field-hint) {
+  grid-column: 3;
+  grid-row: 1;
+  color: var(--wb-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.unified-settings-detail .settings-field--checkbox > .field-hint {
+  grid-column: 3;
+  width: 100%;
+}
+
+.unified-settings-detail .settings-form__footer {
+  display: flex;
+  min-height: 76px;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--wb-border);
+}
+
+.unified-settings-detail :is(.settings-btn, .shortcut-recorder__btn, .callout__action) {
+  min-height: 44px;
+  border-radius: 6px;
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+.unified-settings-detail :is(.settings-btn--secondary, .shortcut-recorder__btn) {
   border-color: var(--wb-border-strong);
   background: var(--wb-input);
   color: var(--wb-text);
 }
 
-.unified-app-shell .settings-app :is(
-  .model-variant-option:hover,
-  .path-picker button:hover,
-  .shortcut-recorder button:hover,
-  .settings-btn--secondary:hover:not(:disabled)
-) {
+.unified-settings-detail :is(.settings-btn--secondary, .shortcut-recorder__btn):hover:not(:disabled) {
   background: var(--wb-hover);
 }
 
-.unified-app-shell .settings-app :is(
-  .model-variant-option.is-selected,
-  .setup-panel__success .onboarding-checklist li.is-done
-) {
-  border-color: color-mix(in srgb, var(--wb-accent) 30%, var(--wb-border));
-  background: color-mix(in srgb, var(--wb-accent) 12%, var(--wb-panel));
+.unified-settings-detail :is(input, select, button):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 64%, transparent);
+  outline-offset: 2px;
+  box-shadow: none;
 }
 
-.unified-app-shell .settings-app :is(
-  .model-file-list__value,
-  .model-variant-option__head span,
-  .privacy-product__grid span,
-  .setup-panel__success-lead
-) {
+.unified-settings-detail .saved-message {
+  margin: 0;
+  color: var(--wb-accent);
+  font-size: 13px;
+}
+
+.unified-settings-detail .mirror-benchmark {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.unified-settings-detail .mirror-benchmark__results {
+  display: grid;
+  gap: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.unified-settings-detail .mirror-benchmark__item {
+  gap: 4px;
+  padding: 10px 0;
+  border: 0;
+  border-top: 1px solid var(--wb-border);
+  border-radius: 0;
+  background: transparent;
+}
+
+.unified-settings-detail .mirror-benchmark__item :is(strong, span) {
+  color: inherit;
+}
+
+.unified-settings-detail .model-panel > * + * {
+  border-top: 1px solid var(--wb-border);
+}
+
+.unified-settings-detail .callout {
+  display: flex;
+  min-height: 68px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 20px;
+  color: var(--wb-text);
+}
+
+.unified-settings-detail .callout--attention {
+  background: color-mix(in srgb, var(--surface-warm) 52%, var(--wb-panel));
+}
+
+.unified-settings-detail .callout p {
+  margin: 0;
+  color: inherit;
+}
+
+.unified-settings-detail .model-variant-picker {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 16px 20px;
+}
+
+.unified-settings-detail .model-variant-option {
+  min-width: 0;
+  min-height: 168px;
+  padding: 14px;
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+  background: var(--wb-input);
+  color: var(--wb-text);
+  box-shadow: none;
+  letter-spacing: 0;
+}
+
+.unified-settings-detail .model-variant-option:hover:not(:disabled) {
+  border-color: var(--wb-border-strong);
+  background: var(--wb-hover);
+}
+
+.unified-settings-detail .model-variant-option.is-selected {
+  border-color: color-mix(in srgb, var(--wb-accent) 54%, var(--wb-border));
+  background: color-mix(in srgb, var(--wb-accent) 10%, var(--wb-panel));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-accent) 18%, transparent);
+}
+
+.unified-settings-detail .model-variant-option__head span {
+  padding: 3px 6px;
+  border-radius: 4px;
   background: color-mix(in srgb, var(--wb-accent) 11%, var(--wb-panel));
   color: var(--wb-accent);
 }
 
-.unified-app-shell .settings-app :is(
-  .page-header__title,
-  .settings-section__title,
-  .settings-field > span:first-child,
-  .settings-field--checkbox > span:not(.field-hint),
-  .setup-panel__metrics strong,
-  .model-file-list__value,
-  .model-variant-option,
-  .privacy-product__hero h2,
-  .privacy-product__grid strong
-) {
+.unified-settings-detail .model-file-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.unified-settings-detail .model-file-list__item {
+  min-height: 76px;
+  padding: 16px 20px;
+  border: 0;
+  border-bottom: 1px solid var(--wb-border);
+  border-radius: 0;
+  background: transparent;
+}
+
+.unified-settings-detail .model-file-list__item:last-child {
+  border-bottom: 0;
+}
+
+.unified-settings-detail .model-file-list__label {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.unified-settings-detail .model-file-list__value {
+  padding: 0;
+  background: transparent;
+  color: var(--wb-text);
+  font-size: 13px;
+}
+
+.unified-settings-detail .model-file-list__value.is-positive {
+  color: var(--wb-accent);
+}
+
+.unified-settings-detail .model-file-list__meta {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.unified-settings-detail .model-panel__actions-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px 20px;
+}
+
+.unified-settings-detail .model-download-progress {
+  display: grid;
+  gap: 0;
+}
+
+.unified-settings-detail .model-download-progress__item {
+  padding: 12px 0;
+  border: 0;
+  border-top: 1px solid var(--wb-border);
+  border-radius: 0;
+  background: transparent;
+}
+
+.unified-settings-detail .setup-panel {
+  padding: 16px 20px;
+}
+
+.unified-settings-detail :is(.setup-panel__metrics, .onboarding-progress-list, .onboarding-checklist) {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+}
+
+.unified-settings-detail :is(.setup-panel__metrics li, .onboarding-progress-item, .onboarding-checklist li) {
+  min-height: 56px;
+  padding: 12px 0;
+  border: 0;
+  border-bottom: 1px solid var(--wb-border);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.unified-settings-detail .setup-panel__metrics li::before {
+  display: none;
+}
+
+.unified-settings-detail .privacy-product__hero {
+  padding: 18px 20px;
+}
+
+.unified-settings-detail .privacy-product__eyebrow {
+  margin: 0 0 6px;
+  color: var(--wb-accent);
+  font-size: 12px;
+}
+
+.unified-settings-detail .privacy-product__hero h2 {
+  margin: 0;
+  color: var(--wb-text);
+  font-size: 17px;
+  letter-spacing: 0;
+}
+
+.unified-settings-detail .privacy-product__grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+  border-top: 1px solid var(--wb-border);
+}
+
+.unified-settings-detail .privacy-product__grid article {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 4px 12px;
+  min-height: 76px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--wb-border);
+}
+
+.unified-settings-detail .privacy-product__grid article:last-child {
+  border-bottom: 0;
+}
+
+.unified-settings-detail .privacy-product__grid article span {
+  grid-row: 1 / span 2;
+  width: 42px;
+  height: 34px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--wb-accent) 11%, var(--wb-panel));
+  color: var(--wb-accent);
+}
+
+.unified-settings-detail .privacy-product__grid :is(strong, p) {
   color: var(--wb-text);
 }
 
-.unified-app-shell .settings-app :is(
-  .page-header__subtitle,
-  .settings-field .field-hint,
-  .setup-panel__metrics span,
-  .model-file-list__label,
-  .model-file-list__path,
-  .model-variant-option__desc,
-  .model-variant-option__name,
-  .model-variant-option__meta,
-  .privacy-product__hero p:last-child,
-  .privacy-product__grid p
-) {
+.unified-settings-detail .privacy-product__grid p {
   color: var(--wb-muted);
+}
+
+@media (max-width: 820px) {
+  .unified-settings-detail .settings-field {
+    grid-template-columns: 1fr;
+  }
+
+  .unified-settings-detail .settings-field > :is(span, label):first-child,
+  .unified-settings-detail .settings-field > :is(input:not([type="checkbox"]), select),
+  .unified-settings-detail .settings-field > :is(.shortcut-recorder, .settings-actions-row, .mirror-benchmark, .mirror-benchmark__results),
+  .unified-settings-detail .settings-field > :is(.field-hint, .onboarding-error) {
+    grid-column: 1;
+    width: 100%;
+  }
+
+  .unified-settings-detail .settings-field--checkbox {
+    grid-template-columns: 22px minmax(0, 1fr);
+  }
+
+  .unified-settings-detail .settings-field--checkbox > input[type="checkbox"] {
+    grid-column: 1;
+  }
+
+  .unified-settings-detail .settings-field--checkbox > span:not(.field-hint),
+  .unified-settings-detail .settings-field--checkbox > .field-hint {
+    grid-column: 2;
+  }
+
+  .unified-settings-detail .model-variant-picker {
+    grid-template-columns: 1fr;
+  }
 }
