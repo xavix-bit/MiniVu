@@ -44,7 +44,13 @@ function captureErrorCode(error: unknown): CaptureErrorCode {
   const normalized = message.toLocaleLowerCase();
   const mentionsScreenRecording = normalized.includes("屏幕录制")
     || /screen[ -]recording/.test(normalized);
-  const mentionsPermission = /允许|权限|授权|allow|permission|permit|grant/.test(normalized);
+  const mentionsOperationalFailure = /\b(?:busy|unavailable|unsupported)\b|service failure/.test(
+    normalized,
+  );
+  if (mentionsScreenRecording && mentionsOperationalFailure) {
+    return "unknown";
+  }
+  const mentionsPermission = /允许|权限|授权|allow|permission|permit|grant|access denied/.test(normalized);
   return mentionsScreenRecording && mentionsPermission ? "permission-denied" : "unknown";
 }
 

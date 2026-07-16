@@ -37,6 +37,51 @@ describe("captureScreenRegion", () => {
     expect(invoke).toHaveBeenCalledTimes(1);
   });
 
+  it("classifies denied Screen Recording access as permission-denied", async () => {
+    vi.mocked(invoke).mockRejectedValue("Screen recording access denied");
+
+    await expect(captureScreenRegion()).rejects.toMatchObject<CaptureError>({
+      code: "permission-denied",
+      message: "需要屏幕录制权限",
+    });
+  });
+
+  it("keeps a busy Screen Recording permission failure unknown", async () => {
+    vi.mocked(invoke).mockRejectedValue("Screen recording permission is busy");
+
+    await expect(captureScreenRegion()).rejects.toMatchObject<CaptureError>({
+      code: "unknown",
+      message: "截图失败",
+    });
+  });
+
+  it("keeps an unsupported Screen Recording permission failure unknown", async () => {
+    vi.mocked(invoke).mockRejectedValue("Screen recording permission is unsupported");
+
+    await expect(captureScreenRegion()).rejects.toMatchObject<CaptureError>({
+      code: "unknown",
+      message: "截图失败",
+    });
+  });
+
+  it("keeps an unavailable Screen Recording permission failure unknown", async () => {
+    vi.mocked(invoke).mockRejectedValue("Screen recording permission is unavailable");
+
+    await expect(captureScreenRegion()).rejects.toMatchObject<CaptureError>({
+      code: "unknown",
+      message: "截图失败",
+    });
+  });
+
+  it("keeps a Screen Recording permission service failure unknown", async () => {
+    vi.mocked(invoke).mockRejectedValue("Screen recording permission service failure");
+
+    await expect(captureScreenRegion()).rejects.toMatchObject<CaptureError>({
+      code: "unknown",
+      message: "截图失败",
+    });
+  });
+
   it("opens Screen Recording settings only through the explicit command", async () => {
     vi.mocked(invoke).mockResolvedValue(undefined);
 
@@ -63,6 +108,11 @@ describe("captureScreenRegion", () => {
     { message: "正在截图" },
     "框选截图目前仅支持 macOS",
     { message: "屏幕录制服务暂时不可用" },
+    "Screen recording is busy",
+    "Screen recording is unavailable",
+    "Screen recording service failure",
+    "Screen recording is unsupported",
+    "Capture failed for an unrelated reason",
     { message: "sidecar failed at /private/tmp/model.gguf" },
     Object.create(null),
   ])("normalizes every other failure as unknown without exposing its message", async (failure) => {
