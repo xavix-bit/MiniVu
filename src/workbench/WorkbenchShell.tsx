@@ -55,6 +55,7 @@ export function WorkbenchView({
   const [activeRequestIds, setActiveRequestIds] = useState<Record<string, string>>({});
   const activeRequestIdsRef = useRef<Record<string, string>>({});
   const fallbackSelectionRef = useRef<{ scope: WorkbenchViewProps["scope"]; id: string } | null>(null);
+  const previousScopeRef = useRef(scope);
 
   const filtered = useMemo(() => {
     const visibleIds = new Set(library.visibleRecords.map((record) => record.id));
@@ -67,6 +68,15 @@ export function WorkbenchView({
   const selectionPending = Boolean(library.selectedId && library.selected?.id !== library.selectedId);
 
   const fallbackId = selected ? null : filtered[0]?.id ?? null;
+  useEffect(() => {
+    if (previousScopeRef.current === scope) return;
+    previousScopeRef.current = scope;
+    fallbackSelectionRef.current = null;
+    if (selected) {
+      void library.select(selected.id);
+    }
+  }, [library.select, scope, selected]);
+
   useEffect(() => {
     if (!fallbackId) {
       fallbackSelectionRef.current = null;

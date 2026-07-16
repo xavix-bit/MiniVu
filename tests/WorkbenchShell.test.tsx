@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { CaptureRecord } from "../src/captures/types";
-import type { CaptureLibraryState } from "../src/captures/useCaptureLibrary";
+import type { CaptureClient, CaptureRecord } from "../src/captures/types";
+import { useCaptureLibrary, type CaptureLibraryState } from "../src/captures/useCaptureLibrary";
 import { WorkbenchView } from "../src/workbench/WorkbenchShell";
 
 function record(overrides: Partial<CaptureRecord> = {}): CaptureRecord {
@@ -38,6 +38,11 @@ function library(records: CaptureRecord[] = []): CaptureLibraryState {
     remove: vi.fn(async () => {}),
     refresh: vi.fn(async () => {}),
   } as CaptureLibraryState;
+}
+
+function RealLibraryHarness({ api, scope }: { api: CaptureClient; scope: "recent" | "pinned" }) {
+  const state = useCaptureLibrary(api);
+  return <WorkbenchView library={state} scope={scope} onCapture={vi.fn()} />;
 }
 
 describe("WorkbenchView", () => {
@@ -186,5 +191,35 @@ describe("WorkbenchView", () => {
     expect(api.select).toHaveBeenNthCalledWith(1, sharedFallback.id);
     expect(api.select).toHaveBeenNthCalledWith(2, sharedFallback.id);
     expect(api.select).toHaveBeenNthCalledWith(3, sharedFallback.id);
+  });
+
+  it("supersedes a deferred pinned fallback when returning to recent", async () => {
+    const recent = record({ id: "recent", title: "最近截图", createdAtMs: 200 });
+    const pinned = record({ id: "pinned", title: "固定截图", createdAtMs: 100, pinned: true });
+    let resolvePinned: ((value: CaptureRecord | null) => void) | undefined;
+    const api: CaptureClient = {
+      list: vi.fn(async () => [recent, pinned]),
+      get: vi.fn((id) => id === pinned.id
+        ? new Promise((resolve) => { resolvePinned = resolve; })
+        : Promise.resolve(recent)),
+      readImage: vi.fn(async () => ""),
+      create: vi.fn(async () => recent),
+      update: vi.fn(async () => recent),
+      remove: vi.fn(async () => {}),
+      cleanup: vi.fn(async () => 0),
+      subscribe: vi.fn(async () => () => {}),
+    };
+
+    const view = render(<RealLibraryHarness api={api} scope="recent" />);
+    await waitFor(() => expect(within(screen.getByRole("main")).getByText("最近截图")).toBeInTheDocument());
+
+    view.rerender(<RealLibraryHarness api={api} scope="pinned" />);
+    await waitFor(() => expect(resolvePinned).toBeDefined());
+
+    view.rerender(<RealLibraryHarness api={api} scope="recent" />);
+    await act(async () => resolvePinned?.(pinned));
+
+    await waitFor(() => expect(within(screen.getByRole("main")).getByText("最近截图")).toBeInTheDocument());
+    expect(within(screen.getByRole("main")).queryByText("固定截图")).not.toBeInTheDocument();
   });
 });

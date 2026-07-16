@@ -429,70 +429,6 @@
 }
 
 @media (max-width: 820px) {
-  .settings-app {
-    grid-template-columns: 1fr;
-    height: auto;
-    min-height: 100vh;
-    overflow: visible;
-  }
-
-  .settings-sidebar {
-    height: auto;
-    gap: 12px;
-    padding: 16px;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .settings-sidebar__brand {
-    padding: 0 4px;
-  }
-
-  .settings-sidebar__nav {
-    display: flex;
-    gap: 8px;
-    flex: none;
-    min-height: auto;
-    overflow-x: auto;
-    padding: 4px 0 6px;
-  }
-
-  .settings-nav-item {
-    flex: 0 0 auto;
-    width: auto;
-    min-width: 128px;
-    min-height: 50px;
-    padding: 0 16px;
-    border-radius: 14px;
-  }
-
-  .settings-nav-item.is-active::before {
-    display: none;
-  }
-
-  .settings-sidebar__footer {
-    display: none;
-  }
-
-  .settings-main {
-    height: auto;
-    min-height: 0;
-    overflow: visible;
-  }
-
-  .product-topbar {
-    position: relative;
-    flex-wrap: wrap;
-    justify-content: flex-start;
-    gap: 8px;
-    min-height: auto;
-    padding: 12px 16px;
-  }
-
-  .product-topbar__primary {
-    margin-right: auto;
-  }
-
   .settings-page-shell,
   .settings-page-shell--home {
     padding: 18px 16px 28px;
@@ -505,7 +441,6 @@
   .panel-header__mark,
   .model-status-bar__progress,
   .section-label__dot,
-  .settings-sidebar__badge-dot,
   .onboarding-progress-item__spinner,
   .transcript-entry__cursor {
     animation: none;

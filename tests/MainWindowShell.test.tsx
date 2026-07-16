@@ -1,6 +1,11 @@
+import { readFileSync } from "node:fs";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MainWindowShell } from "../src/app-shell/MainWindowShell";
+
+const tokensCss = readFileSync(`${process.cwd()}/src/styles/tokens.css`, "utf8");
+const settingsCss = readFileSync(`${process.cwd()}/src/styles/settings.css`, "utf8");
+const workbenchCss = readFileSync(`${process.cwd()}/src/styles/workbench.css`, "utf8");
 
 const { shellState } = vi.hoisted(() => ({
   shellState: { mounts: 0, renders: 0 },
@@ -134,5 +139,25 @@ describe("MainWindowShell navigation", () => {
 
     fireEvent.click(within(settingsNav).getByRole("button", { name: "模型" }));
     expect(settingsMain.scrollTop).toBe(40);
+  });
+
+  it("inherits unified semantic surfaces from the dark theme", async () => {
+    document.documentElement.setAttribute("data-theme", "dark");
+
+    try {
+      const { container } = render(<MainWindowShell />);
+      await screen.findByTestId("workbench-instance");
+      const shell = container.querySelector(".unified-app-shell") as HTMLElement;
+
+      expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+      expect(shell).toBeInTheDocument();
+      expect(tokensCss).toMatch(/\[data-theme="dark"\][\s\S]*--bg-app:\s*#181b20/);
+      expect(workbenchCss).toMatch(/\.unified-app-shell\s*{[\s\S]*?--wb-bg:\s*var\(--bg-app\)/);
+      expect(settingsCss).not.toMatch(
+        /\.unified-app-shell \.settings-app\s*{[^}]*--background:/,
+      );
+    } finally {
+      document.documentElement.removeAttribute("data-theme");
+    }
   });
 });

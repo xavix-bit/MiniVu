@@ -270,8 +270,7 @@ button {
 }
 
 button:focus-visible,
-input:focus-visible,
-.settings-nav-item:focus-visible {
+input:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
