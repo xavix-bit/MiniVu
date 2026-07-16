@@ -61,11 +61,13 @@ vi.mock("../src/app-shell/EnvironmentSetupPanel", () => ({
     onComplete,
     onSetupSucceeded,
     onBusyChange,
+    onCancel,
   }: {
     showWelcome?: boolean;
     onComplete?: () => void;
     onSetupSucceeded?: () => void;
     onBusyChange?: (busy: boolean) => void;
+    onCancel?: () => void;
   }) => (
     <div data-testid="environment-setup" data-welcome={String(Boolean(showWelcome))}>
       <span>初始设置内容</span>
@@ -81,6 +83,11 @@ vi.mock("../src/app-shell/EnvironmentSetupPanel", () => ({
       <button type="button" onClick={() => onBusyChange?.(false)}>
         模拟结束修复
       </button>
+      {onCancel ? (
+        <button type="button" onClick={onCancel}>
+          模拟关闭修复
+        </button>
+      ) : null}
     </div>
   ),
 }));
@@ -348,6 +355,55 @@ describe("MainWindowShell navigation", () => {
     fireEvent.click(within(repair).getByRole("button", { name: "模拟结束修复" }));
     expect(preferences).toHaveAttribute("data-disabled", "true");
     expect(model).toHaveAttribute("data-disabled", "true");
+  });
+
+  it("closes inline repair before start and restores model controls", async () => {
+    render(<MainWindowShell />);
+    await screen.findByTestId("workbench-instance");
+
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    const settingsNav = screen.getByRole("navigation", { name: "设置导航" });
+    fireEvent.click(within(settingsNav).getByRole("button", { name: "模型" }));
+
+    const preferences = await screen.findByTestId("model-preferences-panel");
+    const model = screen.getByTestId("model-panel");
+    fireEvent.click(within(model).getByRole("button", { name: "模拟修复模型组件" }));
+    const repair = await screen.findByTestId("environment-setup");
+    expect(preferences).toHaveAttribute("data-disabled", "true");
+    expect(model).toHaveAttribute("data-disabled", "true");
+
+    fireEvent.click(within(repair).getByRole("button", { name: "模拟关闭修复" }));
+
+    expect(screen.queryByTestId("environment-setup")).not.toBeInTheDocument();
+    expect(preferences).toHaveAttribute("data-disabled", "false");
+    expect(model).toHaveAttribute("data-disabled", "false");
+  });
+
+  it("clears the repair busy lock when failed inline repair closes", async () => {
+    render(<MainWindowShell />);
+    await screen.findByTestId("workbench-instance");
+
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    const settingsNav = screen.getByRole("navigation", { name: "设置导航" });
+    fireEvent.click(within(settingsNav).getByRole("button", { name: "模型" }));
+
+    const preferences = await screen.findByTestId("model-preferences-panel");
+    const model = screen.getByTestId("model-panel");
+    fireEvent.click(within(model).getByRole("button", { name: "模拟修复模型组件" }));
+    const repair = await screen.findByTestId("environment-setup");
+    fireEvent.click(within(repair).getByRole("button", { name: "模拟开始修复" }));
+    expect(preferences).toHaveAttribute("data-disabled", "true");
+    expect(model).toHaveAttribute("data-disabled", "true");
+
+    fireEvent.click(within(repair).getByRole("button", { name: "模拟结束修复" }));
+    expect(preferences).toHaveAttribute("data-disabled", "true");
+    expect(model).toHaveAttribute("data-disabled", "true");
+
+    fireEvent.click(within(repair).getByRole("button", { name: "模拟关闭修复" }));
+
+    expect(screen.queryByTestId("environment-setup")).not.toBeInTheDocument();
+    expect(preferences).toHaveAttribute("data-disabled", "false");
+    expect(model).toHaveAttribute("data-disabled", "false");
   });
 
   it("blocks repair and both model surfaces while a sibling model operation is pending", async () => {

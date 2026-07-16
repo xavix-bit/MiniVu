@@ -27,6 +27,7 @@ type ModelStatus = ModelStatusResponse;
 type EnvironmentSetupPanelProps = {
   showWelcome?: boolean;
   onBusyChange?: (busy: boolean) => void;
+  onCancel?: () => void;
   onComplete?: () => void;
   onSetupSucceeded?: () => void;
 };
@@ -40,7 +41,13 @@ const PHASE_LABELS: Record<string, string> = {
   done: "完成",
 };
 
-export function EnvironmentSetupPanel({ showWelcome = false, onBusyChange, onComplete, onSetupSucceeded }: EnvironmentSetupPanelProps) {
+export function EnvironmentSetupPanel({
+  showWelcome = false,
+  onBusyChange,
+  onCancel,
+  onComplete,
+  onSetupSucceeded,
+}: EnvironmentSetupPanelProps) {
   const busyRef = useRef(false);
   const mountedRef = useRef(false);
   const onBusyChangeRef = useRef(onBusyChange);
@@ -566,9 +573,23 @@ export function EnvironmentSetupPanel({ showWelcome = false, onBusyChange, onCom
 
         {phase === "running" ? <p className="setup-panel__running-hint">下载中…</p> : null}
 
+        {phase === "idle" && !showWelcome && onCancel ? (
+          <button
+            type="button"
+            className="settings-btn settings-btn--secondary"
+            onClick={onCancel}
+          >
+            关闭
+          </button>
+        ) : null}
+
         {phase === "error" ? (
-          <button type="button" className="settings-btn settings-btn--secondary" onClick={() => setPhase("idle")}>
-            返回
+          <button
+            type="button"
+            className="settings-btn settings-btn--secondary"
+            onClick={!showWelcome && onCancel ? onCancel : () => setPhase("idle")}
+          >
+            {!showWelcome && onCancel ? "关闭" : "返回"}
           </button>
         ) : null}
 

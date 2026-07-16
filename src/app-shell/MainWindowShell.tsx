@@ -170,6 +170,11 @@ export function MainWindowShell() {
     void refreshEnvironmentStatus();
   }, [refreshEnvironmentStatus]);
 
+  const handleRuntimeRepairCancelled = useCallback(() => {
+    setRepairBusy(false);
+    setRuntimeRepairOpen(false);
+  }, []);
+
   const handleWorkbenchCapture = useCallback(async () => {
     const image = await captureScreenRegion();
     const settings = await loadSettings();
@@ -273,6 +278,7 @@ export function MainWindowShell() {
                             <EnvironmentSetupPanel
                               showWelcome={false}
                               onBusyChange={setRepairBusy}
+                              onCancel={handleRuntimeRepairCancelled}
                               onSetupSucceeded={handleRuntimeRepairSucceeded}
                             />
                           ) : null}

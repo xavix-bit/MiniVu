@@ -63,6 +63,29 @@ describe("EnvironmentSetupPanel", () => {
     });
   });
 
+  it("allows inline repair to close before start but not while setup is running", async () => {
+    const setup = createDeferred<{
+      runtimeReady: boolean;
+      modelReady: boolean;
+      shortcut: string;
+    }>();
+    const onCancel = vi.fn();
+    vi.mocked(listen).mockResolvedValue(vi.fn());
+    vi.mocked(invoke).mockReturnValueOnce(setup.promise);
+
+    render(<EnvironmentSetupPanel showWelcome={false} onCancel={onCancel} />);
+
+    const close = screen.getByRole("button", { name: "关闭" });
+    expect(close).toHaveClass("settings-btn--secondary");
+    fireEvent.click(close);
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(invoke).not.toHaveBeenCalledWith("setup_environment");
+
+    fireEvent.click(screen.getByRole("button", { name: "下载模型并完成配置" }));
+    expect(screen.queryByRole("button", { name: "关闭" })).not.toBeInTheDocument();
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps repair available when setup finishes before the model is ready", async () => {
     vi.mocked(listen).mockResolvedValue(vi.fn());
     vi.mocked(invoke).mockResolvedValueOnce({
@@ -79,6 +102,20 @@ describe("EnvironmentSetupPanel", () => {
     ).toBeVisible();
     expect(screen.getByRole("button", { name: "下载模型并完成配置" })).toBeEnabled();
     expect(screen.queryByText("配置完成")).not.toBeInTheDocument();
+  });
+
+  it("closes inline repair from an error instead of resetting local phase", async () => {
+    const onCancel = vi.fn();
+    vi.mocked(listen).mockResolvedValue(vi.fn());
+    vi.mocked(invoke).mockRejectedValueOnce(new Error("setup failed"));
+
+    render(<EnvironmentSetupPanel showWelcome={false} onCancel={onCancel} />);
+    fireEvent.click(screen.getByRole("button", { name: "下载模型并完成配置" }));
+
+    expect(await screen.findByText("模型配置失败，请重试。")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "返回" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
   it("does not finish setup after the panel unmounts", async () => {
