@@ -19,6 +19,16 @@ vi.mock("../src/settings/settingsStore", async (importOriginal) => {
   };
 });
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("SettingsPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -73,5 +83,44 @@ describe("SettingsPanel", () => {
     );
     expect(loadSettings).toHaveBeenCalledTimes(1);
     expect(listen).not.toHaveBeenCalled();
+  });
+
+  it("shows pending and product error states while saving", async () => {
+    const save = createDeferred<ReturnType<typeof createDefaultSettings>>();
+    vi.mocked(updateSettings).mockReturnValue(save.promise);
+
+    render(<SettingsPanel view="general" />);
+    await screen.findByRole("combobox", { name: "外观主题" });
+    fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+
+    expect(screen.getByRole("button", { name: "保存中…" })).toBeDisabled();
+
+    save.reject(new Error("update_app_settings failed: disk full at /Users/test"));
+
+    expect(await screen.findByText("无法保存设置，请重试。")).toBeVisible();
+    expect(screen.getByRole("button", { name: "保存设置" })).toBeEnabled();
+    expect(screen.queryByText(/update_app_settings|disk full|Users\/test/)).not.toBeInTheDocument();
+  });
+
+  it("does not replace a newer draft when a slow save resolves", async () => {
+    const initial = {
+      ...createDefaultSettings(),
+      onboardingComplete: true,
+    };
+    const save = createDeferred<ReturnType<typeof createDefaultSettings>>();
+    vi.mocked(loadSettings).mockResolvedValue(initial);
+    vi.mocked(updateSettings).mockReturnValue(save.promise);
+
+    render(<SettingsPanel view="general" />);
+    const theme = await screen.findByRole("combobox", { name: "外观主题" });
+    fireEvent.change(theme, { target: { value: "dark" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+    fireEvent.change(theme, { target: { value: "light" } });
+
+    save.resolve({ ...initial, theme: "dark" });
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "保存设置" })).toBeEnabled());
+    expect(theme).toHaveValue("light");
+    expect(screen.queryByText("设置已保存")).not.toBeInTheDocument();
   });
 });

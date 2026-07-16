@@ -67,6 +67,7 @@ pub fn run() {
             ocr_macos::recognize_text_from_image_data_url,
             commands::load_app_settings,
             commands::save_app_settings,
+            commands::update_app_settings,
             commands::get_device_info,
             capture_store::list_capture_records,
             capture_store::get_capture_record,

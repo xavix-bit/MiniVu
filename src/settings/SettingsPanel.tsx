@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { applyTheme } from "../theme/applyTheme";
 import { settingsThemeToMode } from "../theme/useAppTheme";
 import {
@@ -15,40 +15,80 @@ type SettingsPanelProps = {
 };
 
 export function SettingsPanel({ view, onSaved }: SettingsPanelProps) {
+  const draftRevisionRef = useRef(0);
+  const mountedRef = useRef(false);
   const [settings, setSettings] = useState<AppSettings>(createDefaultSettings());
   const [savedMessage, setSavedMessage] = useState("");
+  const [saveError, setSaveError] = useState("");
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    let mounted = true;
+    mountedRef.current = true;
 
     void loadSettings().then((loaded) => {
-      if (mounted) {
+      if (mountedRef.current && draftRevisionRef.current === 0) {
         setSettings(loaded);
       }
     });
 
     return () => {
-      mounted = false;
+      mountedRef.current = false;
     };
   }, []);
 
+  function updateDraft(update: (current: AppSettings) => AppSettings) {
+    draftRevisionRef.current += 1;
+    setSettings(update);
+    setSavedMessage("");
+    setSaveError("");
+  }
+
   async function handleSave(event: React.FormEvent) {
     event.preventDefault();
-    const next = await updateSettings({
-      shortcut: settings.shortcut,
-      theme: settings.theme,
-      captureRetention: settings.captureRetention,
-      backgroundWarmup: settings.backgroundWarmup,
-    });
-    setSettings(next);
-    setSavedMessage("设置已保存");
-    onSaved?.();
+    if (saving) {
+      return;
+    }
+    setSaving(true);
+    setSavedMessage("");
+    setSaveError("");
+    const submittedRevision = draftRevisionRef.current;
+    try {
+      const next = await updateSettings({
+        shortcut: settings.shortcut,
+        theme: settings.theme,
+        captureRetention: settings.captureRetention,
+        backgroundWarmup: settings.backgroundWarmup,
+      });
+      if (!mountedRef.current) {
+        return;
+      }
+      if (draftRevisionRef.current === submittedRevision) {
+        setSettings((current) => ({
+          ...current,
+          shortcut: next.shortcut,
+          theme: next.theme,
+          captureRetention: next.captureRetention,
+          backgroundWarmup: next.backgroundWarmup,
+        }));
+        setSavedMessage("设置已保存");
+      }
+      onSaved?.();
+    } catch {
+      if (mountedRef.current) {
+        setSaveError("无法保存设置，请重试。");
+      }
+    } finally {
+      if (mountedRef.current) {
+        setSaving(false);
+      }
+    }
   }
 
   return (
     <form
       className="settings-form settings-form--stack settings-preferences-panel"
       aria-label={view === "general" ? "通用设置" : "快捷键设置"}
+      aria-busy={saving}
       onSubmit={(event) => void handleSave(event)}
     >
       {view === "general" ? (
@@ -60,7 +100,7 @@ export function SettingsPanel({ view, onSaved }: SettingsPanelProps) {
               value={settings.theme ?? "system"}
               onChange={(event) => {
                 const theme = event.target.value as AppSettings["theme"];
-                setSettings((current) => ({ ...current, theme }));
+                updateDraft((current) => ({ ...current, theme }));
                 applyTheme(settingsThemeToMode(theme));
               }}
             >
@@ -75,7 +115,7 @@ export function SettingsPanel({ view, onSaved }: SettingsPanelProps) {
             <select
               value={settings.captureRetention ?? "24h"}
               onChange={(event) =>
-                setSettings((current) => ({
+                updateDraft((current) => ({
                   ...current,
                   captureRetention: event.target.value as AppSettings["captureRetention"],
                 }))
@@ -94,7 +134,7 @@ export function SettingsPanel({ view, onSaved }: SettingsPanelProps) {
               type="checkbox"
               checked={settings.backgroundWarmup ?? false}
               onChange={(event) =>
-                setSettings((current) => ({
+                updateDraft((current) => ({
                   ...current,
                   backgroundWarmup: event.target.checked,
                 }))
@@ -111,17 +151,18 @@ export function SettingsPanel({ view, onSaved }: SettingsPanelProps) {
             <span>全局快捷键</span>
             <ShortcutRecorder
               value={settings.shortcut}
-              onChange={(shortcut) => setSettings((current) => ({ ...current, shortcut }))}
+              onChange={(shortcut) => updateDraft((current) => ({ ...current, shortcut }))}
             />
           </div>
         </section>
       )}
 
       <div className="settings-form__footer">
-        <button type="submit" className="settings-btn settings-btn--primary">
-          保存设置
+        <button type="submit" className="settings-btn settings-btn--primary" disabled={saving}>
+          {saving ? "保存中…" : "保存设置"}
         </button>
         {savedMessage ? <p className="saved-message">{savedMessage}</p> : null}
+        {saveError ? <p className="onboarding-error">{saveError}</p> : null}
       </div>
     </form>
   );

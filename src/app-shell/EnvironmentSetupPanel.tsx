@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { modelClient } from "../model/modelClient";
 import type { ModelStatusResponse } from "../model/types";
 import { resolveGgufPercent, resolveMlxPercent } from "../shared/downloadProgress";
-import { loadSettings, saveSettings } from "../settings/settingsStore";
+import { loadSettings, updateSettings } from "../settings/settingsStore";
 import {
   PHASE_ORDER,
   computeOverallPercent,
@@ -26,6 +26,7 @@ type ModelStatus = ModelStatusResponse;
 
 type EnvironmentSetupPanelProps = {
   showWelcome?: boolean;
+  onBusyChange?: (busy: boolean) => void;
   onComplete?: () => void;
   onSetupSucceeded?: () => void;
 };
@@ -39,7 +40,12 @@ const PHASE_LABELS: Record<string, string> = {
   done: "完成",
 };
 
-export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetupSucceeded }: EnvironmentSetupPanelProps) {
+export function EnvironmentSetupPanel({ showWelcome = false, onBusyChange, onComplete, onSetupSucceeded }: EnvironmentSetupPanelProps) {
+  const busyRef = useRef(false);
+  const mountedRef = useRef(false);
+  const onBusyChangeRef = useRef(onBusyChange);
+  const refreshGenerationRef = useRef(0);
+  const setupGenerationRef = useRef(0);
   const [phase, setPhase] = useState<"idle" | "running" | "success" | "error">("idle");
   const [installError, setInstallError] = useState("");
   const [progress, setProgress] = useState<Record<string, SetupProgress>>(createInitialProgress);
@@ -53,15 +59,45 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
     [progress, downloadBytes],
   );
 
+  onBusyChangeRef.current = onBusyChange;
+
+  function reportBusy(busy: boolean) {
+    if (busyRef.current === busy) {
+      return;
+    }
+    busyRef.current = busy;
+    onBusyChangeRef.current?.(busy);
+  }
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      refreshGenerationRef.current += 1;
+      setupGenerationRef.current += 1;
+      reportBusy(false);
+    };
+  }, []);
+
   async function refreshStatus(markReady = false) {
+    const generation = ++refreshGenerationRef.current;
     const next = await modelClient.getModelStatus();
+    if (!mountedRef.current || generation !== refreshGenerationRef.current) {
+      return;
+    }
     setStatus(next);
-    if (markReady && next.modelReady) {
+    const runtimeReady =
+      next.inferenceBackend === "mlx"
+        ? !!next.mlxRuntimeAvailable
+        : next.llamaServerAvailable;
+    if (markReady && runtimeReady && next.modelReady) {
       const settings = await loadSettings();
+      if (!mountedRef.current || generation !== refreshGenerationRef.current) {
+        return;
+      }
       setPhase("success");
       setResult({
-        runtimeReady:
-          next.inferenceBackend === "mlx" ? !!next.mlxRuntimeAvailable : next.llamaServerAvailable,
+        runtimeReady,
         modelReady: next.modelReady,
         shortcut: settings.shortcut,
       });
@@ -86,17 +122,20 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
       return;
     }
     successHandledRef.current = true;
+    let cancelled = false;
     void (async () => {
       try {
-        const latest = await loadSettings();
-        if (!latest.onboardingComplete) {
-          await saveSettings({ ...latest, onboardingComplete: true });
-        }
+        await updateSettings({ onboardingComplete: true });
       } catch {
         /* 持久化失败不阻塞解锁 */
       }
-      onSetupSucceeded?.();
+      if (!cancelled && mountedRef.current) {
+        onSetupSucceeded?.();
+      }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [phase, onSetupSucceeded]);
 
   useEffect(() => {
@@ -264,6 +303,9 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
   }, []);
 
   async function runSetup() {
+    const generation = ++setupGenerationRef.current;
+    refreshGenerationRef.current += 1;
+    reportBusy(true);
     setPhase("running");
     setInstallError("");
     setProgress(createInitialProgress());
@@ -272,6 +314,36 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
 
     try {
       const setupResult = await invoke<SetupResult>("setup_environment");
+      if (!mountedRef.current || generation !== setupGenerationRef.current) {
+        return;
+      }
+      const [nextStatus, environmentStatus] = await Promise.all([
+        modelClient.getModelStatus(),
+        modelClient.getEnvironmentStatus(),
+      ]);
+      if (!mountedRef.current || generation !== setupGenerationRef.current) {
+        return;
+      }
+      const runtimeReady =
+        nextStatus.inferenceBackend === "mlx"
+          ? !!nextStatus.mlxRuntimeAvailable
+          : nextStatus.llamaServerAvailable;
+      setStatus(nextStatus);
+
+      if (
+        !setupResult.runtimeReady ||
+        !setupResult.modelReady ||
+        !runtimeReady ||
+        !nextStatus.modelReady ||
+        !environmentStatus.runtimeReady ||
+        !environmentStatus.modelReady
+      ) {
+        setResult(null);
+        setInstallError("模型准备未完成，请检查网络后重试。");
+        setPhase("error");
+        return;
+      }
+
       setResult(setupResult);
       setProgress((current) =>
         mergeProgress(current, {
@@ -282,13 +354,18 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
         }),
       );
       setPhase("success");
-      await refreshStatus(true);
       if (!showWelcome) {
         onComplete?.();
       }
     } catch {
-      setInstallError("模型配置失败，请重试。");
-      setPhase("error");
+      if (mountedRef.current && generation === setupGenerationRef.current) {
+        setInstallError("模型配置失败，请重试。");
+        setPhase("error");
+      }
+    } finally {
+      if (generation === setupGenerationRef.current) {
+        reportBusy(false);
+      }
     }
   }
 
@@ -301,8 +378,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onComplete, onSetup
       setPhase("error");
       return;
     }
-    const latest = await loadSettings();
-    await saveSettings({ ...latest, onboardingComplete: true });
+    await updateSettings({ onboardingComplete: true });
     onComplete?.();
     if (openPanel) {
       await invoke("show_entry");

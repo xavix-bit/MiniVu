@@ -50,6 +50,7 @@ export function MainWindowShell() {
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("setup");
   const [warmupNotice, setWarmupNotice] = useState("");
   const [runtimeRepairOpen, setRuntimeRepairOpen] = useState(false);
+  const [repairBusy, setRepairBusy] = useState(false);
   const [modelRefreshToken, setModelRefreshToken] = useState(0);
 
   useEffect(() => {
@@ -156,6 +157,7 @@ export function MainWindowShell() {
   }, []);
 
   const handleRuntimeRepairSucceeded = useCallback(() => {
+    setRepairBusy(false);
     setRuntimeRepairOpen(false);
     setModelRefreshToken((current) => current + 1);
     void refreshEnvironmentStatus();
@@ -248,8 +250,12 @@ export function MainWindowShell() {
                     <div className="settings-page-body unified-settings-detail">
                       {activeSection !== "setup" ? (
                         <div className="unified-settings-surface">
-                          <ModelPreferencesPanel onSaved={handleModelPreferencesSaved} />
+                          <ModelPreferencesPanel
+                            disabled={repairBusy}
+                            onSaved={handleModelPreferencesSaved}
+                          />
                           <ModelPanel
+                            disabled={repairBusy}
                             onRepairRuntime={handleRepairRuntime}
                             onStatusChange={() => void refreshEnvironmentStatus()}
                             refreshToken={modelRefreshToken}
@@ -257,6 +263,7 @@ export function MainWindowShell() {
                           {runtimeRepairOpen ? (
                             <EnvironmentSetupPanel
                               showWelcome={false}
+                              onBusyChange={setRepairBusy}
                               onSetupSucceeded={handleRuntimeRepairSucceeded}
                             />
                           ) : null}

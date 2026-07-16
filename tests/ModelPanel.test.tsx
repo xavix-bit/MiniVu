@@ -334,6 +334,22 @@ describe("ModelPanel", () => {
     expect(onRepairRuntime).toHaveBeenCalledTimes(1);
   });
 
+  it("disables every model action during external repair", async () => {
+    getModelStatus.mockResolvedValue(
+      createStatus({
+        modelReady: false,
+        llamaServerAvailable: false,
+      }),
+    );
+
+    render(<ModelPanel disabled onRepairRuntime={vi.fn()} />);
+
+    expect(await screen.findByRole("button", { name: "修复模型组件" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /均衡/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "下载 / 更新模型" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "刷新状态" })).toBeDisabled();
+  });
+
   it("reports freshly fetched status after changing the model variant", async () => {
     const initial = createStatus({ ggufModelVariant: "q4_k_m" });
     const refreshed = createStatus({

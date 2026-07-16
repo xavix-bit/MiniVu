@@ -10,6 +10,7 @@ import { updateSettings, type GgufModelVariant } from "./settingsStore";
 type ModelStatus = ModelStatusResponse;
 
 type ModelPanelProps = {
+  disabled?: boolean;
   onRepairRuntime?: () => void;
   onStatusChange?: (status: ModelStatusResponse) => void;
   refreshToken?: number;
@@ -43,7 +44,7 @@ function createIdleProgress(): Record<"model" | "mmproj", FileProgressState> {
   };
 }
 
-export function ModelPanel({ onRepairRuntime, onStatusChange, refreshToken }: ModelPanelProps) {
+export function ModelPanel({ disabled = false, onRepairRuntime, onStatusChange, refreshToken }: ModelPanelProps) {
   const mountedRef = useRef(false);
   const previousRefreshTokenRef = useRef(refreshToken);
   const refreshGenerationRef = useRef(0);
@@ -200,6 +201,9 @@ export function ModelPanel({ onRepairRuntime, onStatusChange, refreshToken }: Mo
   }, [refreshToken]);
 
   async function downloadModel() {
+    if (disabled) {
+      return;
+    }
     const runtimeReady =
       status?.inferenceBackend === "mlx"
         ? status?.mlxRuntimeAvailable
@@ -272,7 +276,7 @@ export function ModelPanel({ onRepairRuntime, onStatusChange, refreshToken }: Mo
   }
 
   async function selectVariant(variant: GgufModelVariant) {
-    if (variant === selectedVariant || downloading || refreshingStatus || statusError) {
+    if (disabled || variant === selectedVariant || downloading || refreshingStatus || statusError) {
       return;
     }
     setSelectedVariant(variant);
@@ -341,7 +345,12 @@ export function ModelPanel({ onRepairRuntime, onStatusChange, refreshToken }: Mo
         <div className="callout callout--attention" role="status">
           <p>模型组件需要修复后才能下载。</p>
           {onRepairRuntime ? (
-            <button type="button" className="callout__action" onClick={onRepairRuntime}>
+            <button
+              type="button"
+              className="callout__action"
+              disabled={disabled}
+              onClick={onRepairRuntime}
+            >
               修复模型组件
             </button>
           ) : null}
@@ -361,7 +370,11 @@ export function ModelPanel({ onRepairRuntime, onStatusChange, refreshToken }: Mo
                 className={`model-variant-option${selected ? " is-selected" : ""}`}
                 title={`${spec.modelName}\n${spec.description}\n模型 ${formatBytes(spec.modelBytes)}，配套文件 ${formatBytes(1_108_746_944)}，${spec.memoryHint}`}
                 disabled={
-                  downloading || savingVariant !== null || refreshingStatus || !!statusError
+                  disabled ||
+                  downloading ||
+                  savingVariant !== null ||
+                  refreshingStatus ||
+                  !!statusError
                 }
                 onClick={() => void selectVariant(variant)}
               >
@@ -409,12 +422,17 @@ export function ModelPanel({ onRepairRuntime, onStatusChange, refreshToken }: Mo
           <button
             type="button"
             className="settings-btn settings-btn--primary"
-            disabled={downloading || refreshingStatus || !!statusError || !runtimeReady}
+            disabled={disabled || downloading || refreshingStatus || !!statusError || !runtimeReady}
             onClick={() => void downloadModel()}
           >
             {downloading ? "下载中…" : isMlx ? "下载实验模型" : "下载 / 更新模型"}
           </button>
-          <button type="button" className="settings-btn settings-btn--secondary" onClick={() => void refresh()}>
+          <button
+            type="button"
+            className="settings-btn settings-btn--secondary"
+            disabled={disabled}
+            onClick={() => void refresh()}
+          >
             刷新状态
           </button>
         </div>

@@ -1,3 +1,5 @@
+import { invoke } from "@tauri-apps/api/core";
+
 export type DownloadMirror = "auto" | "modelscope" | "huggingface";
 export type MirrorId = "modelscope" | "huggingface";
 export type AppTheme = "system" | "light" | "dark";
@@ -61,27 +63,13 @@ export function createDefaultSettings(): AppSettings {
 }
 
 export async function loadSettings(): Promise<AppSettings> {
-  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<AppSettings>("load_app_settings");
 }
 
 export async function saveSettings(settings: AppSettings): Promise<void> {
-  const { invoke } = await import("@tauri-apps/api/core");
   await invoke("save_app_settings", { settings });
 }
 
-let settingsUpdateQueue: Promise<unknown> = Promise.resolve();
-
-export function updateSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
-  const update = settingsUpdateQueue.then(async () => {
-    const current = await loadSettings();
-    const committed = { ...current, ...patch };
-    await saveSettings(committed);
-    return committed;
-  });
-  settingsUpdateQueue = update.then(
-    () => undefined,
-    () => undefined,
-  );
-  return update;
+export async function updateSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
+  return invoke<AppSettings>("update_app_settings", { patch });
 }

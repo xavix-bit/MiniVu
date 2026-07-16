@@ -18,6 +18,7 @@ type DeviceInfo = {
 };
 
 type ModelPreferencesPanelProps = {
+  disabled?: boolean;
   onSaved?: (settings?: AppSettings) => void;
 };
 
@@ -37,7 +38,8 @@ function formatSourceName(source: MirrorId | null | undefined) {
   return "—";
 }
 
-export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
+export function ModelPreferencesPanel({ disabled = false, onSaved }: ModelPreferencesPanelProps) {
+  const modelIdRevisionRef = useRef(0);
   const mountedRef = useRef(false);
   const unsupportedFallbackAttemptedRef = useRef(false);
   const [settings, setSettings] = useState<AppSettings>(createDefaultSettings());
@@ -46,6 +48,7 @@ export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
   const [deviceInfoError, setDeviceInfoError] = useState("");
   const [savedMessage, setSavedMessage] = useState("");
   const [saveError, setSaveError] = useState("");
+  const [savingModelId, setSavingModelId] = useState(false);
   const [savingBackend, setSavingBackend] = useState(false);
   const [backendError, setBackendError] = useState("");
   const [installingMlx, setInstallingMlx] = useState(false);
@@ -84,23 +87,38 @@ export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
 
   async function handleSave(event: FormEvent) {
     event.preventDefault();
+    if (disabled || savingModelId) {
+      return;
+    }
+    const submittedRevision = modelIdRevisionRef.current;
+    setSavingModelId(true);
+    setSavedMessage("");
     setSaveError("");
     try {
       const next = await updateSettings({ mlxModelId: settings.mlxModelId });
       if (!mountedRef.current) {
         return;
       }
-      setSettings((current) => ({ ...current, mlxModelId: next.mlxModelId }));
-      setSavedMessage("设置已保存");
+      if (modelIdRevisionRef.current === submittedRevision) {
+        setSettings((current) => ({ ...current, mlxModelId: next.mlxModelId }));
+        setSavedMessage("设置已保存");
+      }
       onSaved?.(next);
     } catch {
       if (mountedRef.current) {
         setSaveError("无法保存模型设置，请重试。");
       }
+    } finally {
+      if (mountedRef.current) {
+        setSavingModelId(false);
+      }
     }
   }
 
   async function installMlxRuntime() {
+    if (disabled) {
+      return;
+    }
     setInstallingMlx(true);
     setInstallError("");
     try {
@@ -122,7 +140,7 @@ export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
   }
 
   async function changeBackend(inferenceBackend: AppSettings["inferenceBackend"]) {
-    if (inferenceBackend === settings.inferenceBackend) {
+    if (disabled || inferenceBackend === settings.inferenceBackend) {
       return;
     }
     setSavingBackend(true);
@@ -152,6 +170,7 @@ export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
   useEffect(() => {
     if (
       deviceInfo?.isAppleSilicon !== false ||
+      disabled ||
       settings.inferenceBackend !== "mlx" ||
       unsupportedFallbackAttemptedRef.current
     ) {
@@ -159,9 +178,12 @@ export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
     }
     unsupportedFallbackAttemptedRef.current = true;
     void changeBackend("llama");
-  }, [deviceInfo, settings.inferenceBackend]);
+  }, [deviceInfo, disabled, settings.inferenceBackend]);
 
   async function changeDownloadSource(downloadMirror: AppSettings["downloadMirror"]) {
+    if (disabled) {
+      return;
+    }
     setSavingSource(true);
     setSourceError("");
     try {
@@ -184,6 +206,9 @@ export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
   }
 
   async function runBenchmark() {
+    if (disabled) {
+      return;
+    }
     setBenchmarking(true);
     setBenchmarkError("");
     try {
@@ -223,6 +248,7 @@ export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
     <form
       className="settings-form settings-form--stack model-preferences-panel"
       aria-label="模型偏好"
+      aria-busy={savingModelId}
       onSubmit={(event) => void handleSave(event)}
     >
       <section className="settings-section">
@@ -231,7 +257,7 @@ export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
           <span>问图方式</span>
           <select
             value={backend}
-            disabled={deviceInfoLoading || savingBackend}
+            disabled={disabled || deviceInfoLoading || savingBackend}
             onChange={(event) => {
               const inferenceBackend = event.target.value as AppSettings["inferenceBackend"];
               void changeBackend(inferenceBackend);
@@ -254,9 +280,13 @@ export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
               <span>实验模型</span>
               <input
                 value={settings.mlxModelId}
-                onChange={(event) =>
-                  setSettings((current) => ({ ...current, mlxModelId: event.target.value }))
-                }
+                disabled={disabled}
+                onChange={(event) => {
+                  modelIdRevisionRef.current += 1;
+                  setSettings((current) => ({ ...current, mlxModelId: event.target.value }));
+                  setSavedMessage("");
+                  setSaveError("");
+                }}
                 placeholder="mlx-community/MiniCPM-V-4.6-4bit"
               />
             </label>
@@ -266,7 +296,7 @@ export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
                 <button
                   type="button"
                   className="settings-btn settings-btn--secondary"
-                  disabled={installingMlx}
+                  disabled={disabled || installingMlx}
                   onClick={() => void installMlxRuntime()}
                 >
                   {installingMlx ? "正在安装…" : "安装加速组件"}
@@ -281,7 +311,7 @@ export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
             <select
               id="model-download-source"
               value={settings.downloadMirror}
-              disabled={savingSource}
+              disabled={disabled || savingSource}
               onChange={(event) =>
                 void changeDownloadSource(event.target.value as AppSettings["downloadMirror"])
               }
@@ -299,7 +329,7 @@ export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
               <button
                 type="button"
                 className="settings-btn settings-btn--secondary"
-                disabled={benchmarking}
+                disabled={disabled || benchmarking}
                 onClick={() => void runBenchmark()}
               >
                 {benchmarking ? "正在测试…" : "测试下载速度"}
@@ -336,8 +366,12 @@ export function ModelPreferencesPanel({ onSaved }: ModelPreferencesPanelProps) {
       </section>
 
       <div className="settings-form__footer">
-        <button type="submit" className="settings-btn settings-btn--primary">
-          保存设置
+        <button
+          type="submit"
+          className="settings-btn settings-btn--primary"
+          disabled={disabled || savingModelId}
+        >
+          {savingModelId ? "保存中…" : "保存设置"}
         </button>
         {savedMessage ? <p className="saved-message">{savedMessage}</p> : null}
         {saveError ? <p className="onboarding-error">{saveError}</p> : null}

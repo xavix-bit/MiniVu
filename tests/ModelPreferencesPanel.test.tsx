@@ -115,6 +115,55 @@ describe("ModelPreferencesPanel", () => {
     expect(loadSettings).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a newer experimental-model draft when a slow save resolves", async () => {
+    const initial = {
+      ...createDefaultSettings(),
+      onboardingComplete: true,
+      inferenceBackend: "mlx" as const,
+    };
+    const save = createDeferred<AppSettings>();
+    vi.mocked(loadSettings).mockResolvedValue(initial);
+    vi.mocked(updateSettings).mockReturnValue(save.promise);
+
+    render(<ModelPreferencesPanel />);
+
+    const modelId = await screen.findByRole("textbox", { name: "实验模型" });
+    fireEvent.change(modelId, {
+      target: { value: "mlx-community/MiniCPM-V-4.6-8bit" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+
+    expect(screen.getByRole("button", { name: "保存中…" })).toBeDisabled();
+
+    fireEvent.change(modelId, {
+      target: { value: "local/Newer-Model-Draft" },
+    });
+    save.resolve({
+      ...initial,
+      mlxModelId: "mlx-community/MiniCPM-V-4.6-8bit",
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "保存设置" })).toBeEnabled(),
+    );
+    expect(modelId).toHaveValue("local/Newer-Model-Draft");
+    expect(screen.queryByText("设置已保存")).not.toBeInTheDocument();
+  });
+
+  it("disables model preference controls during external repair", async () => {
+    vi.mocked(loadSettings).mockResolvedValue({
+      ...createDefaultSettings(),
+      onboardingComplete: true,
+    });
+
+    render(<ModelPreferencesPanel disabled />);
+
+    expect(await screen.findByRole("combobox", { name: "问图方式" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "下载来源" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "测试下载速度" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "保存设置" })).toBeDisabled();
+  });
+
   it("maps model preference save failures to a product message", async () => {
     vi.mocked(loadSettings).mockResolvedValue({
       ...createDefaultSettings(),

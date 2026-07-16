@@ -3,8 +3,7 @@ use crate::inference_backend::{mlx_runtime_ready, resolve_active_backend};
 use crate::runtime_installer::{
     emit_setup_progress, install_llama_runtime, install_mlx_runtime, resolve_llama_server,
 };
-use crate::settings::{load_settings, save_settings, InferenceBackend};
-use crate::shortcut::register_shortcut;
+use crate::settings::{load_settings, InferenceBackend};
 use serde::Serialize;
 use tauri::AppHandle;
 
@@ -72,12 +71,7 @@ pub async fn setup_environment(app: AppHandle) -> Result<SetupEnvironmentResult,
         emit_setup_progress(&app, "model", "done", "主模型已下载", 100);
     }
 
-    let mut settings = load_settings(&app)?;
-    if settings.shortcut.trim().is_empty() {
-        settings.shortcut = "Control+Option+Space".to_string();
-    }
-    save_settings(&app, &settings)?;
-    register_shortcut(&app, &settings.shortcut)?;
+    let settings = crate::commands::ensure_setup_shortcut(&app)?;
     emit_setup_progress(
         &app,
         "shortcut",
