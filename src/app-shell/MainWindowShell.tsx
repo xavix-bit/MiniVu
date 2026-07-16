@@ -55,7 +55,7 @@ export function MainWindowShell() {
   const [modelPanelBusy, setModelPanelBusy] = useState(false);
   const [modelRefreshToken, setModelRefreshToken] = useState(0);
   const modelOperationBusy = modelPreferencesBusy || modelPanelBusy;
-  const modelControlsDisabled = repairBusy || modelOperationBusy;
+  const modelControlsDisabled = runtimeRepairOpen || repairBusy || modelOperationBusy;
 
   useEffect(() => {
     document.documentElement.classList.add("main-window");

@@ -105,7 +105,7 @@ vi.mock("../src/settings/ModelPanel", () => ({
       <button type="button" disabled={disabled} onClick={onRepairRuntime}>
         模拟修复模型组件
       </button>
-      <button type="button" onClick={() => onBusyChange?.(true)}>
+      <button type="button" disabled={disabled} onClick={() => onBusyChange?.(true)}>
         模拟开始模型下载
       </button>
       <button type="button" onClick={() => onBusyChange?.(false)}>
@@ -126,10 +126,10 @@ vi.mock("../src/settings/ModelPreferencesPanel", () => ({
   }) => (
     <div data-testid="model-preferences-panel" data-disabled={String(Boolean(disabled))}>
       <span>模型偏好内容</span>
-      <button type="button" onClick={onSaved}>
+      <button type="button" disabled={disabled} onClick={onSaved}>
         模拟保存模型偏好
       </button>
-      <button type="button" onClick={() => onBusyChange?.(true)}>
+      <button type="button" disabled={disabled} onClick={() => onBusyChange?.(true)}>
         模拟开始偏好保存
       </button>
       <button type="button" onClick={() => onBusyChange?.(false)}>
@@ -319,7 +319,7 @@ describe("MainWindowShell navigation", () => {
     expect(getEnvironmentStatus).toHaveBeenCalledTimes(1);
   });
 
-  it("disables both model surfaces while inline repair is running", async () => {
+  it("disables every model action as soon as inline repair opens", async () => {
     render(<MainWindowShell />);
     await screen.findByTestId("workbench-instance");
 
@@ -331,14 +331,23 @@ describe("MainWindowShell navigation", () => {
     const model = screen.getByTestId("model-panel");
     fireEvent.click(within(model).getByRole("button", { name: "模拟修复模型组件" }));
     const repair = await screen.findByTestId("environment-setup");
+    const startRepair = within(repair).getByRole("button", { name: "模拟开始修复" });
 
-    fireEvent.click(within(repair).getByRole("button", { name: "模拟开始修复" }));
+    expect(preferences).toHaveAttribute("data-disabled", "true");
+    expect(model).toHaveAttribute("data-disabled", "true");
+    expect(within(preferences).getByRole("button", { name: "模拟保存模型偏好" })).toBeDisabled();
+    expect(within(preferences).getByRole("button", { name: "模拟开始偏好保存" })).toBeDisabled();
+    expect(within(model).getByRole("button", { name: "模拟修复模型组件" })).toBeDisabled();
+    expect(within(model).getByRole("button", { name: "模拟开始模型下载" })).toBeDisabled();
+    expect(startRepair).toBeEnabled();
+
+    fireEvent.click(startRepair);
     expect(preferences).toHaveAttribute("data-disabled", "true");
     expect(model).toHaveAttribute("data-disabled", "true");
 
     fireEvent.click(within(repair).getByRole("button", { name: "模拟结束修复" }));
-    expect(preferences).toHaveAttribute("data-disabled", "false");
-    expect(model).toHaveAttribute("data-disabled", "false");
+    expect(preferences).toHaveAttribute("data-disabled", "true");
+    expect(model).toHaveAttribute("data-disabled", "true");
   });
 
   it("blocks repair and both model surfaces while a sibling model operation is pending", async () => {
