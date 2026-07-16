@@ -1,10 +1,12 @@
 /* ── Settings shell ── */
 .main-surface-stack {
   position: relative;
-  width: 100vw;
-  height: 100vh;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
   overflow: hidden;
-  background: #f3f6fb;
+  background: var(--wb-bg);
   isolation: isolate;
 }
 
@@ -14,29 +16,25 @@
   z-index: 0;
   overflow: hidden;
   opacity: 0;
-  visibility: hidden;
   pointer-events: none;
   transition:
-    opacity 0.16s var(--ease-product),
-    transform 0.2s var(--ease-product),
-    visibility 0s linear 0.2s;
+    opacity 0.2s var(--ease-product),
+    transform 0.2s var(--ease-product);
 }
 
 .main-surface--workbench {
-  transform: translateX(-5px);
+  transform: translateX(6px);
 }
 
 .main-surface--settings {
-  transform: translateX(5px);
+  transform: translateX(6px);
 }
 
 .main-surface.is-active {
   z-index: 1;
   opacity: 1;
-  visibility: visible;
   transform: translateX(0);
   pointer-events: auto;
-  transition-delay: 0s;
 }
 
 .main-surface:focus,
@@ -44,7 +42,7 @@
   outline: none;
 }
 
-.settings-app {
+.unified-app-shell .settings-app {
   --background: #f6f8fb;
   --foreground: #17202a;
   --muted: #edf2f8;
@@ -78,10 +76,12 @@
   position: relative;
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
-  min-height: 100vh;
-  height: 100vh;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
   overflow: hidden;
-  background: #f3f6fb;
+  background: var(--wb-bg);
   color: var(--text);
 }
 
@@ -92,6 +92,78 @@
 
 .settings-app--loading {
   place-items: center;
+}
+
+.settings-navigation-pane {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--wb-border);
+  background: color-mix(in srgb, var(--wb-panel) 68%, var(--wb-bg));
+}
+
+.settings-navigation-pane__header {
+  padding: 20px 16px 17px;
+  border-bottom: 1px solid var(--wb-border);
+}
+
+.settings-navigation-pane__header h1 {
+  margin: 0;
+  color: var(--wb-text);
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.2;
+}
+
+.settings-navigation-pane__nav {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  min-height: 0;
+  padding: 10px 8px;
+  overflow-y: auto;
+}
+
+.settings-navigation-pane__nav button {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 11px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wb-muted);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-navigation-pane__nav button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--wb-text) 6%, transparent);
+  color: var(--wb-text);
+}
+
+.settings-navigation-pane__nav button.is-active {
+  border-color: color-mix(in srgb, var(--wb-accent) 14%, var(--wb-border));
+  background: color-mix(in srgb, var(--wb-accent) 10%, var(--wb-panel));
+  color: var(--wb-accent);
+}
+
+.settings-navigation-pane__nav button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 55%, transparent);
+  outline-offset: -2px;
+}
+
+.settings-navigation-pane__nav button:disabled {
+  cursor: not-allowed;
+  opacity: 0.44;
 }
 
 .settings-sidebar {
@@ -309,9 +381,10 @@
   gap: 12px;
 }
 
-.settings-main {
+.unified-app-shell .settings-main {
   min-width: 0;
-  height: 100vh;
+  min-height: 0;
+  height: 100%;
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-gutter: stable;

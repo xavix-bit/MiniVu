@@ -1,6 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { Camera, Clock3, LoaderCircle, Pin, Settings, Trash2 } from "lucide-react";
-import appIconUrl from "../../app-icon.png";
+import { Camera, LoaderCircle, Pin, Trash2 } from "lucide-react";
 import { modelClient } from "../model/modelClient";
 import type { CaptureMessage, CaptureRecord } from "../captures/types";
 import { useCaptureLibrary, type CaptureLibraryState } from "../captures/useCaptureLibrary";
@@ -10,7 +9,7 @@ import { CaptureList } from "./CaptureList";
 
 type WorkbenchViewProps = {
   library: CaptureLibraryState;
-  onOpenSettings: () => void;
+  scope: "recent" | "pinned";
   onCapture: () => void;
   onAsk?: (
     record: CaptureRecord,
@@ -46,17 +45,16 @@ async function askModel(
 
 export function WorkbenchView({
   library,
-  onOpenSettings,
+  scope,
   onCapture,
   onAsk = askModel,
   onCancel = (requestId) => modelClient.cancelGeneration(requestId),
 }: WorkbenchViewProps) {
-  const [scope, setScope] = useState<"recent" | "pinned">("recent");
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [streaming, setStreaming] = useState<Record<string, string>>({});
   const [activeRequestIds, setActiveRequestIds] = useState<Record<string, string>>({});
   const activeRequestIdsRef = useRef<Record<string, string>>({});
-  const fallbackSelectionRef = useRef<string | null>(null);
+  const fallbackSelectionRef = useRef<{ scope: WorkbenchViewProps["scope"]; id: string } | null>(null);
 
   const filtered = useMemo(() => {
     const visibleIds = new Set(library.visibleRecords.map((record) => record.id));
@@ -74,12 +72,15 @@ export function WorkbenchView({
       fallbackSelectionRef.current = null;
       return;
     }
-    if (fallbackSelectionRef.current === fallbackId) {
+    if (
+      fallbackSelectionRef.current?.scope === scope
+      && fallbackSelectionRef.current.id === fallbackId
+    ) {
       return;
     }
-    fallbackSelectionRef.current = fallbackId;
+    fallbackSelectionRef.current = { scope, id: fallbackId };
     void library.select(fallbackId);
-  }, [fallbackId, library.select]);
+  }, [fallbackId, library.select, scope]);
 
   async function ask(record: CaptureRecord, prompt: string) {
     if (activeRequestIdsRef.current[record.id] || !record.imageDataUrl) return;
@@ -118,31 +119,6 @@ export function WorkbenchView({
 
   return (
     <div className="workbench-shell">
-      <nav className="workbench-rail" aria-label="工作台导航">
-        <img src={appIconUrl} alt="MiniVu" className="workbench-rail__logo" />
-        <button
-          type="button"
-          className={scope === "recent" ? "is-active" : ""}
-          aria-label="最近"
-          title="最近"
-          onClick={() => setScope("recent")}
-        >
-          <Clock3 size={20} />
-        </button>
-        <button
-          type="button"
-          className={scope === "pinned" ? "is-active" : ""}
-          aria-label="固定"
-          title="固定"
-          onClick={() => setScope("pinned")}
-        >
-          <Pin size={19} />
-        </button>
-        <button type="button" className="workbench-rail__settings" aria-label="设置" title="设置" onClick={onOpenSettings}>
-          <Settings size={20} />
-        </button>
-      </nav>
-
       <CaptureList
         records={filtered}
         selectedId={library.selectedId}
@@ -221,7 +197,9 @@ export function WorkbenchView({
   );
 }
 
-export const WorkbenchShell = memo(function WorkbenchShell({ onOpenSettings, onCapture }: Omit<WorkbenchViewProps, "library" | "onAsk">) {
+type WorkbenchShellProps = Pick<WorkbenchViewProps, "scope" | "onCapture">;
+
+export const WorkbenchShell = memo(function WorkbenchShell({ scope, onCapture }: WorkbenchShellProps) {
   const library = useCaptureLibrary();
-  return <WorkbenchView library={library} onOpenSettings={onOpenSettings} onCapture={onCapture} />;
+  return <WorkbenchView library={library} scope={scope} onCapture={onCapture} />;
 });

@@ -42,7 +42,7 @@ function library(records: CaptureRecord[] = []): CaptureLibraryState {
 
 describe("WorkbenchView", () => {
   it("shows a capture-first empty state without readiness cards", () => {
-    render(<WorkbenchView library={library()} onOpenSettings={vi.fn()} onCapture={vi.fn()} />);
+    render(<WorkbenchView library={library()} scope="recent" onCapture={vi.fn()} />);
 
     expect(screen.getByRole("heading", { name: "还没有截图" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "截图" })).toBeInTheDocument();
@@ -53,15 +53,15 @@ describe("WorkbenchView", () => {
     const first = record();
     const pinned = record({ id: "two", title: "固定截图", pinned: true });
     const api = library([first, pinned]);
-    const view = render(<WorkbenchView library={api} onOpenSettings={vi.fn()} onCapture={vi.fn()} />);
+    const view = render(<WorkbenchView library={api} scope="recent" onCapture={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "固定" }));
+    view.rerender(<WorkbenchView library={api} scope="pinned" onCapture={vi.fn()} />);
     expect(screen.getByRole("listitem", { name: /固定截图/ })).toBeInTheDocument();
     expect(screen.queryByRole("listitem", { name: /登录页/ })).not.toBeInTheDocument();
     await waitFor(() => expect(api.select).toHaveBeenCalledWith(pinned.id));
 
     api.selected = pinned;
-    view.rerender(<WorkbenchView library={api} onOpenSettings={vi.fn()} onCapture={vi.fn()} />);
+    view.rerender(<WorkbenchView library={api} scope="pinned" onCapture={vi.fn()} />);
 
     fireEvent.click(screen.getByRole("tab", { name: "文字" }));
     expect(screen.getByText("欢迎回来")).toBeInTheDocument();
@@ -73,7 +73,7 @@ describe("WorkbenchView", () => {
     render(
       <WorkbenchView
         library={api}
-        onOpenSettings={vi.fn()}
+        scope="recent"
         onCapture={vi.fn()}
         onAsk={ask}
       />,
@@ -92,7 +92,7 @@ describe("WorkbenchView", () => {
   });
 
   it("switches inspector tabs with the arrow keys", async () => {
-    render(<WorkbenchView library={library([record()])} onOpenSettings={vi.fn()} onCapture={vi.fn()} />);
+    render(<WorkbenchView library={library([record()])} scope="recent" onCapture={vi.fn()} />);
 
     const aiTab = screen.getByRole("tab", { name: "AI" });
     aiTab.focus();
@@ -116,7 +116,7 @@ describe("WorkbenchView", () => {
     api.selectedId = second.id;
 
     const { container } = render(
-      <WorkbenchView library={api} onOpenSettings={vi.fn()} onCapture={vi.fn()} />,
+      <WorkbenchView library={api} scope="recent" onCapture={vi.fn()} />,
     );
 
     expect(screen.getByRole("status", { name: "" })).toHaveTextContent("正在载入");
@@ -133,7 +133,7 @@ describe("WorkbenchView", () => {
     render(
       <WorkbenchView
         library={api}
-        onOpenSettings={vi.fn()}
+        scope="recent"
         onCapture={vi.fn()}
         onAsk={ask}
         onCancel={cancel}
@@ -162,10 +162,29 @@ describe("WorkbenchView", () => {
     const api = library([current, summary]);
     api.visibleRecords = [summary];
 
-    render(<WorkbenchView library={api} onOpenSettings={vi.fn()} onCapture={vi.fn()} />);
+    render(<WorkbenchView library={api} scope="recent" onCapture={vi.fn()} />);
 
     await waitFor(() => expect(api.select).toHaveBeenCalledWith(summary.id));
     expect(within(screen.getByRole("main")).queryByText("搜索结果")).not.toBeInTheDocument();
     expect(within(screen.getByRole("main")).getByText("正在载入截图")).toBeInTheDocument();
+  });
+
+  it("requalifies the same fallback record across rapid scope changes", async () => {
+    const sharedFallback = record({ id: "shared", pinned: true });
+    const api = library([sharedFallback, record({ id: "recent-only", pinned: false })]);
+    api.selected = null;
+    api.selectedId = null;
+
+    const view = render(<WorkbenchView library={api} scope="recent" onCapture={vi.fn()} />);
+    await waitFor(() => expect(api.select).toHaveBeenCalledTimes(1));
+
+    view.rerender(<WorkbenchView library={api} scope="pinned" onCapture={vi.fn()} />);
+    await waitFor(() => expect(api.select).toHaveBeenCalledTimes(2));
+
+    view.rerender(<WorkbenchView library={api} scope="recent" onCapture={vi.fn()} />);
+    await waitFor(() => expect(api.select).toHaveBeenCalledTimes(3));
+    expect(api.select).toHaveBeenNthCalledWith(1, sharedFallback.id);
+    expect(api.select).toHaveBeenNthCalledWith(2, sharedFallback.id);
+    expect(api.select).toHaveBeenNthCalledWith(3, sharedFallback.id);
   });
 });

@@ -1,4 +1,4 @@
-.workbench-shell {
+.unified-app-shell {
   --wb-bg: #f5f7fa;
   --wb-panel: #ffffff;
   --wb-border: #e1e6ed;
@@ -6,9 +6,21 @@
   --wb-muted: #6f7b8d;
   --wb-accent: #2f66e9;
   display: grid;
-  grid-template-columns: 64px 260px minmax(0, 1fr);
+  grid-template-columns: 64px minmax(0, 1fr);
   width: 100vw;
   height: 100vh;
+  overflow: hidden;
+  background: var(--wb-bg);
+  color: var(--wb-text);
+}
+
+.workbench-shell {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
   background: var(--wb-bg);
   color: var(--wb-text);
@@ -68,17 +80,19 @@
   font-size: 12px;
 }
 
-.workbench-rail {
+.app-rail {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  min-height: 0;
   padding: 14px 8px;
   border-right: 1px solid var(--wb-border);
-  background: #f0f3f7;
+  background: color-mix(in srgb, var(--wb-panel) 42%, var(--wb-bg));
 }
 
-.workbench-rail__logo {
+.app-rail__logo {
   width: 38px;
   height: 38px;
   margin-bottom: 18px;
@@ -88,7 +102,7 @@
   box-shadow: 0 2px 8px rgba(24, 32, 43, 0.06);
 }
 
-.workbench-rail button,
+.app-rail button,
 .capture-canvas__toolbar button,
 .workbench-detail__actions button {
   display: grid;
@@ -103,19 +117,29 @@
   cursor: pointer;
 }
 
-.workbench-rail button:hover,
+.app-rail button:hover:not(:disabled),
 .workbench-detail__actions button:hover {
   background: rgba(24, 32, 43, 0.055);
   color: var(--wb-text);
 }
 
-.workbench-rail button.is-active {
-  background: #fff;
+.app-rail button.is-active {
+  background: var(--wb-panel);
   color: var(--wb-accent);
   box-shadow: 0 1px 4px rgba(24, 32, 43, 0.08);
 }
 
-.workbench-rail__settings {
+.app-rail button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 62%, transparent);
+  outline-offset: 2px;
+}
+
+.app-rail button:disabled {
+  cursor: not-allowed;
+  opacity: 0.46;
+}
+
+.app-rail__settings {
   margin-top: auto;
 }
 
@@ -336,7 +360,7 @@
 
 .workbench-detail__body {
   display: grid;
-  grid-template-columns: minmax(360px, 1fr) 320px;
+  grid-template-columns: minmax(360px, 1fr) minmax(280px, 30%);
   min-width: 0;
   min-height: 0;
 }
@@ -718,20 +742,12 @@
 }
 
 @media (max-width: 1080px) {
-  .workbench-shell {
-    grid-template-columns: 64px 232px minmax(0, 1fr);
-  }
-
   .workbench-detail__body {
-    grid-template-columns: minmax(320px, 1fr) 286px;
+    grid-template-columns: minmax(300px, 1fr) minmax(260px, 34%);
   }
 }
 
 @media (max-width: 820px) {
-  .workbench-shell {
-    grid-template-columns: 56px 210px minmax(0, 1fr);
-  }
-
   .workbench-detail__body {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -740,7 +756,7 @@
     position: absolute;
     right: 0;
     bottom: 0;
-    width: min(320px, calc(100vw - 266px));
+    width: min(100%, 22rem);
     height: 48%;
     border-top: 1px solid var(--wb-border);
     box-shadow: 0 -10px 30px rgba(24, 32, 43, 0.08);
@@ -753,12 +769,21 @@
   .workbench-detail__header,
   .workbench-detail__body,
   .capture-list-item {
-    transition: none;
+    transition-duration: 1ms;
+  }
+
+  .main-surface {
+    transform: none;
+  }
+
+  .settings-page-view,
+  .capture-inspector__panel {
+    transform: none;
   }
 
   .capture-inspector__panel,
   .capture-inspector__tabs button {
-    transition: none;
+    transition-duration: 1ms;
   }
 
   .capture-canvas__stage img {
@@ -766,11 +791,22 @@
   }
 }
 
-[data-theme="dark"] .workbench-shell {
+[data-theme="dark"] .unified-app-shell {
   --wb-bg: #191c21;
   --wb-panel: #22262c;
   --wb-border: rgba(255, 255, 255, 0.09);
   --wb-text: #f2f4f7;
   --wb-muted: #9aa4b2;
   --wb-accent: #7f9bff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .unified-app-shell {
+    --wb-bg: #191c21;
+    --wb-panel: #22262c;
+    --wb-border: rgba(255, 255, 255, 0.09);
+    --wb-text: #f2f4f7;
+    --wb-muted: #9aa4b2;
+    --wb-accent: #7f9bff;
+  }
 }
