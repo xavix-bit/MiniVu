@@ -18,7 +18,13 @@ export function CaptureCanvas({ record }: CaptureCanvasProps) {
   const stageRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
   const autoFitRef = useRef(true);
-  const dragRef = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
+  const dragRef = useRef<{
+    pointerId: number;
+    x: number;
+    y: number;
+    ox: number;
+    oy: number;
+  } | null>(null);
 
   function setAutoFit(enabled: boolean) {
     autoFitRef.current = enabled;
@@ -56,6 +62,7 @@ export function CaptureCanvas({ record }: CaptureCanvasProps) {
   }
 
   useEffect(() => {
+    dragRef.current = null;
     setAutoFit(true);
     applyFit();
   }, [record.id]);
@@ -112,8 +119,9 @@ export function CaptureCanvas({ record }: CaptureCanvasProps) {
           adjustZoom(event.deltaY < 0 ? 0.1 : -0.1);
         }}
         onPointerDown={(event) => {
-          if (event.button === 0) {
+          if (event.button === 0 && !dragRef.current) {
             dragRef.current = {
+              pointerId: event.pointerId,
               x: event.clientX,
               y: event.clientY,
               ox: viewport.offset.x,
@@ -124,7 +132,7 @@ export function CaptureCanvas({ record }: CaptureCanvasProps) {
         }}
         onPointerMove={(event) => {
           const start = dragRef.current;
-          if (start) {
+          if (start && event.pointerId === start.pointerId) {
             setAutoFit(false);
             setViewport((current) => ({
               ...current,
@@ -135,8 +143,15 @@ export function CaptureCanvas({ record }: CaptureCanvasProps) {
             }));
           }
         }}
-        onPointerUp={() => { dragRef.current = null; }}
-        onPointerCancel={() => { dragRef.current = null; }}
+        onPointerUp={(event) => {
+          if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
+        }}
+        onPointerCancel={(event) => {
+          if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
+        }}
+        onLostPointerCapture={(event) => {
+          if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
+        }}
       >
         {record.imageDataUrl ? (
           <img
