@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { X } from "lucide-react";
 import { AppRail, type AppRailDestination } from "./AppRail";
 import { EnvironmentSetupPanel } from "./EnvironmentSetupPanel";
+import { FirstRunWelcome, type FirstRunWelcomeState } from "./FirstRunWelcome";
 import {
   SettingsNavigationPane,
   type SettingsSection,
@@ -11,14 +13,23 @@ import { modelClient } from "../model/modelClient";
 import { ModelPanel } from "../settings/ModelPanel";
 import { ModelPreferencesPanel } from "../settings/ModelPreferencesPanel";
 import { SettingsPanel } from "../settings/SettingsPanel";
-import { loadSettings } from "../settings/settingsStore";
+import { loadSettings, updateSettings } from "../settings/settingsStore";
 import { WorkbenchShell } from "../workbench/WorkbenchShell";
-import { captureScreenRegion } from "../image/captureScreen";
+import {
+  CaptureError,
+  captureScreenRegion,
+  openScreenRecordingSettings,
+} from "../image/captureScreen";
 import { captureClient } from "../captures/captureClient";
 import { processCaptureInBackground } from "../captures/processCapture";
 
 type AppMode = "workbench" | "settings";
 type WorkbenchScope = "recent" | "pinned";
+type StartupState =
+  | { kind: "loading" }
+  | { kind: "load-error" }
+  | { kind: "welcome"; shortcut: string }
+  | { kind: "ready" };
 
 const PAGE_META: Record<SettingsSection, { title: string; subtitle: string }> = {
   setup: { title: "初始设置", subtitle: "" },
@@ -41,12 +52,21 @@ function SubpageLead({ section }: { section: SettingsSection }) {
 export function MainWindowShell() {
   const settingsMainRef = useRef<HTMLElement>(null);
   const workbenchSurfaceRef = useRef<HTMLElement>(null);
+  const welcomeSurfaceRef = useRef<HTMLElement>(null);
   const scrollPositionsRef = useRef<Partial<Record<SettingsSection, number>>>({});
   const modeRef = useRef<AppMode>("settings");
   const settingsSectionRef = useRef<SettingsSection>("setup");
-  const [onboardingDone, setOnboardingDone] = useState(false);
+  const mountedRef = useRef(false);
+  const startupGenerationRef = useRef(0);
+  const welcomeGenerationRef = useRef(0);
+  const welcomePendingRef = useRef(false);
+  const settingsOpenPendingRef = useRef(false);
+  const [startupState, setStartupState] = useState<StartupState>({ kind: "loading" });
+  const [welcomeState, setWelcomeState] = useState<FirstRunWelcomeState>({ kind: "idle" });
   const [mode, setMode] = useState<AppMode>("settings");
   const [workbenchScope, setWorkbenchScope] = useState<WorkbenchScope>("recent");
+  const [requestedRecordId, setRequestedRecordId] = useState<string | null>(null);
+  const [workbenchNotice, setWorkbenchNotice] = useState("");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("setup");
   const [warmupNotice, setWarmupNotice] = useState("");
   const [runtimeRepairOpen, setRuntimeRepairOpen] = useState(false);
@@ -62,52 +82,80 @@ export function MainWindowShell() {
     return () => document.documentElement.classList.remove("main-window");
   }, []);
 
-  useEffect(() => {
+  const loadStartupSettings = useCallback(() => {
+    const generation = ++startupGenerationRef.current;
+    setStartupState({ kind: "loading" });
     void loadSettings()
       .then((settings) => {
-        setOnboardingDone(settings.onboardingComplete);
+        if (!mountedRef.current || startupGenerationRef.current !== generation) return;
         if (settings.onboardingComplete) {
           setSettingsSection("general");
           setMode("workbench");
+          setStartupState({ kind: "ready" });
         } else {
-          setSettingsSection("setup");
-          setMode("settings");
+          setStartupState({ kind: "welcome", shortcut: settings.shortcut });
         }
       })
       .catch(() => {
-        setOnboardingDone(false);
-        setSettingsSection("setup");
-        setMode("settings");
+        if (!mountedRef.current || startupGenerationRef.current !== generation) return;
+        setStartupState({ kind: "load-error" });
       });
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
+    loadStartupSettings();
+    return () => {
+      mountedRef.current = false;
+      startupGenerationRef.current += 1;
+      welcomeGenerationRef.current += 1;
+      welcomePendingRef.current = false;
+      settingsOpenPendingRef.current = false;
+    };
+  }, [loadStartupSettings]);
+
+  useEffect(() => {
+    let active = true;
     let unlisten: (() => void) | undefined;
     void listen<{ message: string }>("warmup-failed", (event) => {
-      setWarmupNotice(event.payload.message);
+      if (active) {
+        setWarmupNotice(event.payload.message);
+      }
     }).then((cleanup) => {
-      unlisten = cleanup;
+      if (active) {
+        unlisten = cleanup;
+      } else {
+        cleanup();
+      }
     });
     return () => {
+      active = false;
       unlisten?.();
     };
   }, []);
 
+  const onboardingDone = startupState.kind === "ready";
   const activeSection = onboardingDone ? settingsSection : "setup";
   const workbenchActive = onboardingDone && mode === "workbench";
+  const settingsActive = onboardingDone && mode === "settings";
+  const welcomeActive = !onboardingDone;
   modeRef.current = mode;
   settingsSectionRef.current = activeSection;
 
   useLayoutEffect(() => {
-    const focusTarget = workbenchActive ? workbenchSurfaceRef.current : settingsMainRef.current;
+    const focusTarget = workbenchActive
+      ? workbenchSurfaceRef.current
+      : settingsActive
+        ? settingsMainRef.current
+        : welcomeSurfaceRef.current;
     focusTarget?.focus({ preventScroll: true });
-  }, [workbenchActive]);
+  }, [settingsActive, startupState.kind, workbenchActive]);
 
   useLayoutEffect(() => {
-    if (!workbenchActive && settingsMainRef.current) {
+    if (settingsActive && settingsMainRef.current) {
       settingsMainRef.current.scrollTop = scrollPositionsRef.current[activeSection] ?? 0;
     }
-  }, [activeSection, workbenchActive]);
+  }, [activeSection, settingsActive]);
 
   const handleSettingsNavigate = useCallback((next: SettingsSection) => {
     setSettingsSection((current) => {
@@ -131,22 +179,9 @@ export function MainWindowShell() {
     setMode("workbench");
   }, []);
 
-  const handleSetupComplete = useCallback(() => {
-    setOnboardingDone(true);
-    setSettingsSection("general");
-    setMode("workbench");
-  }, []);
-
-  const handleSetupSucceeded = useCallback(() => {
-    setOnboardingDone(true);
-  }, []);
-
   const refreshEnvironmentStatus = useCallback(async () => {
     try {
-      const status = await modelClient.getEnvironmentStatus();
-      if (typeof status.onboardingComplete === "boolean") {
-        setOnboardingDone(status.onboardingComplete);
-      }
+      await modelClient.getEnvironmentStatus();
     } catch {
       // The active settings view remains usable if a status refresh fails.
     }
@@ -183,14 +218,115 @@ export function MainWindowShell() {
       source: "capture",
       retention: settings.captureRetention ?? "24h",
     });
-    processCaptureInBackground(record.id, image.dataUrl);
+    processCaptureInBackground(record.id, image.dataUrl, {
+      warmup: settings.backgroundWarmup ?? false,
+    });
   }, []);
 
   const handleCapture = useCallback(() => {
     void handleWorkbenchCapture();
   }, [handleWorkbenchCapture]);
 
-  const railActive: AppRailDestination = mode === "settings" ? "settings" : workbenchScope;
+  const enterWorkbench = useCallback((notice = "") => {
+    setWorkbenchNotice(notice);
+    setSettingsSection("general");
+    setMode("workbench");
+    setStartupState({ kind: "ready" });
+  }, []);
+
+  const handleWelcomeCapture = useCallback(async () => {
+    if (welcomePendingRef.current) return;
+    welcomePendingRef.current = true;
+    settingsOpenPendingRef.current = false;
+    const generation = ++welcomeGenerationRef.current;
+    const isCurrent = () => mountedRef.current && welcomeGenerationRef.current === generation;
+    setWelcomeState({ kind: "capturing" });
+
+    try {
+      const image = await captureScreenRegion();
+      if (!isCurrent()) return;
+      const settings = await loadSettings();
+      if (!isCurrent()) return;
+      const record = await captureClient.create({
+        dataUrl: image.dataUrl,
+        source: "capture",
+        retention: settings.captureRetention ?? "24h",
+      });
+      if (!isCurrent()) return;
+
+      setRequestedRecordId(record.id);
+      processCaptureInBackground(record.id, image.dataUrl);
+
+      let saveFailed = false;
+      try {
+        await updateSettings({ onboardingComplete: true });
+      } catch {
+        saveFailed = true;
+      }
+      if (!isCurrent()) return;
+      enterWorkbench(saveFailed ? "截图已保存，但首次设置未能保存。" : "");
+    } catch (error) {
+      if (!isCurrent()) return;
+      if (error instanceof CaptureError && error.code === "cancelled") {
+        setWelcomeState({ kind: "idle" });
+      } else if (error instanceof CaptureError && error.code === "permission-denied") {
+        setWelcomeState({ kind: "permission-denied" });
+      } else {
+        setWelcomeState({ kind: "idle", notice: "capture-failed" });
+      }
+    } finally {
+      if (welcomeGenerationRef.current === generation) {
+        welcomePendingRef.current = false;
+      }
+    }
+  }, [enterWorkbench]);
+
+  const handleOpenScreenRecordingSettings = useCallback(async () => {
+    if (settingsOpenPendingRef.current) return;
+    settingsOpenPendingRef.current = true;
+    const generation = ++welcomeGenerationRef.current;
+    try {
+      await openScreenRecordingSettings();
+    } catch {
+      if (mountedRef.current && welcomeGenerationRef.current === generation) {
+        setWelcomeState({ kind: "permission-denied", settingsOpenFailed: true });
+      }
+    } finally {
+      if (welcomeGenerationRef.current === generation) {
+        settingsOpenPendingRef.current = false;
+      }
+    }
+  }, []);
+
+  const handleWelcomeSkip = useCallback(async () => {
+    if (welcomePendingRef.current) return;
+    welcomePendingRef.current = true;
+    settingsOpenPendingRef.current = false;
+    const generation = ++welcomeGenerationRef.current;
+    const isCurrent = () => mountedRef.current && welcomeGenerationRef.current === generation;
+    setWelcomeState({ kind: "skipping" });
+
+    try {
+      await loadSettings();
+      if (!isCurrent()) return;
+      await updateSettings({ onboardingComplete: true });
+      if (!isCurrent()) return;
+      setRequestedRecordId(null);
+      enterWorkbench();
+    } catch {
+      if (isCurrent()) {
+        setWelcomeState({ kind: "idle", notice: "save-failed" });
+      }
+    } finally {
+      if (welcomeGenerationRef.current === generation) {
+        welcomePendingRef.current = false;
+      }
+    }
+  }, [enterWorkbench]);
+
+  const railActive: AppRailDestination | null = onboardingDone
+    ? mode === "settings" ? "settings" : workbenchScope
+    : null;
   const preferencesActive = activeSection === "general" || activeSection === "shortcut";
 
   return (
@@ -209,13 +345,25 @@ export function MainWindowShell() {
           inert={!workbenchActive}
           tabIndex={-1}
         >
-          <WorkbenchShell scope={workbenchScope} onCapture={handleCapture} />
+          <WorkbenchShell
+            scope={workbenchScope}
+            onCapture={handleCapture}
+            requestedRecordId={requestedRecordId}
+          />
+          {workbenchNotice ? (
+            <div className="workbench-onboarding-notice" role="status">
+              <span>{workbenchNotice}</span>
+              <button type="button" aria-label="关闭提示" onClick={() => setWorkbenchNotice("")}>
+                <X size={14} aria-hidden="true" />
+              </button>
+            </div>
+          ) : null}
         </section>
 
         <section
-          className={`main-surface main-surface--settings${workbenchActive ? "" : " is-active"}`}
-          aria-hidden={workbenchActive}
-          inert={workbenchActive}
+          className={`main-surface main-surface--settings${settingsActive ? " is-active" : ""}`}
+          aria-hidden={!settingsActive}
+          inert={!settingsActive}
         >
           <div className="settings-app">
             <SettingsNavigationPane
@@ -228,7 +376,7 @@ export function MainWindowShell() {
               <div className={`settings-page-shell settings-page-shell--${activeSection}`}>
                 {warmupNotice ? (
                   <div className="callout callout--attention settings-page-shell__notice" role="status">
-                    <p>准备失败：{warmupNotice}</p>
+                    <p>准备暂时失败，请稍后重试。</p>
                     <button type="button" className="callout__action" onClick={() => setWarmupNotice("")}>
                       知道了
                     </button>
@@ -243,11 +391,9 @@ export function MainWindowShell() {
                   >
                     <SubpageLead section="setup" />
                     <div className="settings-page-body">
-                      {activeSection === "setup" ? (
+                      {onboardingDone && activeSection === "setup" ? (
                         <EnvironmentSetupPanel
-                          showWelcome={!onboardingDone}
-                          onComplete={handleSetupComplete}
-                          onSetupSucceeded={handleSetupSucceeded}
+                          showWelcome={false}
                         />
                       ) : null}
                     </div>
@@ -316,6 +462,31 @@ export function MainWindowShell() {
               </div>
             </main>
           </div>
+        </section>
+
+        <section
+          ref={welcomeSurfaceRef}
+          className={`main-surface main-surface--welcome${welcomeActive ? " is-active" : ""}`}
+          aria-hidden={!welcomeActive}
+          inert={!welcomeActive}
+          tabIndex={-1}
+        >
+          {startupState.kind === "loading" ? (
+            <div className="startup-state" role="status">正在载入 MiniVu</div>
+          ) : startupState.kind === "load-error" ? (
+            <div className="startup-state startup-state--error" role="alert">
+              <p>暂时无法载入设置。</p>
+              <button type="button" onClick={loadStartupSettings}>重试</button>
+            </div>
+          ) : startupState.kind === "welcome" ? (
+            <FirstRunWelcome
+              shortcut={startupState.shortcut}
+              state={welcomeState}
+              onCapture={() => void handleWelcomeCapture()}
+              onSkip={() => void handleWelcomeSkip()}
+              onOpenScreenRecordingSettings={() => void handleOpenScreenRecordingSettings()}
+            />
+          ) : null}
         </section>
       </div>
     </div>

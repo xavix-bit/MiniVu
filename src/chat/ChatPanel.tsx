@@ -11,7 +11,7 @@ import { RecognizedTextPanel } from "./RecognizedTextPanel";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { useImageSession, type ChatMessage } from "./useImageSession";
 import { exportCurrentSession } from "../export/exportSession";
-import { captureScreenRegion } from "../image/captureScreen";
+import { CaptureError, captureScreenRegion } from "../image/captureScreen";
 import {
   filterAcceptedFiles,
   readClipboardImage,
@@ -381,10 +381,12 @@ export function ChatPanel({
       const image = await captureScreenRegion();
       await acceptImage(image, "capture");
     } catch (err) {
-      const message = String(err);
-      if (!message.includes("已取消截图")) {
-        setNotice(message);
-      }
+      if (err instanceof CaptureError && err.code === "cancelled") return;
+      setNotice(
+        err instanceof CaptureError && err.code === "permission-denied"
+          ? "请在系统设置中允许屏幕录制后重试。"
+          : "截图失败，请重试。",
+      );
     } finally {
       setCapturing(false);
     }

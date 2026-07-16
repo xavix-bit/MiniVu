@@ -1,4 +1,3 @@
-use crate::environment::is_environment_ready;
 use crate::settings::load_settings;
 use serde::Serialize;
 use std::sync::Mutex;
@@ -220,11 +219,14 @@ pub fn show_entry_window(app: &AppHandle) -> Result<(), String> {
     show_main_window(app)
 }
 
+fn shortcut_requires_main_window(onboarding_complete: bool) -> bool {
+    !onboarding_complete
+}
+
 pub fn show_quick_panel_via_shortcut(app: &AppHandle) -> Result<(), String> {
     let settings = load_settings(app)?;
-    let environment_ready = is_environment_ready(app).unwrap_or(false);
 
-    if !settings.onboarding_complete || !environment_ready {
+    if shortcut_requires_main_window(settings.onboarding_complete) {
         show_main_window(app)
     } else {
         show_quick_panel_near_cursor(app)
@@ -233,8 +235,7 @@ pub fn show_quick_panel_via_shortcut(app: &AppHandle) -> Result<(), String> {
 
 pub fn request_capture_via_shortcut(app: &AppHandle) -> Result<(), String> {
     let settings = load_settings(app)?;
-    let environment_ready = is_environment_ready(app).unwrap_or(false);
-    if !settings.onboarding_complete || !environment_ready {
+    if shortcut_requires_main_window(settings.onboarding_complete) {
         return show_main_window(app);
     }
     with_panel_state(app, |state| {
@@ -415,4 +416,15 @@ pub fn open_screen_recording_settings() -> Result<(), String> {
             .map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shortcut_requires_main_window;
+
+    #[test]
+    fn shortcut_gate_depends_only_on_onboarding_completion() {
+        assert!(shortcut_requires_main_window(false));
+        assert!(!shortcut_requires_main_window(true));
+    }
 }

@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Camera, LoaderCircle, Pin, Trash2 } from "lucide-react";
 import { modelClient } from "../model/modelClient";
-import type { CaptureMessage, CaptureRecord } from "../captures/types";
+import type { CaptureClient, CaptureMessage, CaptureRecord } from "../captures/types";
 import { useCaptureLibrary, type CaptureLibraryState } from "../captures/useCaptureLibrary";
 import { CaptureCanvas } from "./CaptureCanvas";
 import { CaptureInspector } from "./CaptureInspector";
@@ -207,9 +207,29 @@ export function WorkbenchView({
   );
 }
 
-type WorkbenchShellProps = Pick<WorkbenchViewProps, "scope" | "onCapture">;
+type WorkbenchShellProps = Pick<WorkbenchViewProps, "scope" | "onCapture"> & {
+  requestedRecordId?: string | null;
+  captureApi?: CaptureClient;
+};
 
-export const WorkbenchShell = memo(function WorkbenchShell({ scope, onCapture }: WorkbenchShellProps) {
-  const library = useCaptureLibrary();
+export const WorkbenchShell = memo(function WorkbenchShell({
+  scope,
+  onCapture,
+  requestedRecordId = null,
+  captureApi,
+}: WorkbenchShellProps) {
+  const library = useCaptureLibrary(captureApi);
+  const handledRequestedRecordIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!requestedRecordId) {
+      handledRequestedRecordIdRef.current = null;
+      return;
+    }
+    if (handledRequestedRecordIdRef.current === requestedRecordId) return;
+    handledRequestedRecordIdRef.current = requestedRecordId;
+    void library.refresh(requestedRecordId);
+  }, [library.refresh, requestedRecordId]);
+
   return <WorkbenchView library={library} scope={scope} onCapture={onCapture} />;
 });

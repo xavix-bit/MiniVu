@@ -1,14 +1,20 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatPanel } from "../src/chat/ChatPanel";
 import { useImageSession } from "../src/chat/useImageSession";
+import { CaptureError, captureScreenRegion } from "../src/image/captureScreen";
 
 vi.mock("../src/chat/useImageSession", () => ({ useImageSession: vi.fn() }));
 vi.mock("../src/settings/settingsStore", () => ({
   loadSettings: vi.fn(() => new Promise(() => {})),
 }));
 vi.mock("../src/export/exportSession", () => ({ exportCurrentSession: vi.fn() }));
-vi.mock("../src/image/captureScreen", () => ({ captureScreenRegion: vi.fn() }));
+vi.mock("../src/image/captureScreen", async () => {
+  const actual = await vi.importActual<typeof import("../src/image/captureScreen")>(
+    "../src/image/captureScreen",
+  );
+  return { ...actual, captureScreenRegion: vi.fn() };
+});
 vi.mock("../src/image/imageIntake", () => ({
   filterAcceptedFiles: vi.fn().mockReturnValue([]),
   readClipboardImage: vi.fn().mockResolvedValue(null),
@@ -72,5 +78,38 @@ describe("ChatPanel", () => {
     expect(screen.getByRole("button", { name: "复制文字" })).toBeEnabled();
     expect(screen.getAllByRole("button", { name: "翻译" })).toHaveLength(1);
     expect(screen.queryAllByRole("button", { name: "问图" })).toHaveLength(0);
+  });
+
+  it("shows a concise capture notice without exposing backend details", async () => {
+    vi.mocked(captureScreenRegion).mockRejectedValue(
+      new Error("Metal sidecar failed at /private/tmp/model.gguf"),
+    );
+    render(<ChatPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: "截图" }));
+
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("截图失败，请重试。"));
+    expect(screen.queryByText(/Metal|GGUF|sidecar|\/tmp/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps typed cancellation silent", async () => {
+    vi.mocked(captureScreenRegion).mockRejectedValue(new CaptureError("cancelled"));
+    render(<ChatPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: "截图" }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "截图" })).toBeEnabled());
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("shows a concise permission notice for typed denial", async () => {
+    vi.mocked(captureScreenRegion).mockRejectedValue(new CaptureError("permission-denied"));
+    render(<ChatPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: "截图" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("status")).toHaveTextContent("请在系统设置中允许屏幕录制后重试。");
+    });
   });
 });

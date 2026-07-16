@@ -10,7 +10,7 @@ import { startWindowDrag } from "../window/panelChrome";
 import { ChatPanel } from "../chat/ChatPanel";
 import { PanelChrome } from "../window/panelChrome";
 import { ClipboardPaste, History, ScanLine } from "lucide-react";
-import { captureScreenRegion } from "../image/captureScreen";
+import { CaptureError, captureScreenRegion } from "../image/captureScreen";
 import { readClipboardImage } from "../image/imageIntake";
 import { captureClient } from "../captures/captureClient";
 import type { AcceptedImage } from "../image/imageInput";
@@ -123,7 +123,8 @@ export function QuickPanelShell() {
       const image = await captureScreenRegion();
       await showResult(image, "capture");
     } catch (error) {
-      if (!String(error).includes("已取消截图")) console.warn(error);
+      if (error instanceof CaptureError && error.code === "cancelled") return;
+      console.warn("截图失败");
     }
   }, [showResult]);
 

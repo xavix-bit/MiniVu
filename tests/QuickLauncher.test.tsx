@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QuickLauncher, QuickPanelShell } from "../src/app-shell/QuickPanelShell";
-import { captureScreenRegion } from "../src/image/captureScreen";
+import { CaptureError, captureScreenRegion } from "../src/image/captureScreen";
 import { captureClient } from "../src/captures/captureClient";
 
 const { invokeMock, eventHandlers } = vi.hoisted(() => ({
@@ -17,7 +17,12 @@ vi.mock("@tauri-apps/api/event", () => ({
   }),
 }));
 vi.mock("../src/chat/ChatPanel", () => ({ ChatPanel: () => null }));
-vi.mock("../src/image/captureScreen", () => ({ captureScreenRegion: vi.fn() }));
+vi.mock("../src/image/captureScreen", async () => {
+  const actual = await vi.importActual<typeof import("../src/image/captureScreen")>(
+    "../src/image/captureScreen",
+  );
+  return { ...actual, captureScreenRegion: vi.fn() };
+});
 vi.mock("../src/image/imageIntake", () => ({ readClipboardImage: vi.fn() }));
 vi.mock("../src/settings/settingsStore", () => ({
   loadSettings: vi.fn().mockResolvedValue({ captureRetention: "24h" }),
@@ -73,5 +78,36 @@ describe("QuickLauncher", () => {
         name === "take_pending_capture_request")).toHaveLength(2);
     });
     expect(captureScreenRegion).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a typed screenshot cancellation silent", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    invokeMock.mockImplementation((command: string) => (
+      Promise.resolve(command === "take_pending_capture_request")
+    ));
+    vi.mocked(captureScreenRegion).mockRejectedValue(new CaptureError("cancelled"));
+
+    render(<QuickPanelShell />);
+
+    await waitFor(() => expect(captureScreenRegion).toHaveBeenCalledOnce());
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("never logs raw capture failures", async () => {
+    const failure = new Error("Metal sidecar failed at /private/tmp/model.gguf");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    invokeMock.mockImplementation((command: string) => (
+      Promise.resolve(command === "take_pending_capture_request")
+    ));
+    vi.mocked(captureScreenRegion).mockRejectedValue(failure);
+
+    render(<QuickPanelShell />);
+
+    await waitFor(() => expect(captureScreenRegion).toHaveBeenCalledOnce());
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith("截图失败");
+    expect(warn).not.toHaveBeenCalledWith(failure);
+    warn.mockRestore();
   });
 });

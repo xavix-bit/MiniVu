@@ -1,8 +1,16 @@
 import { readFileSync } from "node:fs";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { listen } from "@tauri-apps/api/event";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MainWindowShell } from "../src/app-shell/MainWindowShell";
-import { loadSettings } from "../src/settings/settingsStore";
+import { captureClient } from "../src/captures/captureClient";
+import { processCaptureInBackground } from "../src/captures/processCapture";
+import {
+  CaptureError,
+  captureScreenRegion,
+  openScreenRecordingSettings,
+} from "../src/image/captureScreen";
+import { loadSettings, updateSettings } from "../src/settings/settingsStore";
 
 const tokensCss = readFileSync(`${process.cwd()}/src/styles/tokens.css`, "utf8");
 const settingsCss = readFileSync(`${process.cwd()}/src/styles/settings.css`, "utf8");
@@ -31,6 +39,16 @@ function contrastRatio(foreground: string, background: string) {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 const { shellState, settingsPanelState, getEnvironmentStatus } = vi.hoisted(() => ({
   shellState: { mounts: 0, renders: 0 },
   settingsPanelState: { mounts: 0 },
@@ -54,6 +72,23 @@ vi.mock("../src/settings/settingsStore", () => ({
     onboardingComplete: true,
     shortcut: "Control+Option+Space",
   })),
+  updateSettings: vi.fn(),
+}));
+vi.mock("../src/image/captureScreen", async () => {
+  const actual = await vi.importActual<typeof import("../src/image/captureScreen")>(
+    "../src/image/captureScreen",
+  );
+  return {
+    ...actual,
+    captureScreenRegion: vi.fn(),
+    openScreenRecordingSettings: vi.fn(),
+  };
+});
+vi.mock("../src/captures/captureClient", () => ({
+  captureClient: { create: vi.fn() },
+}));
+vi.mock("../src/captures/processCapture", () => ({
+  processCaptureInBackground: vi.fn(),
 }));
 vi.mock("../src/app-shell/EnvironmentSetupPanel", () => ({
   EnvironmentSetupPanel: ({
@@ -166,13 +201,23 @@ vi.mock("../src/privacy/PrivacyNotice", () => ({
 }));
 vi.mock("../src/workbench/WorkbenchShell", async () => {
   const React = await import("react");
-  const MockWorkbenchShell = React.memo(({ scope }: { scope: "recent" | "pinned" }) => {
+  const MockWorkbenchShell = React.memo(({
+    scope,
+    requestedRecordId,
+  }: {
+    scope: "recent" | "pinned";
+    requestedRecordId?: string | null;
+  }) => {
     shellState.renders += 1;
     React.useEffect(() => {
       shellState.mounts += 1;
     }, []);
     return (
-      <div data-testid="workbench-instance" data-scope={scope} />
+      <div
+        data-testid="workbench-instance"
+        data-scope={scope}
+        data-requested-record-id={requestedRecordId ?? ""}
+      />
     );
   });
   return {
@@ -190,25 +235,460 @@ describe("MainWindowShell navigation", () => {
       onboardingComplete: true,
       shortcut: "Control+Option+Space",
     } as Awaited<ReturnType<typeof loadSettings>>);
+    vi.mocked(updateSettings).mockResolvedValue({
+      onboardingComplete: true,
+      shortcut: "Control+Option+Space",
+    } as Awaited<ReturnType<typeof updateSettings>>);
   });
 
-  it("keeps first-run setup active without hidden model tasks until completion", async () => {
+  it("shows no welcome or setup surface while settings are loading", async () => {
+    const settingsLoad = deferred<Awaited<ReturnType<typeof loadSettings>>>();
+    vi.mocked(loadSettings).mockReturnValue(settingsLoad.promise);
+
+    render(<MainWindowShell />);
+
+    const rail = screen.getByRole("navigation", { name: "应用导航" });
+    expect(screen.queryByRole("heading", { name: "从一张截图开始" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("environment-setup")).not.toBeInTheDocument();
+    for (const button of within(rail).getAllByRole("button")) {
+      expect(button).toBeDisabled();
+      expect(button).not.toHaveAttribute("aria-current");
+    }
+    expect(screen.getByTestId("workbench-instance").closest(".main-surface")).toHaveAttribute("inert");
+
+    await act(async () => settingsLoad.resolve({
+      onboardingComplete: false,
+      shortcut: "Control+Option+Space",
+    } as Awaited<ReturnType<typeof loadSettings>>));
+
+    expect(await screen.findByRole("heading", { name: "从一张截图开始" })).toBeVisible();
+    expect(screen.getByLabelText("快捷键 Control+Option+Space")).toHaveTextContent("⌃⌥Space");
+    expect(screen.queryByTestId("model-panel")).not.toBeInTheDocument();
+    expect(getEnvironmentStatus).not.toHaveBeenCalled();
+  });
+
+  it("cleans up an event subscription that finishes registering after unmount", async () => {
+    const registration = deferred<() => void>();
+    const cleanup = vi.fn();
+    const settingsLoad = deferred<Awaited<ReturnType<typeof loadSettings>>>();
+    vi.mocked(listen).mockReturnValueOnce(registration.promise);
+    vi.mocked(loadSettings).mockReturnValue(settingsLoad.promise);
+
+    const view = render(<MainWindowShell />);
+    view.unmount();
+
+    await act(async () => registration.resolve(cleanup));
+
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a settings load failure separate from first run and retries it", async () => {
+    vi.mocked(loadSettings)
+      .mockRejectedValueOnce(new Error("store unavailable"))
+      .mockResolvedValueOnce({
+        onboardingComplete: true,
+        shortcut: "Control+Option+Space",
+      } as Awaited<ReturnType<typeof loadSettings>>);
+
+    render(<MainWindowShell />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("暂时无法载入设置。");
+    expect(screen.queryByRole("heading", { name: "从一张截图开始" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "设置" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "设置" })).not.toHaveAttribute("aria-current");
+
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("workbench-instance").closest(".main-surface")).not.toHaveAttribute("inert");
+    });
+    expect(loadSettings).toHaveBeenCalledTimes(2);
+  });
+
+  it("takes an existing user straight to the workbench without checking model readiness", async () => {
+    getEnvironmentStatus.mockResolvedValue({
+      onboardingComplete: false,
+      environmentReady: false,
+    });
+    vi.mocked(loadSettings).mockResolvedValue({
+      onboardingComplete: true,
+      shortcut: "Control+Option+Space",
+    } as Awaited<ReturnType<typeof loadSettings>>);
+
+    try {
+      render(<MainWindowShell />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("workbench-instance").closest(".main-surface")).not.toHaveAttribute("inert");
+      });
+      expect(screen.queryByRole("heading", { name: "从一张截图开始" })).not.toBeInTheDocument();
+      expect(screen.queryByTestId("environment-setup")).not.toBeInTheDocument();
+      expect(getEnvironmentStatus).not.toHaveBeenCalled();
+    } finally {
+      getEnvironmentStatus.mockResolvedValue({
+        onboardingComplete: true,
+        environmentReady: true,
+      });
+    }
+  });
+
+  it("captures, stores, processes, saves, and selects the first screenshot in order", async () => {
+    const image = { name: "first.png", dataUrl: "data:image/png;base64,FIRST" };
+    const created = {
+      id: "first-record",
+      source: "capture",
+      title: null,
+      ocrText: "",
+      ocrState: "pending",
+      messages: [],
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      expiresAtMs: 2,
+      pinned: false,
+    } as const;
+    vi.mocked(loadSettings)
+      .mockResolvedValueOnce({
+        onboardingComplete: false,
+        shortcut: "Control+Option+Space",
+      } as Awaited<ReturnType<typeof loadSettings>>)
+      .mockResolvedValueOnce({
+        onboardingComplete: false,
+        shortcut: "Control+Option+Space",
+        captureRetention: "7d",
+      } as Awaited<ReturnType<typeof loadSettings>>);
+    vi.mocked(captureScreenRegion).mockResolvedValue(image);
+    vi.mocked(captureClient.create).mockResolvedValue(created);
+
+    render(<MainWindowShell />);
+    fireEvent.click(await screen.findByRole("button", { name: "开始截图" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("workbench-instance")).toHaveAttribute(
+        "data-requested-record-id",
+        "first-record",
+      );
+      expect(screen.getByTestId("workbench-instance").closest(".main-surface")).not.toHaveAttribute("inert");
+    });
+    expect(captureClient.create).toHaveBeenCalledWith({
+      dataUrl: image.dataUrl,
+      source: "capture",
+      retention: "7d",
+    });
+    expect(processCaptureInBackground).toHaveBeenCalledWith(created.id, image.dataUrl);
+    expect(updateSettings).toHaveBeenCalledWith({ onboardingComplete: true });
+
+    const order = [
+      vi.mocked(captureScreenRegion).mock.invocationCallOrder[0],
+      vi.mocked(loadSettings).mock.invocationCallOrder[1],
+      vi.mocked(captureClient.create).mock.invocationCallOrder[0],
+      vi.mocked(processCaptureInBackground).mock.invocationCallOrder[0],
+      vi.mocked(updateSettings).mock.invocationCallOrder[0],
+    ];
+    expect(order).toEqual([...order].sort((left, right) => left - right));
+  });
+
+  it("offers permission recovery and reports a settings-open failure locally", async () => {
     vi.mocked(loadSettings).mockResolvedValue({
       onboardingComplete: false,
       shortcut: "Control+Option+Space",
     } as Awaited<ReturnType<typeof loadSettings>>);
+    vi.mocked(captureScreenRegion).mockRejectedValue(new CaptureError("permission-denied"));
+    vi.mocked(openScreenRecordingSettings).mockRejectedValue(new Error("open failed at /private/tmp"));
 
     render(<MainWindowShell />);
+    fireEvent.click(await screen.findByRole("button", { name: "开始截图" }));
 
-    const setup = await screen.findByTestId("environment-setup");
-    expect(setup).toHaveAttribute("data-welcome", "true");
-    expect(screen.queryByTestId("model-panel")).not.toBeInTheDocument();
+    const openSettings = await screen.findByRole("button", { name: "打开系统设置" });
+    expect(screen.getByRole("button", { name: "重试" })).toBeEnabled();
+    fireEvent.click(openSettings);
 
-    fireEvent.click(within(setup).getByRole("button", { name: "模拟完成设置" }));
+    expect(await screen.findByText("系统设置没有打开，请手动打开后重试。")).toBeVisible();
+    expect(openScreenRecordingSettings).toHaveBeenCalledOnce();
+    expect(screen.queryByText(/private|tmp|open failed/i)).not.toBeInTheDocument();
+  });
 
-    await waitFor(() => expect(screen.queryByTestId("environment-setup")).not.toBeInTheDocument());
+  it("retries a permission-denied capture and enters with the recovered record", async () => {
+    const image = { name: "retry.png", dataUrl: "data:image/png;base64,RETRY" };
+    const created = {
+      id: "permission-retry-record",
+      source: "capture",
+      title: null,
+      ocrText: "",
+      ocrState: "pending",
+      messages: [],
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      expiresAtMs: 2,
+      pinned: false,
+    } as const;
+    vi.mocked(loadSettings)
+      .mockResolvedValueOnce({
+        onboardingComplete: false,
+        shortcut: "Control+Option+Space",
+      } as Awaited<ReturnType<typeof loadSettings>>)
+      .mockResolvedValueOnce({
+        onboardingComplete: false,
+        shortcut: "Control+Option+Space",
+        captureRetention: "7d",
+      } as Awaited<ReturnType<typeof loadSettings>>);
+    vi.mocked(captureScreenRegion)
+      .mockRejectedValueOnce(new CaptureError("permission-denied"))
+      .mockResolvedValueOnce(image);
+    vi.mocked(captureClient.create).mockResolvedValue(created);
+
+    render(<MainWindowShell />);
+    fireEvent.click(await screen.findByRole("button", { name: "开始截图" }));
+    fireEvent.click(await screen.findByRole("button", { name: "重试" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("workbench-instance")).toHaveAttribute(
+        "data-requested-record-id",
+        created.id,
+      );
+    });
+    expect(captureScreenRegion).toHaveBeenCalledTimes(2);
+    expect(openScreenRecordingSettings).not.toHaveBeenCalled();
+    expect(updateSettings).toHaveBeenCalledWith({ onboardingComplete: true });
+  });
+
+  it("prevents capture and skip from starting again while capture is pending", async () => {
+    const capture = deferred<Awaited<ReturnType<typeof captureScreenRegion>>>();
+    vi.mocked(loadSettings).mockResolvedValue({
+      onboardingComplete: false,
+      shortcut: "Control+Option+Space",
+    } as Awaited<ReturnType<typeof loadSettings>>);
+    vi.mocked(captureScreenRegion).mockReturnValue(capture.promise);
+
+    render(<MainWindowShell />);
+    const start = await screen.findByRole("button", { name: "开始截图" });
+    fireEvent.click(start);
+    fireEvent.click(start);
+
+    expect(await screen.findByRole("button", { name: "正在截图" })).toBeDisabled();
+    const skip = screen.getByRole("button", { name: "稍后进入" });
+    expect(skip).toBeDisabled();
+    fireEvent.click(skip);
+    expect(captureScreenRegion).toHaveBeenCalledOnce();
+    expect(loadSettings).toHaveBeenCalledOnce();
+
+    await act(async () => capture.reject(new CaptureError("cancelled")));
+  });
+
+  it("loads the latest settings and saves completion before skipping to the workbench", async () => {
+    const completionSave = deferred<Awaited<ReturnType<typeof updateSettings>>>();
+    vi.mocked(loadSettings)
+      .mockResolvedValueOnce({
+        onboardingComplete: false,
+        shortcut: "Control+Option+Space",
+      } as Awaited<ReturnType<typeof loadSettings>>)
+      .mockResolvedValueOnce({
+        onboardingComplete: false,
+        shortcut: "Command+Shift+4",
+      } as Awaited<ReturnType<typeof loadSettings>>);
+    vi.mocked(updateSettings).mockReturnValue(completionSave.promise);
+
+    render(<MainWindowShell />);
+    fireEvent.click(await screen.findByRole("button", { name: "稍后进入" }));
+
+    const pending = await screen.findByRole("button", { name: "正在进入" });
+    expect(pending).toBeDisabled();
+    const captureAction = screen.getByRole("button", { name: "开始截图" });
+    expect(captureAction).toBeDisabled();
+    fireEvent.click(captureAction);
+    expect(updateSettings).toHaveBeenCalledOnce();
+    expect(updateSettings).toHaveBeenCalledWith({ onboardingComplete: true });
+    expect(captureScreenRegion).not.toHaveBeenCalled();
+    expect(captureClient.create).not.toHaveBeenCalled();
+
+    await act(async () => completionSave.resolve({
+      onboardingComplete: true,
+      shortcut: "Command+Shift+4",
+    } as Awaited<ReturnType<typeof updateSettings>>));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("workbench-instance").closest(".main-surface")).not.toHaveAttribute("inert");
+    });
+    expect(screen.getByTestId("workbench-instance")).toHaveAttribute("data-requested-record-id", "");
+    expect(loadSettings).toHaveBeenCalledTimes(2);
+    expect(
+      vi.mocked(loadSettings).mock.invocationCallOrder[1],
+    ).toBeLessThan(vi.mocked(updateSettings).mock.invocationCallOrder[0]);
+  });
+
+  it("keeps screenshot cancellation silent and performs no writes", async () => {
+    vi.mocked(loadSettings).mockResolvedValue({
+      onboardingComplete: false,
+      shortcut: "Control+Option+Space",
+    } as Awaited<ReturnType<typeof loadSettings>>);
+    vi.mocked(captureScreenRegion).mockRejectedValue(new CaptureError("cancelled"));
+
+    render(<MainWindowShell />);
+    fireEvent.click(await screen.findByRole("button", { name: "开始截图" }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "开始截图" })).toBeEnabled());
+    expect(screen.queryByText(/失败|权限/)).not.toBeInTheDocument();
+    expect(loadSettings).toHaveBeenCalledOnce();
+    expect(captureClient.create).not.toHaveBeenCalled();
+    expect(processCaptureInBackground).not.toHaveBeenCalled();
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("stays on welcome when creating the first capture record fails", async () => {
+    vi.mocked(loadSettings)
+      .mockResolvedValueOnce({
+        onboardingComplete: false,
+        shortcut: "Control+Option+Space",
+      } as Awaited<ReturnType<typeof loadSettings>>)
+      .mockResolvedValueOnce({
+        onboardingComplete: false,
+        shortcut: "Control+Option+Space",
+        captureRetention: "24h",
+      } as Awaited<ReturnType<typeof loadSettings>>);
+    vi.mocked(captureScreenRegion).mockResolvedValue({
+      name: "first.png",
+      dataUrl: "data:image/png;base64,FIRST",
+    });
+    vi.mocked(captureClient.create).mockRejectedValue(new Error("write failed at /private/path"));
+
+    render(<MainWindowShell />);
+    fireEvent.click(await screen.findByRole("button", { name: "开始截图" }));
+
+    expect(await screen.findByText("截图没有保存，请重试。")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "从一张截图开始" })).toBeVisible();
+    expect(screen.queryByText(/private|write failed/i)).not.toBeInTheDocument();
+    expect(processCaptureInBackground).not.toHaveBeenCalled();
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("enters with the created record and warns when completion persistence fails", async () => {
+    const image = { name: "first.png", dataUrl: "data:image/png;base64,FIRST" };
+    const created = {
+      id: "saved-record",
+      source: "capture",
+      title: null,
+      ocrText: "",
+      ocrState: "pending",
+      messages: [],
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      expiresAtMs: 2,
+      pinned: false,
+    } as const;
+    vi.mocked(loadSettings)
+      .mockResolvedValueOnce({
+        onboardingComplete: false,
+        shortcut: "Control+Option+Space",
+      } as Awaited<ReturnType<typeof loadSettings>>)
+      .mockResolvedValueOnce({
+        onboardingComplete: false,
+        shortcut: "Control+Option+Space",
+        captureRetention: "24h",
+      } as Awaited<ReturnType<typeof loadSettings>>);
+    vi.mocked(captureScreenRegion).mockResolvedValue(image);
+    vi.mocked(captureClient.create).mockResolvedValue(created);
+    vi.mocked(updateSettings).mockRejectedValue(new Error("settings store unavailable"));
+
+    render(<MainWindowShell />);
+    fireEvent.click(await screen.findByRole("button", { name: "开始截图" }));
+
+    expect(await screen.findByText("截图已保存，但首次设置未能保存。")).toBeVisible();
+    expect(screen.getByTestId("workbench-instance")).toHaveAttribute(
+      "data-requested-record-id",
+      created.id,
+    );
     expect(screen.getByTestId("workbench-instance").closest(".main-surface")).not.toHaveAttribute("inert");
-    expect(screen.getByTestId("model-panel")).toBeInTheDocument();
+    expect(processCaptureInBackground).toHaveBeenCalledWith(created.id, image.dataUrl);
+    expect(
+      vi.mocked(processCaptureInBackground).mock.invocationCallOrder[0],
+    ).toBeLessThan(vi.mocked(updateSettings).mock.invocationCallOrder[0]);
+    expect(screen.queryByText(/store unavailable/i)).not.toBeInTheDocument();
+  });
+
+  it("stays on welcome with a save notice when skip persistence fails", async () => {
+    vi.mocked(loadSettings).mockResolvedValue({
+      onboardingComplete: false,
+      shortcut: "Control+Option+Space",
+    } as Awaited<ReturnType<typeof loadSettings>>);
+    vi.mocked(updateSettings).mockRejectedValue(new Error("save failed at /tmp/settings"));
+
+    render(<MainWindowShell />);
+    fireEvent.click(await screen.findByRole("button", { name: "稍后进入" }));
+
+    expect(await screen.findByText("暂时无法保存设置，请重试。")).toBeVisible();
+    expect(screen.getByRole("button", { name: "稍后进入" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "开始截图" })).toBeEnabled();
+    expect(screen.getByTestId("workbench-instance").closest(".main-surface")).toHaveAttribute("inert");
+    expect(captureClient.create).not.toHaveBeenCalled();
+    expect(screen.queryByText(/tmp|save failed/i)).not.toBeInTheDocument();
+  });
+
+  it("stops the first-capture continuation after unmount", async () => {
+    const capture = deferred<Awaited<ReturnType<typeof captureScreenRegion>>>();
+    vi.mocked(loadSettings).mockResolvedValue({
+      onboardingComplete: false,
+      shortcut: "Control+Option+Space",
+    } as Awaited<ReturnType<typeof loadSettings>>);
+    vi.mocked(captureScreenRegion).mockReturnValue(capture.promise);
+
+    const view = render(<MainWindowShell />);
+    fireEvent.click(await screen.findByRole("button", { name: "开始截图" }));
+    view.unmount();
+
+    await act(async () => capture.resolve({
+      name: "late.png",
+      dataUrl: "data:image/png;base64,LATE",
+    }));
+
+    expect(loadSettings).toHaveBeenCalledOnce();
+    expect(captureClient.create).not.toHaveBeenCalled();
+    expect(processCaptureInBackground).not.toHaveBeenCalled();
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("stops the skip continuation after unmount", async () => {
+    const latestSettings = deferred<Awaited<ReturnType<typeof loadSettings>>>();
+    vi.mocked(loadSettings)
+      .mockResolvedValueOnce({
+        onboardingComplete: false,
+        shortcut: "Control+Option+Space",
+      } as Awaited<ReturnType<typeof loadSettings>>)
+      .mockReturnValueOnce(latestSettings.promise);
+
+    const view = render(<MainWindowShell />);
+    fireEvent.click(await screen.findByRole("button", { name: "稍后进入" }));
+    await waitFor(() => expect(loadSettings).toHaveBeenCalledTimes(2));
+    view.unmount();
+
+    await act(async () => latestSettings.resolve({
+      onboardingComplete: false,
+      shortcut: "Control+Option+Space",
+    } as Awaited<ReturnType<typeof loadSettings>>));
+
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("ignores a stale settings-open failure after screenshot retry begins", async () => {
+    const settingsOpen = deferred<void>();
+    const retryCapture = deferred<Awaited<ReturnType<typeof captureScreenRegion>>>();
+    vi.mocked(loadSettings).mockResolvedValue({
+      onboardingComplete: false,
+      shortcut: "Control+Option+Space",
+    } as Awaited<ReturnType<typeof loadSettings>>);
+    vi.mocked(captureScreenRegion)
+      .mockRejectedValueOnce(new CaptureError("permission-denied"))
+      .mockReturnValueOnce(retryCapture.promise);
+    vi.mocked(openScreenRecordingSettings).mockReturnValue(settingsOpen.promise);
+
+    render(<MainWindowShell />);
+    fireEvent.click(await screen.findByRole("button", { name: "开始截图" }));
+    fireEvent.click(await screen.findByRole("button", { name: "打开系统设置" }));
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByRole("button", { name: "正在截图" })).toBeDisabled();
+
+    await act(async () => settingsOpen.reject(new Error("late settings failure")));
+
+    expect(screen.queryByText("系统设置没有打开，请手动打开后重试。")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "正在截图" })).toBeDisabled();
   });
 
   it("keeps one SettingsPanel identity while isolating general and shortcut tasks", async () => {
@@ -474,6 +954,24 @@ describe("MainWindowShell navigation", () => {
     } finally {
       document.documentElement.removeAttribute("data-theme");
     }
+  });
+
+  it("keeps the crop-corner welcome motion brief and disables it for reduced motion", () => {
+    expect(workbenchCss).toMatch(
+      /\.first-run-welcome__corner\s*{[^}]*animation:\s*first-run-corner-in 280ms[^}]*}/,
+    );
+    expect(workbenchCss).toMatch(
+      /@keyframes first-run-corner-in\s*{[\s\S]*?opacity:\s*0[\s\S]*?transform:[^;]+[\s\S]*?opacity:\s*1[\s\S]*?transform:\s*none/,
+    );
+    expect(workbenchCss).toMatch(
+      /@media \(prefers-reduced-motion:\s*reduce\)[\s\S]*?\.first-run-welcome__corner\s*{[^}]*animation:\s*none[^}]*transform:\s*none/,
+    );
+    expect(workbenchCss).toMatch(
+      /@media \(prefers-reduced-motion:\s*reduce\)[\s\S]*?\.first-run-welcome \.is-spinning\s*{[^}]*animation:\s*none/,
+    );
+    expect(cssRuleBody(workbenchCss, ".first-run-welcome__primary")).toMatch(
+      /min-width:\s*174px[\s\S]*height:\s*44px/,
+    );
   });
 
   it("scopes the compact settings surface and control sizing", () => {

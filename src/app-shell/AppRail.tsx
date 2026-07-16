@@ -4,7 +4,7 @@ import appIconUrl from "../../app-icon.png";
 export type AppRailDestination = "recent" | "pinned" | "settings";
 
 type AppRailProps = {
-  active: AppRailDestination;
+  active: AppRailDestination | null;
   disabled?: boolean;
   onNavigate: (destination: AppRailDestination) => void;
 };
@@ -20,7 +20,7 @@ export function AppRail({ active, disabled = false, onNavigate }: AppRailProps) 
     <nav className="app-rail" aria-label="应用导航">
       <img src={appIconUrl} alt="MiniVu" className="app-rail__logo" />
       {ITEMS.map(({ key, label, Icon }) => {
-        const isActive = key === active;
+        const isActive = active !== null && key === active;
         return (
           <button
             key={key}

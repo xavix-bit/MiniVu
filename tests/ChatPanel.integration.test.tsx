@@ -25,7 +25,12 @@ vi.mock("../src/settings/settingsStore", () => ({
   loadSettings: vi.fn().mockResolvedValue({ shortcut: "Control+Option+Space" }),
 }));
 vi.mock("../src/export/exportSession", () => ({ exportCurrentSession: vi.fn() }));
-vi.mock("../src/image/captureScreen", () => ({ captureScreenRegion: vi.fn() }));
+vi.mock("../src/image/captureScreen", async () => {
+  const actual = await vi.importActual<typeof import("../src/image/captureScreen")>(
+    "../src/image/captureScreen",
+  );
+  return { ...actual, captureScreenRegion: vi.fn() };
+});
 vi.mock("../src/image/imageIntake", async () => {
   const actual = await vi.importActual<typeof import("../src/image/imageIntake")>(
     "../src/image/imageIntake",

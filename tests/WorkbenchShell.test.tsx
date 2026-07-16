@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { describe, expect, it, vi } from "vitest";
 import type { CaptureClient, CaptureRecord } from "../src/captures/types";
 import { useCaptureLibrary, type CaptureLibraryState } from "../src/captures/useCaptureLibrary";
-import { WorkbenchView } from "../src/workbench/WorkbenchShell";
+import { WorkbenchShell, WorkbenchView } from "../src/workbench/WorkbenchShell";
 
 function record(overrides: Partial<CaptureRecord> = {}): CaptureRecord {
   return {
@@ -46,6 +46,44 @@ function RealLibraryHarness({ api, scope }: { api: CaptureClient; scope: "recent
 }
 
 describe("WorkbenchView", () => {
+  it("refreshes once and selects a newly requested record", async () => {
+    const current = record({ id: "current", title: "当前截图", createdAtMs: 200 });
+    const requested = record({ id: "requested", title: "首张截图", createdAtMs: 100 });
+    const api: CaptureClient = {
+      list: vi.fn(async () => [current, requested]),
+      get: vi.fn(async (id) => id === requested.id ? requested : current),
+      readImage: vi.fn(async () => "data:image/png;base64,image"),
+      create: vi.fn(async () => requested),
+      update: vi.fn(async () => requested),
+      remove: vi.fn(async () => {}),
+      cleanup: vi.fn(async () => 0),
+      subscribe: vi.fn(async () => () => {}),
+    };
+    const view = render(
+      <WorkbenchShell
+        scope="recent"
+        onCapture={vi.fn()}
+        requestedRecordId={null}
+        captureApi={api}
+      />,
+    );
+    await within(screen.getByRole("main")).findByText("当前截图");
+    const callsBeforeRequest = vi.mocked(api.list).mock.calls.length;
+
+    view.rerender(
+      <WorkbenchShell
+        scope="recent"
+        onCapture={vi.fn()}
+        requestedRecordId={requested.id}
+        captureApi={api}
+      />,
+    );
+
+    await waitFor(() => expect(within(screen.getByRole("main")).getByText("首张截图")).toBeVisible());
+    expect(vi.mocked(api.list)).toHaveBeenCalledTimes(callsBeforeRequest + 1);
+    expect(api.get).toHaveBeenLastCalledWith(requested.id);
+  });
+
   it("shows a capture-first empty state without readiness cards", () => {
     render(<WorkbenchView library={library()} scope="recent" onCapture={vi.fn()} />);
 
