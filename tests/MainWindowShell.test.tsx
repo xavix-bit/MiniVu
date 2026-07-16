@@ -204,9 +204,11 @@ vi.mock("../src/workbench/WorkbenchShell", async () => {
   const MockWorkbenchShell = React.memo(({
     scope,
     requestedRecordId,
+    onCapture,
   }: {
     scope: "recent" | "pinned";
     requestedRecordId?: string | null;
+    onCapture?: () => void;
   }) => {
     shellState.renders += 1;
     React.useEffect(() => {
@@ -217,7 +219,9 @@ vi.mock("../src/workbench/WorkbenchShell", async () => {
         data-testid="workbench-instance"
         data-scope={scope}
         data-requested-record-id={requestedRecordId ?? ""}
-      />
+      >
+        <button type="button" onClick={onCapture}>工作台截图</button>
+      </div>
     );
   });
   return {
@@ -332,6 +336,76 @@ describe("MainWindowShell navigation", () => {
     }
   });
 
+  it("shows a useful notice when a workbench capture needs screen-recording permission", async () => {
+    vi.mocked(captureScreenRegion).mockRejectedValue(new CaptureError("permission-denied"));
+
+    render(<MainWindowShell />);
+    fireEvent.click(await screen.findByRole("button", { name: "工作台截图" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "需要屏幕录制权限，请在系统设置中允许后重试。",
+    );
+    expect(captureClient.create).not.toHaveBeenCalled();
+  });
+
+  it("keeps a cancelled workbench capture silent", async () => {
+    vi.mocked(captureScreenRegion).mockRejectedValue(new CaptureError("cancelled"));
+
+    render(<MainWindowShell />);
+    fireEvent.click(await screen.findByRole("button", { name: "工作台截图" }));
+
+    await waitFor(() => expect(captureScreenRegion).toHaveBeenCalledOnce());
+    expect(screen.queryByText("截图没有保存，请重试。")).not.toBeInTheDocument();
+    expect(captureClient.create).not.toHaveBeenCalled();
+  });
+
+  it("selects and processes a new workbench capture", async () => {
+    const image = { name: "workbench.png", dataUrl: "data:image/png;base64,WORKBENCH" };
+    const created = {
+      id: "workbench-record",
+      source: "capture",
+      title: null,
+      ocrText: "",
+      ocrState: "pending",
+      messages: [],
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      expiresAtMs: 2,
+      pinned: false,
+    } as const;
+    vi.mocked(loadSettings)
+      .mockResolvedValueOnce({
+        onboardingComplete: true,
+        shortcut: "Control+Option+Space",
+      } as Awaited<ReturnType<typeof loadSettings>>)
+      .mockResolvedValueOnce({
+        onboardingComplete: true,
+        shortcut: "Control+Option+Space",
+        captureRetention: "7d",
+        backgroundWarmup: true,
+      } as Awaited<ReturnType<typeof loadSettings>>);
+    vi.mocked(captureScreenRegion).mockResolvedValue(image);
+    vi.mocked(captureClient.create).mockResolvedValue(created);
+
+    render(<MainWindowShell />);
+    fireEvent.click(await screen.findByRole("button", { name: "工作台截图" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("workbench-instance")).toHaveAttribute(
+        "data-requested-record-id",
+        created.id,
+      );
+    });
+    expect(captureClient.create).toHaveBeenCalledWith({
+      dataUrl: image.dataUrl,
+      source: "capture",
+      retention: "7d",
+    });
+    expect(processCaptureInBackground).toHaveBeenCalledWith(created.id, image.dataUrl, {
+      warmup: true,
+    });
+  });
+
   it("captures, stores, processes, saves, and selects the first screenshot in order", async () => {
     const image = { name: "first.png", dataUrl: "data:image/png;base64,FIRST" };
     const created = {
@@ -400,6 +474,10 @@ describe("MainWindowShell navigation", () => {
 
     const openSettings = await screen.findByRole("button", { name: "打开系统设置" });
     expect(screen.getByRole("button", { name: "重试" })).toBeEnabled();
+    expect(screen.getByText("允许屏幕录制后，就可以继续截图。")).toBeVisible();
+    expect(screen.queryByText("框选屏幕上的内容，MiniVu 会把它保存到工作台。")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "稍后进入" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("快捷键 Control+Option+Space")).not.toBeInTheDocument();
     fireEvent.click(openSettings);
 
     expect(await screen.findByText("系统设置没有打开，请手动打开后重试。")).toBeVisible();

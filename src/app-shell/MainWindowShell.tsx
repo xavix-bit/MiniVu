@@ -211,16 +211,27 @@ export function MainWindowShell() {
   }, []);
 
   const handleWorkbenchCapture = useCallback(async () => {
-    const image = await captureScreenRegion();
-    const settings = await loadSettings();
-    const record = await captureClient.create({
-      dataUrl: image.dataUrl,
-      source: "capture",
-      retention: settings.captureRetention ?? "24h",
-    });
-    processCaptureInBackground(record.id, image.dataUrl, {
-      warmup: settings.backgroundWarmup ?? false,
-    });
+    try {
+      const image = await captureScreenRegion();
+      const settings = await loadSettings();
+      const record = await captureClient.create({
+        dataUrl: image.dataUrl,
+        source: "capture",
+        retention: settings.captureRetention ?? "24h",
+      });
+      setRequestedRecordId(record.id);
+      setWorkbenchNotice("");
+      processCaptureInBackground(record.id, image.dataUrl, {
+        warmup: settings.backgroundWarmup ?? false,
+      });
+    } catch (error) {
+      if (error instanceof CaptureError && error.code === "cancelled") return;
+      setWorkbenchNotice(
+        error instanceof CaptureError && error.code === "permission-denied"
+          ? "需要屏幕录制权限，请在系统设置中允许后重试。"
+          : "截图没有保存，请重试。",
+      );
+    }
   }, []);
 
   const handleCapture = useCallback(() => {

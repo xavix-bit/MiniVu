@@ -41,6 +41,7 @@ export function FirstRunWelcome({
   onOpenScreenRecordingSettings,
 }: FirstRunWelcomeProps) {
   const pending = state.kind === "capturing" || state.kind === "skipping";
+  const permissionDenied = state.kind === "permission-denied";
   const notice = state.kind === "idle" && state.notice === "capture-failed"
     ? "截图没有保存，请重试。"
     : state.kind === "idle" && state.notice === "save-failed"
@@ -59,18 +60,21 @@ export function FirstRunWelcome({
       <div className="first-run-welcome__content">
         <ScanLine className="first-run-welcome__icon" size={28} aria-hidden="true" />
         <h1 id="first-run-title">从一张截图开始</h1>
-        <p>框选屏幕上的内容，MiniVu 会把它保存到工作台。</p>
+        <p>
+          {permissionDenied
+            ? "允许屏幕录制后，就可以继续截图。"
+            : "框选屏幕上的内容，MiniVu 会把它保存到工作台。"}
+        </p>
 
         {notice ? <div className="first-run-welcome__notice" role="status">{notice}</div> : null}
-        {state.kind === "permission-denied" ? (
+        {permissionDenied && state.settingsOpenFailed ? (
           <div className="first-run-welcome__permission" role="status">
-            <span>请先允许 MiniVu 使用屏幕录制。</span>
-            {state.settingsOpenFailed ? <span>系统设置没有打开，请手动打开后重试。</span> : null}
+            <span>系统设置没有打开，请手动打开后重试。</span>
           </div>
         ) : null}
 
         <div className="first-run-welcome__actions">
-          {state.kind === "permission-denied" ? (
+          {permissionDenied ? (
             <>
               <button
                 type="button"
@@ -99,17 +103,21 @@ export function FirstRunWelcome({
               {state.kind === "capturing" ? "正在截图" : "开始截图"}
             </button>
           )}
-          <kbd aria-label={`快捷键 ${shortcut}`}>{formatShortcut(shortcut)}</kbd>
+          {permissionDenied ? null : (
+            <kbd aria-label={`快捷键 ${shortcut}`}>{formatShortcut(shortcut)}</kbd>
+          )}
         </div>
 
-        <button
-          type="button"
-          className="first-run-welcome__skip"
-          disabled={pending}
-          onClick={onSkip}
-        >
-          {state.kind === "skipping" ? "正在进入" : "稍后进入"}
-        </button>
+        {permissionDenied ? null : (
+          <button
+            type="button"
+            className="first-run-welcome__skip"
+            disabled={pending}
+            onClick={onSkip}
+          >
+            {state.kind === "skipping" ? "正在进入" : "稍后进入"}
+          </button>
+        )}
       </div>
     </main>
   );
