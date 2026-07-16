@@ -70,15 +70,18 @@ export function ChatPanel({
   initialImage,
   recordId,
   onImageInput,
+  onRequireModel,
 }: {
   onCollapse?: () => void;
   initialImage?: AcceptedImage | null;
   recordId?: string | null;
   onImageInput?: (image: AcceptedImage, source: CaptureSource) => Promise<void> | void;
+  onRequireModel?: (prompt: string) => boolean | Promise<boolean>;
 }) {
   const [input, setInput] = useState("");
   const [notice, setNotice] = useState("");
   const [capturing, setCapturing] = useState(false);
+  const [checkingModel, setCheckingModel] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [shortcutHint, setShortcutHint] = useState("");
   const {
@@ -140,8 +143,8 @@ export function ChatPanel({
           });
         }
         if (active) setLoadedRecordId(recordId);
-      } catch (err) {
-        if (active) setNotice(`加载截图失败：${String(err)}`);
+      } catch {
+        if (active) setNotice("截图暂时无法打开，请重试。");
       }
     })();
 
@@ -169,8 +172,8 @@ export function ChatPanel({
     if (onImageInput) {
       try {
         await onImageInput(image, source);
-      } catch (err) {
-        setNotice(`添加图片失败：${String(err)}`);
+      } catch {
+        setNotice("图片暂时无法添加，请重试。");
       }
       return;
     }
@@ -285,8 +288,8 @@ export function ChatPanel({
       if (path) {
         setNotice(`已导出到：${path}`);
       }
-    } catch (err) {
-      setNotice(`导出失败：${String(err)}`);
+    } catch {
+      setNotice("导出失败，请重试。");
     }
   }
 
@@ -302,22 +305,38 @@ export function ChatPanel({
     await invoke("close_quick_panel_command");
   }
 
-  function submit() {
-    const prompt = input.trim();
-    if (!prompt || isAnswering) {
-      return;
+  async function askWhenReady(prompt: string, displayText?: string) {
+    if (isAnswering || checkingModel) return;
+    setNotice("");
+    if (onRequireModel) {
+      setCheckingModel(true);
+      try {
+        const ready = await onRequireModel(displayText ?? prompt);
+        if (!ready) return;
+      } catch {
+        setNotice("暂时无法检查问图状态，请重试。");
+        return;
+      } finally {
+        setCheckingModel(false);
+      }
     }
     setInput("");
-    setNotice("");
-    void ask(prompt);
+    await ask(prompt, displayText);
+  }
+
+  function submit() {
+    const prompt = input.trim();
+    if (!prompt || isAnswering || checkingModel) {
+      return;
+    }
+    void askWhenReady(prompt);
   }
 
   function handleQuickAction(prompt: string, displayText: string) {
-    if (isAnswering) {
+    if (isAnswering || checkingModel) {
       return;
     }
-    setNotice("");
-    void ask(prompt, displayText);
+    void askWhenReady(prompt, displayText);
   }
 
   async function handleCopyText() {
@@ -333,8 +352,8 @@ export function ChatPanel({
     try {
       await writeText(text);
       setNotice("已复制文字");
-    } catch (err) {
-      setNotice(`复制失败：${String(err)}`);
+    } catch {
+      setNotice("复制失败，请重试。");
     }
   }
 
@@ -403,7 +422,7 @@ export function ChatPanel({
   return (
     <section
       className={`chat-panel${hasConversation ? " chat-panel--active" : ""}`}
-      aria-label="本地图片问答"
+      aria-label="图片问答"
     >
       <PanelHeader
         onExport={() => void handleExport()}
@@ -518,7 +537,7 @@ export function ChatPanel({
                   onCopyText={() => void handleCopyText()}
                   onTranslate={handleTranslateImage}
                   textReady={Boolean(state.ocrText.trim())}
-                  disabled={isAnswering || ocrLoading}
+                  disabled={isAnswering || checkingModel || ocrLoading}
                 />
               ) : null}
               {!hasConversation && (state.ocrText || ocrLoading) ? (
@@ -539,7 +558,7 @@ export function ChatPanel({
 
       <Composer
         value={input}
-        disabled={false}
+        disabled={checkingModel}
         isAnswering={isAnswering}
         canSubmit={Boolean(state.image)}
         onChange={setInput}

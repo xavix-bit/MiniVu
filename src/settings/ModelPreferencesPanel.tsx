@@ -174,11 +174,11 @@ export function ModelPreferencesPanel({
       if (!mountedRef.current) {
         return;
       }
-      setSavedMessage("加速组件已安装");
+      setSavedMessage("问图加速已安装");
       onSaved?.();
     } catch {
       if (mountedRef.current) {
-        setInstallError("无法安装加速组件，请重试。");
+        setInstallError("无法安装问图加速，请重试。");
       }
     } finally {
       if (mountedRef.current) {
@@ -341,7 +341,7 @@ export function ModelPreferencesPanel({
         {isMlx ? (
           <>
             <label className="settings-field">
-              <span>实验模型</span>
+              <span>模型名称</span>
               <input
                 value={settings.mlxModelId}
                 disabled={settingsControlsDisabled}
@@ -355,7 +355,7 @@ export function ModelPreferencesPanel({
               />
             </label>
             <div className="settings-field">
-              <span>加速组件</span>
+              <span>问图加速</span>
               <div className="settings-actions-row">
                 <button
                   type="button"
@@ -363,7 +363,7 @@ export function ModelPreferencesPanel({
                   disabled={settingsControlsDisabled || installingMlx}
                   onClick={() => void installMlxRuntime()}
                 >
-                  {installingMlx ? "正在安装…" : "安装加速组件"}
+                  {installingMlx ? "正在安装…" : "安装问图加速"}
                 </button>
               </div>
               {installError ? <p className="onboarding-error">{installError}</p> : null}

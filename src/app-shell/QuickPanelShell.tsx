@@ -4,7 +4,7 @@ import type {
   PointerEvent as ReactPointerEvent,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emitTo, listen } from "@tauri-apps/api/event";
 import appIconUrl from "../../app-icon.png";
 import { startWindowDrag } from "../window/panelChrome";
 import { ChatPanel } from "../chat/ChatPanel";
@@ -16,6 +16,7 @@ import { captureClient } from "../captures/captureClient";
 import type { AcceptedImage } from "../image/imageInput";
 import type { CaptureSource } from "../captures/types";
 import { loadSettings } from "../settings/settingsStore";
+import { modelClient } from "../model/modelClient";
 
 type PanelMode = "expanded" | "launcher" | "pet" | "hidden";
 
@@ -135,6 +136,19 @@ export function QuickPanelShell() {
     }
   }, [showResult]);
 
+  const handleRequireModel = useCallback(async (prompt: string) => {
+    if (!activeCapture) return false;
+    const status = await modelClient.getEnvironmentStatus().catch(() => null);
+    if (status?.modelReady) return true;
+
+    await emitTo("main", "model-required", {
+      recordId: activeCapture.recordId,
+      prompt,
+    });
+    await invoke("show_main");
+    return false;
+  }, [activeCapture]);
+
   useEffect(() => {
     const unlisteners: Array<() => void> = [];
     let active = true;
@@ -218,6 +232,7 @@ export function QuickPanelShell() {
           initialImage={activeCapture?.image ?? null}
           recordId={activeCapture?.recordId ?? null}
           onImageInput={showResult}
+          onRequireModel={handleRequireModel}
           onCollapse={() => void invoke("close_quick_panel_command")}
         />
       </PanelChrome>

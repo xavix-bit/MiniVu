@@ -43,7 +43,7 @@
 
 .startup-state button {
   min-width: 88px;
-  height: 36px;
+  height: 44px;
   border: 1px solid var(--wb-border-strong);
   border-radius: 8px;
   background: var(--wb-panel);
@@ -229,7 +229,7 @@
 
 .first-run-welcome__skip {
   min-width: 110px;
-  height: 36px;
+  height: 44px;
   margin-top: 14px;
   padding: 0 12px;
   border: 0;
@@ -267,8 +267,8 @@
 .workbench-onboarding-notice button {
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  width: 40px;
+  height: 40px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -369,8 +369,8 @@
 .workbench-detail__actions button {
   display: grid;
   place-items: center;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   padding: 0;
   border: 1px solid transparent;
   border-radius: 8px;
@@ -612,8 +612,8 @@
 }
 
 .workbench-detail__actions button {
-  width: 34px;
-  height: 34px;
+  width: 44px;
+  height: 44px;
 }
 
 .workbench-detail__actions button.is-active {
@@ -630,7 +630,7 @@
 .capture-canvas {
   position: relative;
   display: grid;
-  grid-template-rows: 44px minmax(0, 1fr);
+  grid-template-rows: 48px minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   padding: 10px 12px 12px;
@@ -649,9 +649,9 @@
 }
 
 .capture-canvas__toolbar button {
-  flex: 0 0 32px;
-  width: 32px;
-  height: 32px;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
   background: color-mix(in srgb, var(--wb-panel) 84%, transparent);
   color: var(--wb-muted);
 }
@@ -669,7 +669,7 @@
   display: grid;
   flex: 0 0 50px;
   width: 50px;
-  height: 32px;
+  height: 44px;
   place-items: center;
   color: var(--wb-muted);
   font-size: 11px;
@@ -677,8 +677,8 @@
 }
 
 .capture-canvas__toolbar .capture-canvas__actual {
-  flex-basis: 40px;
-  width: 40px;
+  flex-basis: 44px;
+  width: 44px;
   font-size: 11px;
   font-weight: 650;
 }
@@ -778,8 +778,8 @@
   display: grid;
   flex: 0 0 auto;
   place-items: center;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   margin: -10px -10px -10px 0;
   padding: 0;
   border: 0;
@@ -797,7 +797,7 @@
 
 .capture-inspector__tip-action {
   min-width: 72px;
-  min-height: 40px;
+  min-height: 44px;
   padding: 0 12px;
   border: 1px solid color-mix(in srgb, var(--wb-accent) 32%, var(--wb-border));
   border-radius: 7px;
@@ -919,7 +919,7 @@
 }
 
 .capture-inspector__empty button {
-  min-height: 34px;
+  min-height: 44px;
   padding: 0 14px;
   border: 1px solid color-mix(in srgb, var(--wb-accent) 24%, var(--wb-border));
   border-radius: 8px;
@@ -969,8 +969,8 @@
   bottom: 8px;
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 40px;
+  height: 40px;
   padding: 0;
   border: 0;
   border-radius: 8px;
@@ -1004,7 +1004,7 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  min-height: 28px;
+  min-height: 40px;
   padding: 0 8px;
   border: 1px solid var(--wb-border);
   border-radius: 7px;
@@ -1070,7 +1070,7 @@
 
 .workbench-empty > button {
   min-width: 92px;
-  min-height: 36px;
+  min-height: 44px;
   margin-top: 12px;
   border: 0;
   border-radius: 8px;
@@ -1095,6 +1095,10 @@
 }
 
 @media (max-width: 820px) {
+  .workbench-shell {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+
   .workbench-detail__body {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1111,7 +1115,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .main-surface,
+  .main-surface-stack.is-motion-ready .main-surface,
   .settings-page-view,
   .workbench-detail__header,
   .workbench-detail__body,

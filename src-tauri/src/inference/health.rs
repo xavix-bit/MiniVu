@@ -30,21 +30,21 @@ pub fn emit_sidecar_load_progress(
         InferenceBackend::Mlx => {
             if weights_on_disk {
                 if elapsed_sec < 10 {
-                    "正在启动 MLX 服务…".to_string()
+                    "正在准备问图…".to_string()
                 } else {
-                    "正在加载模型…".to_string()
+                    "正在载入模型…".to_string()
                 }
             } else if elapsed_sec < 10 {
-                "正在启动 MLX 服务…".to_string()
+                "正在准备问图…".to_string()
             } else {
-                "正在下载模型…".to_string()
+                "正在下载加速模型…".to_string()
             }
         }
         InferenceBackend::Llama => {
             if elapsed_sec < 30 {
-                "正在启动 llama-server…".to_string()
+                "正在准备问图…".to_string()
             } else {
-                "正在加载模型…".to_string()
+                "正在载入模型…".to_string()
             }
         }
     };

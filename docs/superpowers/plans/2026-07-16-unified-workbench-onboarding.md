@@ -38,7 +38,7 @@
 - Modify: `src/styles/workbench.css`
 - Create: `tests/canvasViewport.test.ts`
 
-- [ ] **Step 1: Write failing viewport tests**
+- [x] **Step 1: Write failing viewport tests**
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -64,13 +64,13 @@ describe("canvas viewport", () => {
 });
 ```
 
-- [ ] **Step 2: Run the test and verify it fails**
+- [x] **Step 2: Run the test and verify it fails**
 
 Run: `npm test -- tests/canvasViewport.test.ts`
 
 Expected: FAIL because `canvasViewport.ts` does not exist.
 
-- [ ] **Step 3: Implement pure viewport math**
+- [x] **Step 3: Implement pure viewport math**
 
 ```ts
 export type CanvasSize = { width: number; height: number };
@@ -94,7 +94,7 @@ export function oneToOneViewport(): CanvasViewport {
 }
 ```
 
-- [ ] **Step 4: Connect the canvas UI**
+- [x] **Step 4: Connect the canvas UI**
 
 In `CaptureCanvas.tsx`, keep refs for the stage and image natural size. On image load and on `record.id` changes, call `fitViewport`. Replace the clickable percentage with:
 
@@ -112,13 +112,13 @@ In `CaptureCanvas.tsx`, keep refs for the stage and image natural size. On image
 
 Use `ResizeObserver` to re-fit only while the current viewport is in automatic-fit mode. Manual zoom or pan exits that mode. Remove `RotateCcw` and its duplicate handler.
 
-- [ ] **Step 5: Run focused tests and build**
+- [x] **Step 5: Run focused tests and build**
 
 Run: `npm test -- tests/canvasViewport.test.ts tests/WorkbenchShell.test.tsx && npm run build`
 
 Expected: viewport tests pass and TypeScript/Vite build succeeds.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/workbench/canvasViewport.ts src/workbench/CaptureCanvas.tsx src/styles/workbench.css tests/canvasViewport.test.ts
@@ -137,7 +137,7 @@ git commit -m "fix: distinguish screenshot viewport controls"
 - Modify: `tests/WorkbenchShell.test.tsx`
 - Modify: `tests/MainWindowShell.test.tsx`
 
-- [ ] **Step 1: Add failing shell navigation tests**
+- [x] **Step 1: Add failing shell navigation tests**
 
 Add assertions that the `工作台导航` element remains the same DOM node after opening Settings, that Settings marks its rail button active, and that clicking `固定` while Settings is visible returns to the workbench with pinned scope.
 
@@ -151,13 +151,13 @@ fireEvent.click(screen.getByRole("button", { name: "固定" }));
 expect(screen.getByTestId("workbench-instance")).toBeVisible();
 ```
 
-- [ ] **Step 2: Run focused tests and verify failure**
+- [x] **Step 2: Run focused tests and verify failure**
 
 Run: `npm test -- tests/MainWindowShell.test.tsx tests/WorkbenchShell.test.tsx`
 
 Expected: FAIL because the rail is still owned by `WorkbenchView` and Settings renders a separate sidebar.
 
-- [ ] **Step 3: Create the permanent rail**
+- [x] **Step 3: Create the permanent rail**
 
 Implement `AppRail` with this public contract:
 
@@ -173,7 +173,7 @@ type AppRailProps = {
 
 Render the existing logo and Lucide `Clock3`, `Pin`, and `Settings` controls. Use `aria-current="page"` on the active command and preserve tooltips.
 
-- [ ] **Step 4: Externalize workbench scope**
+- [x] **Step 4: Externalize workbench scope**
 
 Change `WorkbenchViewProps` to receive:
 
@@ -184,7 +184,7 @@ onScopeChange: (scope: "recent" | "pinned") => void;
 
 Remove the rail and local scope state from `WorkbenchView`. Keep drafts, active requests, library state, and selection mounted inside `WorkbenchShell`.
 
-- [ ] **Step 5: Create compact settings navigation**
+- [x] **Step 5: Create compact settings navigation**
 
 `SettingsNavigationPane` exports:
 
@@ -199,7 +199,7 @@ type SettingsNavigationPaneProps = {
 
 Render exactly `通用`, `模型`, `快捷键`, and `隐私` in a 260-pixel pane using the same title, border, active inset, focus, and spacing language as `CaptureList`.
 
-- [ ] **Step 6: Recompose MainWindowShell**
+- [x] **Step 6: Recompose MainWindowShell**
 
 Use one shell grid:
 
@@ -218,11 +218,11 @@ Use one shell grid:
 
 Delete the product top bar and stop rendering `SettingsSidebar`. Preserve both surfaces and focus the active main region with `preventScroll`.
 
-- [ ] **Step 7: Add shared-frame motion and reduced-motion handling**
+- [x] **Step 7: Add shared-frame motion and reduced-motion handling**
 
 Animate only opacity and `translateX(6px)` for 180–220 ms. The rail never transitions. Add a `@media (prefers-reduced-motion: reduce)` override that sets transform to none and duration to `1ms`.
 
-- [ ] **Step 8: Run focused tests and commit**
+- [x] **Step 8: Run focused tests and commit**
 
 Run: `npm test -- tests/MainWindowShell.test.tsx tests/WorkbenchShell.test.tsx && npm run build`
 
@@ -243,7 +243,7 @@ git commit -m "feat: unify workbench and settings navigation"
 - Modify: `src/styles/settings.css`
 - Modify: `tests/MainWindowShell.test.tsx`
 
-- [ ] **Step 1: Add failing settings-category tests**
+- [x] **Step 1: Add failing settings-category tests**
 
 Verify each category displays only its relevant controls:
 
@@ -256,17 +256,17 @@ expect(screen.getByText("自动保留")).toBeVisible();
 expect(screen.queryByText("GGUF 模型与下载")).not.toBeInTheDocument();
 ```
 
-- [ ] **Step 2: Run the test and verify failure**
+- [x] **Step 2: Run the test and verify failure**
 
 Run: `npm test -- tests/MainWindowShell.test.tsx`
 
 Expected: FAIL because one legacy panel currently mixes appearance, shortcut, inference, capture, and download controls.
 
-- [ ] **Step 3: Split general and shortcut preferences**
+- [x] **Step 3: Split general and shortcut preferences**
 
 Give `SettingsPanel` a required `view: "general" | "shortcut"` prop. General renders theme, retention, and background preparation. Shortcut renders only `ShortcutRecorder`. Both retain the existing save operation and success feedback.
 
-- [ ] **Step 4: Extract model preferences**
+- [x] **Step 4: Extract model preferences**
 
 Move engine selection, MLX source/runtime actions, mirror selection, and mirror benchmark into `ModelPreferencesPanel`. Its public contract is:
 
@@ -278,19 +278,19 @@ type ModelPreferencesPanelProps = {
 
 Use user-facing labels (`默认`, `实验加速`, `下载来源`) and keep model IDs and exact sizes where they help the user make a choice. Remove `GGUF`, sidecar, Metal, and path language from visible labels and status summaries.
 
-- [ ] **Step 5: Make ModelPanel report installation completion**
+- [x] **Step 5: Make ModelPanel report installation completion**
 
 Change `onStatusChange` to `(status: ModelStatusResponse) => void`, make `refresh()` return the fetched status, and call the callback with the refreshed result after successful downloads. Replace file-path summaries with model name, installed size, and availability.
 
-- [ ] **Step 6: Render category content inside the unified detail**
+- [x] **Step 6: Render category content inside the unified detail**
 
 Map `general` to `<SettingsPanel view="general" />`, `shortcut` to `<SettingsPanel view="shortcut" />`, `model` to `ModelPreferencesPanel` plus `ModelPanel`, and `privacy` to `PrivacyNotice`. Runtime repair expands `EnvironmentSetupPanel` inside Model rather than navigating to a hidden setup page.
 
-- [ ] **Step 7: Apply compact styles**
+- [x] **Step 7: Apply compact styles**
 
 Use a maximum readable width of 760 pixels, 16–20 pixel section padding, eight-pixel radii, one-pixel borders, no decorative page-header illustration, and no nested cards. Keep inputs at least 40 pixels high and actions at least 44 pixels.
 
-- [ ] **Step 8: Run tests and commit**
+- [x] **Step 8: Run tests and commit**
 
 Run: `npm test -- tests/MainWindowShell.test.tsx tests/settingsStore.test.ts && npm run build`
 
@@ -311,7 +311,7 @@ git commit -m "refactor: simplify settings around user tasks"
 - Create: `tests/captureScreen.test.ts`
 - Modify: `tests/MainWindowShell.test.tsx`
 
-- [ ] **Step 1: Write failing screenshot classification tests**
+- [x] **Step 1: Write failing screenshot classification tests**
 
 Mock Tauri `invoke` and verify cancellation, permission, and unknown errors map to stable classes:
 
@@ -321,17 +321,17 @@ await expect(captureScreenRegion()).rejects.toMatchObject({ code: "permission-de
 expect(invoke).not.toHaveBeenCalledWith("open_screen_recording_settings");
 ```
 
-- [ ] **Step 2: Write failing first-run shell tests**
+- [x] **Step 2: Write failing first-run shell tests**
 
 With `onboardingComplete: false`, expect `开始截图` and `稍后进入`. A successful capture should call `create_capture_record`, save `onboardingComplete: true`, and reveal the workbench. Cancellation should keep the welcome visible without an alert. Permission denial should show `打开系统设置` and `重试`.
 
-- [ ] **Step 3: Run tests and verify failure**
+- [x] **Step 3: Run tests and verify failure**
 
 Run: `npm test -- tests/captureScreen.test.ts tests/MainWindowShell.test.tsx`
 
 Expected: FAIL because first launch currently enters environment setup and capture errors are untyped.
 
-- [ ] **Step 4: Classify capture errors**
+- [x] **Step 4: Classify capture errors**
 
 Export:
 
@@ -349,7 +349,7 @@ export function openScreenRecordingSettings() {
 
 Map `已取消截图` to `cancelled` and screen-recording/permission text to `permission-denied`. Do not open System Settings inside `captureScreenRegion`.
 
-- [ ] **Step 5: Implement FirstRunWelcome**
+- [x] **Step 5: Implement FirstRunWelcome**
 
 Use concise props:
 
@@ -366,15 +366,15 @@ type FirstRunWelcomeProps = {
 
 Render one heading, one sentence, one primary action, formatted shortcut, and a quiet skip action. Permission state replaces the sentence and actions with `打开系统设置` and `重试`. Crop corners animate once using transform/opacity.
 
-- [ ] **Step 6: Replace setup-gated startup**
+- [x] **Step 6: Replace setup-gated startup**
 
 In `MainWindowShell`, load settings and choose `welcome` when `onboardingComplete` is false, regardless of model state. On successful capture, create the record, dispatch OCR, save onboarding completion, and switch to workbench. Skip saves completion and opens the empty workbench. Cancellation changes no persistent state.
 
-- [ ] **Step 7: Add reduced-motion and stable layout styles**
+- [x] **Step 7: Add reduced-motion and stable layout styles**
 
 Reserve dimensions before animation, animate only crop-corner transforms and opacity for at most 320 ms, and disable spatial movement under reduced motion.
 
-- [ ] **Step 8: Run tests and commit**
+- [x] **Step 8: Run tests and commit**
 
 Run: `npm test -- tests/captureScreen.test.ts tests/MainWindowShell.test.tsx && npm run build`
 
@@ -399,7 +399,7 @@ git commit -m "feat: onboard with a real first screenshot"
 - Modify: `tests/WorkbenchShell.test.tsx`
 - Modify: `tests/MainWindowShell.test.tsx`
 
-- [ ] **Step 1: Add failing persistence and routing tests**
+- [x] **Step 1: Add failing persistence and routing tests**
 
 Assert `createDefaultSettings().workbenchTipsComplete` is false. Deserialize a legacy Rust settings JSON without the field and expect false. In the workbench, submitting a question with `modelReady={false}` must not call `onAsk`; it must call `onRequireModel` with record ID and prompt and keep the draft visible.
 
@@ -411,13 +411,13 @@ expect(requireModel).toHaveBeenCalledWith({ recordId: "one", prompt: "解释这�
 expect(screen.getByDisplayValue("解释这个错误")).toBeVisible();
 ```
 
-- [ ] **Step 2: Run tests and verify failure**
+- [x] **Step 2: Run tests and verify failure**
 
 Run: `npm test -- tests/settingsStore.test.ts tests/WorkbenchShell.test.tsx tests/MainWindowShell.test.tsx`
 
 Expected: FAIL because tip persistence and model-required interception do not exist.
 
-- [ ] **Step 3: Add backward-compatible tip persistence**
+- [x] **Step 3: Add backward-compatible tip persistence**
 
 Add `workbenchTipsComplete: boolean` to TypeScript defaults and this Rust field:
 
@@ -428,11 +428,11 @@ pub workbench_tips_complete: bool,
 
 Set it to `false` in `Default`. Existing installations with `onboardingComplete: true` bypass the welcome; tips appear only after the next newly created capture unless already dismissed.
 
-- [ ] **Step 4: Add two dismissible contextual tips**
+- [x] **Step 4: Add two dismissible contextual tips**
 
 `WorkbenchShell` receives `showTips` and `onTipsComplete`. After a selected capture has OCR ready, show compact anchored hints beside the Text tab and composer. Advancing or dismissing the second hint calls `onTipsComplete`; neither hint traps focus or blocks its target.
 
-- [ ] **Step 5: Intercept AI before inference**
+- [x] **Step 5: Intercept AI before inference**
 
 Add to `WorkbenchViewProps`:
 
@@ -443,17 +443,17 @@ onRequireModel: (context: { recordId: string; prompt: string }) => void;
 
 At the start of `ask`, if the model is unavailable, store the prompt in `drafts[record.id]`, call `onRequireModel`, and return before writing a message or creating a request ID.
 
-- [ ] **Step 6: Route to Model and return to the capture**
+- [x] **Step 6: Route to Model and return to the capture**
 
 `MainWindowShell` stores `{ recordId, prompt } | null`, switches to Settings/Model, and passes ModelPanel a completion callback. When refreshed status reports `modelReady`, switch to workbench recent scope and select the originating record. Because WorkbenchShell stays mounted, its draft remains intact and is not sent automatically.
 
-- [ ] **Step 7: Run frontend and Rust tests**
+- [x] **Step 7: Run frontend and Rust tests**
 
 Run: `npm test -- tests/settingsStore.test.ts tests/WorkbenchShell.test.tsx tests/MainWindowShell.test.tsx && cargo test --manifest-path src-tauri/Cargo.toml settings`
 
 Expected: routing and legacy settings tests pass.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/settings/settingsStore.ts src-tauri/src/settings.rs src/workbench/WorkbenchShell.tsx src/workbench/CaptureInspector.tsx src/app-shell/MainWindowShell.tsx src/settings/ModelPanel.tsx src/styles/workbench.css tests/settingsStore.test.ts tests/WorkbenchShell.test.tsx tests/MainWindowShell.test.tsx
@@ -469,7 +469,7 @@ git commit -m "feat: install models when question tools need them"
 - Modify: `README.md`
 - Modify: `docs/superpowers/plans/2026-07-16-unified-workbench-onboarding.md`
 
-- [ ] **Step 1: Audit visible copy and interaction states**
+- [x] **Step 1: Audit visible copy and interaction states**
 
 Search visible frontend strings:
 
@@ -477,17 +477,17 @@ Run: `rg -n 'Metal|GGUF|sidecar|运行时|环境就绪|模型就绪|技术预览
 
 Replace user-facing technical status with task language, while preserving concrete model names, file sizes, memory estimates, and deliberate `实验加速` labeling where users are choosing a backend.
 
-- [ ] **Step 2: Complete visual state coverage**
+- [x] **Step 2: Complete visual state coverage**
 
 Check hover, active, focus-visible, disabled, loading, error, narrow-window, and reduced-motion rules for the rail, settings rows, welcome actions, canvas toolbar, contextual tips, and model install state. Verify text contrast and 44-pixel effective hit targets.
 
-- [ ] **Step 3: Run the complete test suite**
+- [x] **Step 3: Run the complete test suite**
 
 Run: `npm test -- --run`
 
 Expected: all test files and tests pass with zero failures.
 
-- [ ] **Step 4: Run production builds**
+- [x] **Step 4: Run production builds**
 
 Run: `npm run build`
 

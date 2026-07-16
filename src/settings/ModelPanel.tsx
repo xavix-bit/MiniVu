@@ -35,7 +35,7 @@ type FileProgressState = {
 
 const FILE_LABELS: Record<"model" | "mmproj", string> = {
   model: "主模型",
-  mmproj: "配套文件",
+  mmproj: "图片理解支持",
 };
 
 function createIdleProgress(): Record<"model" | "mmproj", FileProgressState> {
@@ -125,7 +125,7 @@ export function ModelPanel({
           return {
             status: downloadStatus === "done" ? "done" : "running",
             percent,
-            detail: message ?? "正在下载实验模型…",
+            detail: message ?? "正在下载 MiniCPM-V 加速版…",
           };
         });
         return;
@@ -247,7 +247,7 @@ export function ModelPanel({
         }
       } catch {
         if (mountedRef.current) {
-          setDownloadError("实验模型下载失败，请重试。");
+          setDownloadError("加速模型下载失败，请重试。");
           setMlxProgress({ status: "idle", percent: 0, detail: "" });
         }
       } finally {
@@ -330,13 +330,13 @@ export function ModelPanel({
     ? isMlx
       ? [
           {
-            label: "加速组件",
-            value: status.mlxRuntimeAvailable ? "已安装" : "未安装",
+            label: "问图加速",
+            value: status.mlxRuntimeAvailable ? "可用" : "需要安装",
             ok: status.mlxRuntimeAvailable,
             meta: "实验加速",
           },
           {
-            label: "实验模型",
+            label: "MiniCPM-V 加速版",
             value: status.mlxModelReady ? "模型已下载" : "需要下载模型",
             ok: status.mlxModelReady,
             meta: status.mlxModelId,
@@ -350,7 +350,7 @@ export function ModelPanel({
             meta: `${selectedVariantSpec.modelName} · 下载 ${formatBytes(selectedVariantSpec.modelBytes)}`,
           },
           {
-            label: "配套文件",
+            label: "图片理解支持",
             value: status.mmprojDownloaded ? "已下载" : "未下载",
             ok: status.mmprojDownloaded,
             meta: `下载 ${formatBytes(1_108_746_944)}${status.modelSize ? ` · 已安装合计 ${status.modelSize}` : ""}`,
@@ -362,7 +362,7 @@ export function ModelPanel({
     <div className="model-panel">
       {status && !runtimeReady ? (
         <div className="callout callout--attention" role="status">
-          <p>模型组件需要修复后才能下载。</p>
+          <p>模型下载暂时不可用。</p>
           {onRepairRuntime ? (
             <button
               type="button"
@@ -370,7 +370,7 @@ export function ModelPanel({
               disabled={disabled}
               onClick={onRepairRuntime}
             >
-              修复模型组件
+              修复下载功能
             </button>
           ) : null}
         </div>
@@ -387,7 +387,7 @@ export function ModelPanel({
                 key={variant}
                 type="button"
                 className={`model-variant-option${selected ? " is-selected" : ""}`}
-                title={`${spec.modelName}\n${spec.description}\n模型 ${formatBytes(spec.modelBytes)}，配套文件 ${formatBytes(1_108_746_944)}，${spec.memoryHint}`}
+                title={`${spec.modelName}\n${spec.description}\n模型 ${formatBytes(spec.modelBytes)}，另需下载 ${formatBytes(1_108_746_944)}，${spec.memoryHint}`}
                 disabled={
                   disabled ||
                   downloading ||
@@ -404,7 +404,7 @@ export function ModelPanel({
                 <span className="model-variant-option__name">{spec.modelName}</span>
                 <span className="model-variant-option__desc">{spec.description}</span>
                 <span className="model-variant-option__meta">
-                  模型 {formatBytes(spec.modelBytes)} · 配套文件 1.0 GB · {spec.memoryHint}
+                  模型 {formatBytes(spec.modelBytes)} · 另需下载 1.0 GB · {spec.memoryHint}
                 </span>
               </button>
             );
@@ -434,8 +434,8 @@ export function ModelPanel({
       <section className="surface model-panel__actions-card">
         <p className="setup-panel__lead">
           {isMlx
-            ? "下载实验模型。"
-            : "下载或更新本地视觉模型。"}
+            ? "下载后即可使用实验加速。"
+            : "下载或更新所选模型。"}
         </p>
         <div className="model-actions">
           <button
@@ -444,7 +444,7 @@ export function ModelPanel({
             disabled={disabled || downloading || refreshingStatus || !!statusError || !runtimeReady}
             onClick={() => void downloadModel()}
           >
-            {downloading ? "下载中…" : isMlx ? "下载实验模型" : "下载 / 更新模型"}
+            {downloading ? "下载中…" : isMlx ? "下载加速模型" : "下载 / 更新模型"}
           </button>
           <button
             type="button"
@@ -457,10 +457,10 @@ export function ModelPanel({
         </div>
         {downloadError ? <p className="onboarding-error">{downloadError}</p> : null}
         {isMlx && mlxProgress.status !== "idle" ? (
-          <div className="model-download-progress" aria-label="实验模型下载进度">
+          <div className="model-download-progress" aria-label="加速模型下载进度">
             <div className={`model-download-progress__item is-${mlxProgress.status}`}>
               <div className="model-download-progress__head">
-                <span className="model-download-progress__label">实验模型</span>
+                <span className="model-download-progress__label">MiniCPM-V 加速版</span>
                 <span className="model-download-progress__percent">
                   {mlxProgress.status === "done" ? "完成" : `${mlxProgress.percent}%`}
                 </span>
@@ -504,9 +504,7 @@ export function ModelPanel({
             })}
           </div>
         ) : null}
-        <p className="field-hint">
-          {isMlx ? "模型下载完成后即可使用实验加速。" : "配套文件会自动准备。"}
-        </p>
+        {!isMlx ? <p className="field-hint">所需文件会一起下载。</p> : null}
       </section>
     </div>
   );

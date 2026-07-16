@@ -66,10 +66,12 @@ export function MainWindowShell() {
   const workbenchTipsCompleteRef = useRef(true);
   const tipsSavePendingRef = useRef(false);
   const [startupState, setStartupState] = useState<StartupState>({ kind: "loading" });
+  const [surfaceMotionReady, setSurfaceMotionReady] = useState(false);
   const [welcomeState, setWelcomeState] = useState<FirstRunWelcomeState>({ kind: "idle" });
   const [mode, setMode] = useState<AppMode>("settings");
   const [workbenchScope, setWorkbenchScope] = useState<WorkbenchScope>("recent");
   const [requestedRecordId, setRequestedRecordId] = useState<string | null>(null);
+  const [requestedDraft, setRequestedDraft] = useState<ModelReturnContext | null>(null);
   const [tipsRecordId, setTipsRecordId] = useState<string | null>(null);
   const [workbenchNotice, setWorkbenchNotice] = useState("");
   const [modelReady, setModelReady] = useState<boolean | null>(null);
@@ -87,6 +89,29 @@ export function MainWindowShell() {
   useEffect(() => {
     document.documentElement.classList.add("main-window");
     return () => document.documentElement.classList.remove("main-window");
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void listen<ModelReturnContext>("model-required", (event) => {
+      if (!active) return;
+      setModelReturnContext(event.payload);
+      setRequestedRecordId(event.payload.recordId);
+      setRequestedDraft(event.payload);
+      setSettingsSection("model");
+      setMode("settings");
+    }).then((cleanup) => {
+      if (active) {
+        unlisten = cleanup;
+      } else {
+        cleanup();
+      }
+    });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
   }, []);
 
   const loadStartupSettings = useCallback(() => {
@@ -123,6 +148,20 @@ export function MainWindowShell() {
       tipsSavePendingRef.current = false;
     };
   }, [loadStartupSettings]);
+
+  useEffect(() => {
+    if (startupState.kind === "loading" || surfaceMotionReady) return;
+
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => setSurfaceMotionReady(true));
+    });
+
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+    };
+  }, [startupState.kind, surfaceMotionReady]);
 
   useEffect(() => {
     let active = true;
@@ -204,9 +243,21 @@ export function MainWindowShell() {
     if (onboardingDone) void refreshEnvironmentStatus();
   }, [onboardingDone, refreshEnvironmentStatus]);
 
+  const handleModelStatusChange = useCallback((status: Pick<ModelStatusResponse, "modelReady">) => {
+    setModelReady(status.modelReady);
+    if (!status.modelReady || !modelReturnContext) return;
+
+    setWorkbenchScope("recent");
+    setModelReturnContext(null);
+    setMode("workbench");
+  }, [modelReturnContext]);
+
   const handleModelPreferencesSaved = useCallback(() => {
     setModelRefreshToken((current) => current + 1);
-  }, []);
+    void refreshEnvironmentStatus().then((status) => {
+      if (status) handleModelStatusChange(status);
+    });
+  }, [handleModelStatusChange, refreshEnvironmentStatus]);
 
   const handleRepairRuntime = useCallback(() => {
     if (modelOperationBusy || repairBusy) {
@@ -219,8 +270,10 @@ export function MainWindowShell() {
     setRepairBusy(false);
     setRuntimeRepairOpen(false);
     setModelRefreshToken((current) => current + 1);
-    void refreshEnvironmentStatus();
-  }, [refreshEnvironmentStatus]);
+    void refreshEnvironmentStatus().then((status) => {
+      if (status) handleModelStatusChange(status);
+    });
+  }, [handleModelStatusChange, refreshEnvironmentStatus]);
 
   const handleRuntimeRepairCancelled = useCallback(() => {
     setRepairBusy(false);
@@ -233,20 +286,11 @@ export function MainWindowShell() {
     if (!mountedRef.current) return false;
 
     setModelReturnContext(context);
+    setRequestedRecordId(context.recordId);
     setSettingsSection("model");
     setMode("settings");
     return false;
   }, [refreshEnvironmentStatus]);
-
-  const handleModelStatusChange = useCallback((status: ModelStatusResponse) => {
-    setModelReady(status.modelReady);
-    if (!status.modelReady || !modelReturnContext) return;
-
-    setWorkbenchScope("recent");
-    setRequestedRecordId(modelReturnContext.recordId);
-    setModelReturnContext(null);
-    setMode("workbench");
-  }, [modelReturnContext]);
 
   const handleTipsComplete = useCallback(() => {
     setTipsRecordId(null);
@@ -409,7 +453,7 @@ export function MainWindowShell() {
         onNavigate={handleRailNavigate}
       />
 
-      <div className="main-surface-stack">
+      <div className={`main-surface-stack${surfaceMotionReady ? " is-motion-ready" : ""}`}>
         <section
           ref={workbenchSurfaceRef}
           className={`main-surface main-surface--workbench${workbenchActive ? " is-active" : ""}`}
@@ -421,6 +465,7 @@ export function MainWindowShell() {
             scope={workbenchScope}
             onCapture={handleCapture}
             requestedRecordId={requestedRecordId}
+            requestedDraft={requestedDraft}
             modelReady={modelReady === true}
             onRequireModel={handleRequireModel}
             showTips={tipsRecordId !== null}

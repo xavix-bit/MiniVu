@@ -183,6 +183,75 @@ describe("useCaptureLibrary", () => {
     expect(result.current.selected?.id).toBe("a");
   });
 
+  it("restores a transient preferred record that is absent from the saved list", async () => {
+    const saved = record({ id: "saved", createdAtMs: 100 });
+    const transient = record({
+      id: "transient",
+      createdAtMs: 200,
+      expiresAtMs: null,
+      imageDataUrl: undefined,
+      thumbnailDataUrl: undefined,
+    });
+    const api = client([saved]);
+    api.get = vi.fn(async (id) => id === transient.id ? transient : saved);
+    api.readImage = vi.fn(async (id, thumbnail) => (
+      `data:image/${thumbnail ? "jpeg" : "png"};base64,${id}`
+    ));
+    const { result } = renderHook(() => useCaptureLibrary(api));
+    await waitFor(() => expect(result.current.selected?.id).toBe(saved.id));
+
+    await act(async () => result.current.refresh(transient.id));
+
+    expect(result.current.records.map((item) => item.id)).toEqual([transient.id, saved.id]);
+    expect(result.current.selected?.id).toBe(transient.id);
+    expect(result.current.selected?.imageDataUrl).toBe(
+      `data:image/png;base64,${transient.id}`,
+    );
+  });
+
+  it("keeps a transient record selected after it is updated", async () => {
+    const saved = record({ id: "saved", createdAtMs: 100 });
+    const transient = record({ id: "transient", createdAtMs: 200, expiresAtMs: null });
+    let onChange: ((event: CaptureRecordChanged) => void) | undefined;
+    const api = client([saved]);
+    api.get = vi.fn(async (id) => id === transient.id ? transient : saved);
+    api.subscribe = vi.fn(async (callback) => {
+      onChange = callback;
+      return () => {};
+    });
+    const { result } = renderHook(() => useCaptureLibrary(api));
+    await waitFor(() => expect(onChange).toBeDefined());
+    await act(async () => result.current.refresh(transient.id));
+    expect(result.current.selected?.id).toBe(transient.id);
+
+    act(() => onChange?.({ action: "updated", id: transient.id, summary: transient }));
+
+    await waitFor(() => expect(result.current.selected?.id).toBe(transient.id));
+    expect(result.current.records.map((item) => item.id)).toContain(transient.id);
+  });
+
+  it("does not change selection when another transient record is updated", async () => {
+    const saved = record({ id: "saved", createdAtMs: 100 });
+    const transient = record({ id: "transient", createdAtMs: 200, expiresAtMs: null });
+    let onChange: ((event: CaptureRecordChanged) => void) | undefined;
+    const api = client([saved]);
+    api.get = vi.fn(async (id) => id === transient.id ? transient : saved);
+    api.subscribe = vi.fn(async (callback) => {
+      onChange = callback;
+      return () => {};
+    });
+    const { result } = renderHook(() => useCaptureLibrary(api));
+    await waitFor(() => expect(onChange).toBeDefined());
+    await act(async () => result.current.refresh(transient.id));
+    await act(async () => result.current.select(saved.id));
+    expect(result.current.selected?.id).toBe(saved.id);
+
+    act(() => onChange?.({ action: "updated", id: transient.id, summary: transient }));
+
+    await waitFor(() => expect(result.current.records.map((item) => item.id)).toContain(transient.id));
+    expect(result.current.selected?.id).toBe(saved.id);
+  });
+
   it("leaves a cached record when the source reports it was deleted", async () => {
     const a = record({ id: "a" });
     const b = record({ id: "b", createdAtMs: 90 });

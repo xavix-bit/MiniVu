@@ -85,6 +85,9 @@ describe("WorkbenchView", () => {
       />,
     );
     await within(screen.getByRole("main")).findByText("当前截图");
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索截图" }), {
+      target: { value: "当前" },
+    });
     const callsBeforeRequest = vi.mocked(api.list).mock.calls.length;
 
     view.rerender(
@@ -98,8 +101,26 @@ describe("WorkbenchView", () => {
     );
 
     await waitFor(() => expect(within(screen.getByRole("main")).getByText("首张截图")).toBeVisible());
+    expect(screen.getByRole("textbox", { name: "搜索截图" })).toHaveValue("");
     expect(vi.mocked(api.list)).toHaveBeenCalledTimes(callsBeforeRequest + 1);
     expect(api.get).toHaveBeenLastCalledWith(requested.id);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索截图" }), {
+      target: { value: "当前" },
+    });
+    view.rerender(
+      <WorkbenchShell
+        scope="recent"
+        onCapture={vi.fn()}
+        {...modelAvailableProps()}
+        requestedRecordId={requested.id}
+        requestedDraft={{ recordId: requested.id, prompt: "继续解释" }}
+        captureApi={api}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "搜索截图" })).toHaveValue(""));
+    expect(within(screen.getByRole("main")).getByText("首张截图")).toBeVisible();
   });
 
   it("shows a capture-first empty state without readiness cards", () => {
@@ -277,6 +298,38 @@ describe("WorkbenchView", () => {
     ));
   });
 
+  it("keeps text typed during a readiness check as the next draft", async () => {
+    let finishCheck: ((ready: boolean) => void) | undefined;
+    const requireModel = vi.fn(() => new Promise<boolean>((resolve) => {
+      finishCheck = resolve;
+    }));
+    const ask = vi.fn(async () => "已经可以使用");
+    render(
+      <WorkbenchView
+        library={library([record()])}
+        scope="recent"
+        onCapture={vi.fn()}
+        modelReady={false}
+        onRequireModel={requireModel}
+        showTips={false}
+        onTipsComplete={vi.fn()}
+        onAsk={ask}
+      />,
+    );
+
+    const composer = screen.getByPlaceholderText("问这张截图…");
+    fireEvent.change(composer, { target: { value: "解释这个错误" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(requireModel).toHaveBeenCalledOnce());
+    fireEvent.change(composer, { target: { value: "顺便告诉我怎么修" } });
+
+    await act(async () => finishCheck?.(true));
+
+    await waitFor(() => expect(ask).toHaveBeenCalledOnce());
+    expect(ask.mock.calls[0][1]).toBe("解释这个错误");
+    expect(composer).toHaveValue("顺便告诉我怎么修");
+  });
+
   it("reveals two dismissible tips only after recognized text is ready", async () => {
     const pending = record({ ocrState: "pending", ocrText: "" });
     const api = library([pending]);
@@ -331,7 +384,7 @@ describe("WorkbenchView", () => {
       />,
     );
 
-    const aiTab = screen.getByRole("tab", { name: "AI" });
+    const aiTab = screen.getByRole("tab", { name: "问图" });
     aiTab.focus();
     fireEvent.keyDown(aiTab, { key: "ArrowRight" });
 

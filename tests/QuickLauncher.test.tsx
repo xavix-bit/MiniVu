@@ -4,19 +4,31 @@ import { QuickLauncher, QuickPanelShell } from "../src/app-shell/QuickPanelShell
 import { CaptureError, captureScreenRegion } from "../src/image/captureScreen";
 import { captureClient } from "../src/captures/captureClient";
 
-const { invokeMock, eventHandlers } = vi.hoisted(() => ({
+const { invokeMock, emitToMock, eventHandlers, chatPanelProps, getEnvironmentStatus } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
+  emitToMock: vi.fn(),
   eventHandlers: new Map<string, (event: { payload: never }) => void>(),
+  chatPanelProps: { current: null as Record<string, unknown> | null },
+  getEnvironmentStatus: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invokeMock(...args) }));
 vi.mock("@tauri-apps/api/event", () => ({
+  emitTo: (...args: unknown[]) => emitToMock(...args),
   listen: vi.fn(async (name: string, callback: (event: { payload: never }) => void) => {
     eventHandlers.set(name, callback);
     return () => eventHandlers.delete(name);
   }),
 }));
-vi.mock("../src/chat/ChatPanel", () => ({ ChatPanel: () => null }));
+vi.mock("../src/chat/ChatPanel", () => ({
+  ChatPanel: (props: Record<string, unknown>) => {
+    chatPanelProps.current = props;
+    return null;
+  },
+}));
+vi.mock("../src/model/modelClient", () => ({
+  modelClient: { getEnvironmentStatus },
+}));
 vi.mock("../src/image/captureScreen", async () => {
   const actual = await vi.importActual<typeof import("../src/image/captureScreen")>(
     "../src/image/captureScreen",
@@ -34,7 +46,15 @@ vi.mock("../src/captures/captureClient", () => ({
 describe("QuickLauncher", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue(undefined);
+    emitToMock.mockReset();
+    getEnvironmentStatus.mockReset();
+    vi.mocked(captureScreenRegion).mockReset();
+    vi.mocked(captureClient.create).mockReset();
     eventHandlers.clear();
+    chatPanelProps.current = null;
+    getEnvironmentStatus.mockResolvedValue({ modelReady: true });
   });
 
   it("exposes only the three primary screenshot actions", () => {
@@ -109,5 +129,30 @@ describe("QuickLauncher", () => {
     expect(warn).toHaveBeenCalledWith("截图失败");
     expect(warn).not.toHaveBeenCalledWith(failure);
     warn.mockRestore();
+  });
+
+  it("opens model setup from the quick panel and preserves the question", async () => {
+    const image = { name: "capture.png", dataUrl: "data:image/png;base64,AAA" };
+    vi.mocked(captureClient.create).mockResolvedValue({ id: "panel-record" } as never);
+    getEnvironmentStatus.mockResolvedValue({ modelReady: false });
+
+    render(<QuickPanelShell />);
+    await act(async () => {
+      await (chatPanelProps.current?.onImageInput as (
+        image: typeof image,
+        source: "paste",
+      ) => Promise<void>)(image, "paste");
+    });
+
+    const ready = await (chatPanelProps.current?.onRequireModel as (
+      prompt: string,
+    ) => Promise<boolean>)("解释这个错误");
+
+    expect(ready).toBe(false);
+    expect(emitToMock).toHaveBeenCalledWith("main", "model-required", {
+      recordId: "panel-record",
+      prompt: "解释这个错误",
+    });
+    expect(invokeMock).toHaveBeenCalledWith("show_main");
   });
 });

@@ -278,13 +278,18 @@ impl CaptureStore {
     ) -> Result<Option<CaptureRecord>, String> {
         validate_capture_id(id)?;
         if let Some(capture) = state.transient.get(&self.transient_key(id)) {
-            return Ok(Some(capture.record.clone()));
+            let mut record = capture.record.clone();
+            sanitize_legacy_ocr_diagnostics(&mut record);
+            return Ok(Some(record));
         }
         let metadata_path = self.record_dir(id)?.join("metadata.json");
         match fs::read(metadata_path) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .map(Some)
-                .map_err(|error| error.to_string()),
+            Ok(bytes) => {
+                let mut record: CaptureRecord =
+                    serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+                sanitize_legacy_ocr_diagnostics(&mut record);
+                Ok(Some(record))
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error.to_string()),
         }
@@ -473,6 +478,35 @@ impl CaptureStore {
         validate_capture_id(id)?;
         Ok(self.captures_dir.join(id))
     }
+}
+
+fn sanitize_legacy_ocr_diagnostics(record: &mut CaptureRecord) {
+    record.ocr_text = strip_legacy_vision_diagnostics(&record.ocr_text);
+    record.title = record.title.take().and_then(|title| {
+        let title = strip_legacy_vision_diagnostics(&title);
+        (!title.is_empty()).then_some(title)
+    });
+}
+
+fn strip_legacy_vision_diagnostics(text: &str) -> String {
+    const PREFIX: &str = "Unable to find a valid E5 in provided path ";
+    const SUFFIX: &str = "@ GetE5PathFromCompositeBundle";
+
+    let mut remaining = text;
+    let mut result = String::with_capacity(text.len());
+
+    while let Some(start) = remaining.find(PREFIX) {
+        result.push_str(&remaining[..start]);
+        let diagnostic = &remaining[start + PREFIX.len()..];
+        let Some(end) = diagnostic.find(SUFFIX) else {
+            result.push_str(&remaining[start..]);
+            return result.trim().to_string();
+        };
+        remaining = &diagnostic[end + SUFFIX.len()..];
+    }
+
+    result.push_str(remaining);
+    result.trim().to_string()
 }
 
 fn apply_patch(record: &mut CaptureRecord, patch: CaptureRecordPatch, now_ms: i64) {
@@ -736,6 +770,45 @@ mod tests {
         assert!(metadata.contains("\"ocrText\""));
         assert!(metadata.contains("\"createdAtMs\""));
         assert!(!metadata.contains("ocr_text"));
+    }
+
+    #[test]
+    fn hides_legacy_vision_diagnostics_when_loading_saved_captures() {
+        let app_data = TestDir::new();
+        let store = CaptureStore::new(app_data.path());
+        let record = store
+            .create(
+                CreateCaptureInput {
+                    image_data_url: PNG_DATA_URL.to_string(),
+                    source: CaptureSource::Capture,
+                    retention: CaptureRetention::Hours24,
+                },
+                1_000,
+            )
+            .expect("create capture");
+        let diagnostic = concat!(
+            "Unable to find a valid E5 in provided path /System/Library/model.bundle. ",
+            "Found bundles : { }. Expected : { universal.bundle }. ",
+            "@ GetE5PathFromCompositeBundle",
+            "还没有截图",
+        );
+        store
+            .update(
+                &record.id,
+                CaptureRecordPatch {
+                    title: NullablePatch::Set(Some(diagnostic.to_string())),
+                    ocr_text: Some(diagnostic.to_string()),
+                    ocr_state: Some(OcrState::Ready),
+                    ..CaptureRecordPatch::default()
+                },
+                2_000,
+            )
+            .expect("save legacy capture");
+
+        let loaded = store.get(&record.id).unwrap().unwrap();
+
+        assert_eq!(loaded.title.as_deref(), Some("还没有截图"));
+        assert_eq!(loaded.ocr_text, "还没有截图");
     }
 
     #[test]

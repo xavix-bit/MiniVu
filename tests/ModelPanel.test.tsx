@@ -89,6 +89,17 @@ describe("ModelPanel", () => {
     }));
   });
 
+  it("names the accelerated MiniCPM-V model without experimental jargon", async () => {
+    getModelStatus.mockResolvedValue(createStatus({ inferenceBackend: "mlx" }));
+
+    render(<ModelPanel />);
+
+    expect(await screen.findByText("MiniCPM-V 加速版")).toBeVisible();
+    expect(screen.getByText("mlx-community/MiniCPM-V-4.6-4bit")).toBeVisible();
+    expect(screen.getByRole("button", { name: "下载加速模型" })).toBeVisible();
+    expect(screen.queryByText("实验模型")).not.toBeInTheDocument();
+  });
+
   it("registers once and disposes a listener that resolves after unmount", async () => {
     const cleanup = vi.fn();
     let resolveListener!: (cleanup: () => void) => void;
@@ -150,7 +161,7 @@ describe("ModelPanel", () => {
     const progress = screen.getByRole("generic", { name: "下载进度" });
     expect(within(progress).getByText("42%")).toBeVisible();
     expect(within(progress).getByText("12.3 MB/s")).toBeVisible();
-    expect(within(progress).getByText("配套文件")).toBeVisible();
+    expect(within(progress).getByText("图片理解支持")).toBeVisible();
     expect(within(progress).queryByText("视觉投影器")).not.toBeInTheDocument();
     expect(listen).toHaveBeenCalledTimes(1);
   });
@@ -322,8 +333,8 @@ describe("ModelPanel", () => {
 
     render(<ModelPanel onRepairRuntime={onRepairRuntime} />);
 
-    const repair = await screen.findByRole("button", { name: "修复模型组件" });
-    expect(screen.getByText("模型组件需要修复后才能下载。")).toBeVisible();
+    const repair = await screen.findByRole("button", { name: "修复下载功能" });
+    expect(screen.getByText("模型下载暂时不可用。")).toBeVisible();
     expect(screen.getByText("需要下载模型")).toBeVisible();
     expect(screen.queryByText(missingComponent.modelPath)).not.toBeInTheDocument();
     expect(screen.queryByText(missingComponent.mmprojPath)).not.toBeInTheDocument();
@@ -344,7 +355,7 @@ describe("ModelPanel", () => {
 
     render(<ModelPanel disabled onRepairRuntime={vi.fn()} />);
 
-    expect(await screen.findByRole("button", { name: "修复模型组件" })).toBeDisabled();
+    expect(await screen.findByRole("button", { name: "修复下载功能" })).toBeDisabled();
     expect(screen.getByRole("button", { name: /均衡/ })).toBeDisabled();
     expect(screen.getByRole("button", { name: "下载 / 更新模型" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "刷新状态" })).toBeDisabled();
@@ -408,7 +419,7 @@ describe("ModelPanel", () => {
     const onStatusChange = vi.fn();
 
     render(<ModelPanel onStatusChange={onStatusChange} />);
-    fireEvent.click(await screen.findByRole("button", { name: "下载实验模型" }));
+    fireEvent.click(await screen.findByRole("button", { name: "下载加速模型" }));
 
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith("download_mlx_model", { force: true }),
@@ -436,7 +447,7 @@ describe("ModelPanel", () => {
     const onStatusChange = vi.fn();
 
     const { unmount } = render(<ModelPanel onStatusChange={onStatusChange} />);
-    fireEvent.click(await screen.findByRole("button", { name: "下载实验模型" }));
+    fireEvent.click(await screen.findByRole("button", { name: "下载加速模型" }));
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith("download_mlx_model", { force: true }),
     );

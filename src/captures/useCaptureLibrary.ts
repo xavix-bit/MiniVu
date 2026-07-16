@@ -39,6 +39,7 @@ export function useCaptureLibrary(api: CaptureClient = captureClient) {
   const refreshRequestRef = useRef(0);
   const selectedIdRef = useRef<string | null>(null);
   const selectedRef = useRef<CaptureRecord | null>(null);
+  const recordsRef = useRef<CaptureRecord[]>([]);
   const detailCacheRef = useRef(new Map<string, CaptureRecord>());
   const detailRevisionRef = useRef(new Map<string, number>());
 
@@ -89,7 +90,7 @@ export function useCaptureLibrary(api: CaptureClient = captureClient) {
     }
   }, [api, hydrate]);
 
-  const refresh = useCallback(async (preferredId?: string) => {
+  const refresh = useCallback(async (preferredId?: string, includeId?: string) => {
     const request = ++refreshRequestRef.current;
     const previousSelected = selectedRef.current;
     const previousSelectedId = selectedIdRef.current;
@@ -101,13 +102,35 @@ export function useCaptureLibrary(api: CaptureClient = captureClient) {
     setLoading(true);
     try {
       const listed = newestFirst(await api.list());
-      const next = await Promise.all(listed.map(async (record) => ({
+      let next: CaptureRecord[] = await Promise.all(listed.map(async (record) => ({
         ...record,
         thumbnailDataUrl: record.thumbnailDataUrl || await api.readImage(record.id, true),
       })));
+      const listedIds = new Set(next.map((record) => record.id));
+      const recoverIds = new Set(recordsRef.current.map((record) => record.id));
+      if (preferredId) recoverIds.add(preferredId);
+      if (includeId) recoverIds.add(includeId);
+      const recovered = await Promise.all([...recoverIds]
+        .filter((id) => !listedIds.has(id))
+        .map(async (id): Promise<CaptureRecord | null> => {
+          try {
+            const detail = await api.get(id);
+            return detail ? await hydrate(detail) : null;
+          } catch {
+            return null;
+          }
+        }));
+      next = newestFirst([
+        ...next,
+        ...recovered.filter((record): record is CaptureRecord => record !== null),
+      ]);
       if (refreshRequestRef.current !== request) {
         return;
       }
+      recovered.forEach((record) => {
+        if (record) cacheDetail(detailCacheRef.current, record);
+      });
+      recordsRef.current = next;
       setRecords(next);
       setError("");
 
@@ -146,7 +169,15 @@ export function useCaptureLibrary(api: CaptureClient = captureClient) {
   useEffect(() => {
     void refresh();
     let unsubscribe: (() => void) | undefined;
-    void api.subscribe((event) => void refresh(event.action === "created" ? event.id : undefined)).then((cleanup) => {
+    void api.subscribe((event) => {
+      if (event.action === "created") {
+        void refresh(event.id);
+      } else if (event.action === "updated") {
+        void refresh(undefined, event.id);
+      } else {
+        void refresh();
+      }
+    }).then((cleanup) => {
       unsubscribe = cleanup;
     });
     return () => {
@@ -163,7 +194,11 @@ export function useCaptureLibrary(api: CaptureClient = captureClient) {
     selectedIdRef.current = hydrated.id;
     setSelectedId(hydrated.id);
     cacheDetail(detailCacheRef.current, hydrated);
-    setRecords((current) => newestFirst([hydrated, ...current.filter((item) => item.id !== hydrated.id)]));
+    recordsRef.current = newestFirst([
+      hydrated,
+      ...recordsRef.current.filter((item) => item.id !== hydrated.id),
+    ]);
+    setRecords(recordsRef.current);
     selectedRef.current = hydrated;
     setSelected(hydrated);
     return hydrated;
@@ -175,7 +210,10 @@ export function useCaptureLibrary(api: CaptureClient = captureClient) {
       return;
     }
     detailRevisionRef.current.set(id, (detailRevisionRef.current.get(id) ?? 0) + 1);
-    setRecords((current) => newestFirst(current.map((item) => item.id === id ? { ...item, ...saved } : item)));
+    recordsRef.current = newestFirst(recordsRef.current.map((item) => (
+      item.id === id ? { ...item, ...saved } : item
+    )));
+    setRecords(recordsRef.current);
     if (selectedRef.current?.id === id) {
       selectedRef.current = { ...selectedRef.current, ...saved };
       setSelected(selectedRef.current);
@@ -188,6 +226,7 @@ export function useCaptureLibrary(api: CaptureClient = captureClient) {
     await api.remove(id);
     detailCacheRef.current.delete(id);
     detailRevisionRef.current.delete(id);
+    recordsRef.current = recordsRef.current.filter((record) => record.id !== id);
     if (selectedIdRef.current === id) {
       ++selectionRequestRef.current;
       selectedIdRef.current = null;

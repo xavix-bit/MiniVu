@@ -25,7 +25,11 @@ mod window;
 use model_sidecar::{init_generation_registry, init_sidecar_state};
 use sidecar::{lock_sidecar, spawn_idle_unloader};
 use std::sync::Mutex;
-use tauri::Manager;
+use tauri::{webview::PageLoadEvent, Manager};
+
+fn should_present_entry_window(label: &str, event: PageLoadEvent) -> bool {
+    label == window::MAIN_WINDOW_LABEL && matches!(event, PageLoadEvent::Finished)
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -41,7 +45,6 @@ pub fn run() {
         .manage(Mutex::new(window::QuickPanelState::default()))
         .setup(|app| {
             tray::create_tray(app.handle())?;
-            window::show_entry_window(app.handle())?;
 
             let cleanup_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -61,6 +64,13 @@ pub fn run() {
             });
 
             Ok(())
+        })
+        .on_page_load(|webview, payload| {
+            if should_present_entry_window(webview.label(), payload.event()) {
+                if let Err(error) = window::show_entry_window(webview.app_handle()) {
+                    eprintln!("failed to show MiniVu after page load: {error}");
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             privacy::app_privacy_mode,
@@ -113,4 +123,20 @@ pub fn run() {
                 let _ = window::reopen_from_dock(app_handle);
             }
         });
+}
+
+#[cfg(test)]
+mod page_load_tests {
+    use super::should_present_entry_window;
+    use tauri::webview::PageLoadEvent;
+
+    #[test]
+    fn presents_the_main_window_only_after_its_page_finishes_loading() {
+        assert!(should_present_entry_window("main", PageLoadEvent::Finished));
+        assert!(!should_present_entry_window("main", PageLoadEvent::Started));
+        assert!(!should_present_entry_window(
+            "quick-panel",
+            PageLoadEvent::Finished
+        ));
+    }
 }

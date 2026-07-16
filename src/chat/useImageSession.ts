@@ -167,9 +167,9 @@ export function useImageSession({ recordId = null }: UseImageSessionOptions = {}
           return nextState;
         });
       }
-    } catch (err) {
+    } catch {
       if (imageRequestRef.current === request) {
-        setError(`文字识别失败：${String(err)}`);
+        setError("文字识别失败，请重试。");
       }
     } finally {
       if (imageRequestRef.current === request) {
@@ -325,10 +325,10 @@ export function useImageSession({ recordId = null }: UseImageSessionOptions = {}
           failed = true;
           setError("没有生成结果。");
         }
-      } catch (err) {
+      } catch {
         failed = true;
         if (isCurrentOperation()) {
-          setError(String(err));
+          setError("暂时无法回答，请重试。");
         }
       } finally {
         if (!isCurrentOperation()) {

@@ -18,6 +18,7 @@ type WorkbenchViewProps = {
   }) => boolean | Promise<boolean>;
   showTips: boolean;
   onTipsComplete: () => void;
+  requestedDraft?: { recordId: string; prompt: string } | null;
   onAsk?: (
     record: CaptureRecord,
     prompt: string,
@@ -58,6 +59,7 @@ export function WorkbenchView({
   onRequireModel,
   showTips,
   onTipsComplete,
+  requestedDraft,
   onAsk = askModel,
   onCancel = (requestId) => modelClient.cancelGeneration(requestId),
 }: WorkbenchViewProps) {
@@ -69,6 +71,14 @@ export function WorkbenchView({
   const modelChecksRef = useRef(new Set<string>());
   const fallbackSelectionRef = useRef<{ scope: WorkbenchViewProps["scope"]; id: string } | null>(null);
   const previousScopeRef = useRef(scope);
+
+  useEffect(() => {
+    if (!requestedDraft) return;
+    setDrafts((current) => ({
+      ...current,
+      [requestedDraft.recordId]: requestedDraft.prompt,
+    }));
+  }, [requestedDraft]);
 
   const filtered = useMemo(() => {
     const visibleIds = new Set(library.visibleRecords.map((record) => record.id));
@@ -140,7 +150,9 @@ export function WorkbenchView({
     const userMessage: CaptureMessage = { role: "user", content: normalizedPrompt };
     const nextMessages = [...record.messages, userMessage];
     activeRequestIdsRef.current = { ...activeRequestIdsRef.current, [record.id]: requestId };
-    setDrafts((current) => ({ ...current, [record.id]: "" }));
+    setDrafts((current) => current[record.id] === normalizedPrompt
+      ? { ...current, [record.id]: "" }
+      : current);
     setActiveRequestIds((current) => ({ ...current, [record.id]: requestId }));
     setStreaming((current) => ({ ...current, [record.id]: "" }));
     try {
@@ -262,6 +274,7 @@ type WorkbenchShellProps = Pick<
   | "onTipsComplete"
 > & {
   requestedRecordId?: string | null;
+  requestedDraft?: { recordId: string; prompt: string } | null;
   captureApi?: CaptureClient;
 };
 
@@ -273,20 +286,28 @@ export const WorkbenchShell = memo(function WorkbenchShell({
   showTips,
   onTipsComplete,
   requestedRecordId = null,
+  requestedDraft = null,
   captureApi,
 }: WorkbenchShellProps) {
   const library = useCaptureLibrary(captureApi);
-  const handledRequestedRecordIdRef = useRef<string | null>(null);
+  const handledRequestRef = useRef<{
+    recordId: string;
+    draft: WorkbenchShellProps["requestedDraft"];
+  } | null>(null);
 
   useEffect(() => {
     if (!requestedRecordId) {
-      handledRequestedRecordIdRef.current = null;
+      handledRequestRef.current = null;
       return;
     }
-    if (handledRequestedRecordIdRef.current === requestedRecordId) return;
-    handledRequestedRecordIdRef.current = requestedRecordId;
+    if (
+      handledRequestRef.current?.recordId === requestedRecordId
+      && handledRequestRef.current.draft === requestedDraft
+    ) return;
+    handledRequestRef.current = { recordId: requestedRecordId, draft: requestedDraft };
+    library.setQuery("");
     void library.refresh(requestedRecordId);
-  }, [library.refresh, requestedRecordId]);
+  }, [library.refresh, library.setQuery, requestedDraft, requestedRecordId]);
 
   return (
     <WorkbenchView
@@ -297,6 +318,7 @@ export const WorkbenchShell = memo(function WorkbenchShell({
       onRequireModel={onRequireModel}
       showTips={showTips && requestedRecordId === library.selected?.id}
       onTipsComplete={onTipsComplete}
+      requestedDraft={requestedDraft}
     />
   );
 });

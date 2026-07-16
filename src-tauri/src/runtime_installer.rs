@@ -190,7 +190,7 @@ pub async fn install_llama_runtime(app: &AppHandle) -> Result<(), String> {
             || {
                 let ready = resolve_llama_server(app).is_some();
                 if ready {
-                    emit_setup_progress(app, "runtime", "done", "内置推理引擎已安装", 100);
+                    emit_setup_progress(app, "runtime", "done", "问图支持已准备", 100);
                 }
                 ready
             },
@@ -200,7 +200,7 @@ pub async fn install_llama_runtime(app: &AppHandle) -> Result<(), String> {
 }
 
 async fn install_llama_runtime_unlocked(app: &AppHandle) -> Result<(), String> {
-    emit_setup_progress(app, "runtime", "running", "正在下载推理引擎…", 5);
+    emit_setup_progress(app, "runtime", "running", "正在下载问图支持…", 5);
 
     let runtime = runtime_dir(app)?;
     let archive_path = runtime.join("llama-runtime.tar.gz");
@@ -214,7 +214,7 @@ async fn install_llama_runtime_unlocked(app: &AppHandle) -> Result<(), String> {
     let url = llama_download_url()?;
     download_file_with_progress(app, &url, &archive_path, "runtime", 5, 45).await?;
 
-    emit_setup_progress(app, "runtime", "running", "正在解压推理引擎…", 50);
+    emit_setup_progress(app, "runtime", "running", "正在安装问图支持…", 50);
     extract_tar_gz(&archive_path, &extract_dir)?;
 
     let discovered = find_binary_in_dir(&extract_dir, "llama-server")
@@ -263,18 +263,12 @@ async fn install_llama_runtime_unlocked(app: &AppHandle) -> Result<(), String> {
         return try_brew_install(app);
     }
 
-    emit_setup_progress(app, "runtime", "done", "推理引擎安装完成", 100);
+    emit_setup_progress(app, "runtime", "done", "问图支持已准备", 100);
     Ok(())
 }
 
 fn try_brew_install(app: &AppHandle) -> Result<(), String> {
-    emit_setup_progress(
-        app,
-        "runtime",
-        "running",
-        "正在通过 Homebrew 安装推理引擎…",
-        60,
-    );
+    emit_setup_progress(app, "runtime", "running", "正在安装问图支持…", 60);
 
     let brew = which_brew().ok_or_else(|| "推理引擎安装失败，请检查网络后重试".to_string())?;
 
@@ -288,7 +282,7 @@ fn try_brew_install(app: &AppHandle) -> Result<(), String> {
     }
 
     if resolve_llama_server(app).is_some() {
-        emit_setup_progress(app, "runtime", "done", "推理引擎安装完成", 100);
+        emit_setup_progress(app, "runtime", "done", "问图支持已准备", 100);
         Ok(())
     } else {
         Err("推理引擎安装后仍未检测到 llama-server".to_string())
@@ -357,7 +351,7 @@ async fn download_file_with_progress(
             app,
             phase,
             "running",
-            "正在下载推理引擎…",
+            "正在下载问图支持…",
             percent.min(percent_end as u64) as u8,
         );
     }
@@ -465,7 +459,7 @@ pub async fn install_mlx_runtime(app: &AppHandle) -> Result<(), String> {
             || {
                 let ready = resolve_mlx_python(app).is_some();
                 if ready {
-                    emit_setup_progress(app, "runtime", "done", "MLX 推理引擎已安装", 100);
+                    emit_setup_progress(app, "runtime", "done", "问图加速已准备", 100);
                 }
                 ready
             },
@@ -475,7 +469,7 @@ pub async fn install_mlx_runtime(app: &AppHandle) -> Result<(), String> {
 }
 
 async fn install_mlx_runtime_unlocked(app: &AppHandle) -> Result<(), String> {
-    emit_setup_progress(app, "runtime", "running", "正在准备 MLX…", 5);
+    emit_setup_progress(app, "runtime", "running", "正在准备问图加速…", 5);
 
     let venv_dir = mlx_venv_dir(app)?;
     if venv_dir.exists() {
@@ -496,7 +490,7 @@ async fn install_mlx_runtime_unlocked(app: &AppHandle) -> Result<(), String> {
     }
 
     let venv_python = venv_dir.join("bin").join("python3");
-    emit_setup_progress(app, "runtime", "running", "正在安装 mlx-vlm…", 20);
+    emit_setup_progress(app, "runtime", "running", "正在安装问图加速…", 20);
 
     let pip_upgrade = Command::new(&venv_python)
         .args(["-m", "pip", "install", "--upgrade", "pip"])
@@ -506,7 +500,7 @@ async fn install_mlx_runtime_unlocked(app: &AppHandle) -> Result<(), String> {
         return Err("pip 升级失败".to_string());
     }
 
-    emit_setup_progress(app, "runtime", "running", "正在安装 MLX…", 35);
+    emit_setup_progress(app, "runtime", "running", "正在安装问图加速…", 35);
 
     let pip_install = Command::new(&venv_python)
         .args([
@@ -529,7 +523,7 @@ async fn install_mlx_runtime_unlocked(app: &AppHandle) -> Result<(), String> {
     }
 
     write_mlx_ready_marker(app);
-    emit_setup_progress(app, "runtime", "done", "MLX 推理引擎安装完成", 100);
+    emit_setup_progress(app, "runtime", "done", "问图加速已准备", 100);
     Ok(())
 }
 

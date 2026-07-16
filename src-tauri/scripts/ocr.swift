@@ -39,4 +39,6 @@ if let results = request.results {
     }
 }
 
+print("__MINIVU_OCR_BEGIN__")
 print(lines.joined(separator: "\n"))
+print("__MINIVU_OCR_END__")

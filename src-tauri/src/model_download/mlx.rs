@@ -19,8 +19,8 @@ pub async fn download_mlx_model(app: AppHandle, force: Option<bool>) -> Result<S
     let python = resolve_mlx_python(&app).ok_or_else(|| "MLX 未安装。".to_string())?;
 
     let model_id = mlx.spec.clone();
-    emit_mlx_download_progress(&app, "running", "正在下载 MLX 模型…", 0, 0);
-    emit_setup_progress(&app, "model", "running", "正在下载 MLX 模型…", 0);
+    emit_mlx_download_progress(&app, "running", "正在下载加速模型…", 0, 0);
+    emit_setup_progress(&app, "model", "running", "正在下载加速模型…", 0);
 
     let python_for_task = python.clone();
     let model_id_for_task = model_id.clone();
@@ -39,12 +39,12 @@ pub async fn download_mlx_model(app: AppHandle, force: Option<bool>) -> Result<S
     while !download_task.is_finished() {
         let bytes = crate::model_cache::mlx_hub_cache_bytes(&model_id);
         let percent = ((bytes.saturating_mul(100)) / ESTIMATED_MLX_BYTES).min(99) as u8;
-        emit_mlx_download_progress(&app, "running", "正在下载 MLX 模型…", bytes, percent);
+        emit_mlx_download_progress(&app, "running", "正在下载加速模型…", bytes, percent);
         emit_setup_progress(
             &app,
             "model",
             "running",
-            &format!("正在下载 MLX 模型… {percent}%"),
+            &format!("正在下载加速模型… {percent}%"),
             percent,
         );
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -64,7 +64,7 @@ pub async fn download_mlx_model(app: AppHandle, force: Option<bool>) -> Result<S
     }
 
     emit_mlx_download_progress(&app, "done", "下载完成", ESTIMATED_MLX_BYTES, 100);
-    emit_setup_progress(&app, "model", "done", "MLX 模型已下载", 100);
-    emit_setup_progress(&app, "mmproj", "done", "MLX 模式无需 mmproj", 100);
+    emit_setup_progress(&app, "model", "done", "加速模型已下载", 100);
+    emit_setup_progress(&app, "mmproj", "done", "图片理解支持已准备", 100);
     Ok(model_id)
 }

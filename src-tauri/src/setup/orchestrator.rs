@@ -46,28 +46,22 @@ pub async fn setup_environment(app: AppHandle) -> Result<SetupEnvironmentResult,
     let mlx = cache.resolve_mlx(Some(settings.mlx_model_id.as_str()));
 
     if backend == InferenceBackend::Llama && !paths.is_complete() {
-        emit_setup_progress(
-            &app,
-            "model",
-            "running",
-            "正在下载主模型（顺序下载，不占并行带宽）…",
-            0,
-        );
+        emit_setup_progress(&app, "model", "running", "正在下载主模型…", 0);
         emit_setup_progress(&app, "mmproj", "waiting", "等待主模型完成后开始…", 0);
         download_model(app.clone(), None).await?;
-        emit_setup_progress(&app, "mmproj", "done", "视觉投影已下载", 100);
+        emit_setup_progress(&app, "mmproj", "done", "图片理解支持已下载", 100);
         emit_setup_progress(&app, "model", "done", "主模型已下载", 100);
     } else if backend == InferenceBackend::Mlx {
         if !mlx.is_ready() {
-            emit_setup_progress(&app, "model", "running", "正在下载 MLX 模型权重…", 0);
-            emit_setup_progress(&app, "mmproj", "waiting", "MLX 模式无需 mmproj", 0);
+            emit_setup_progress(&app, "model", "running", "正在下载加速模型…", 0);
+            emit_setup_progress(&app, "mmproj", "waiting", "等待模型下载完成…", 0);
             download_mlx_model(app.clone(), None).await?;
         } else {
-            emit_setup_progress(&app, "model", "done", "MLX 模型已下载", 100);
-            emit_setup_progress(&app, "mmproj", "done", "MLX 模式无需 mmproj", 100);
+            emit_setup_progress(&app, "model", "done", "加速模型已下载", 100);
+            emit_setup_progress(&app, "mmproj", "done", "图片理解支持已准备", 100);
         }
     } else {
-        emit_setup_progress(&app, "mmproj", "done", "视觉投影已下载", 100);
+        emit_setup_progress(&app, "mmproj", "done", "图片理解支持已下载", 100);
         emit_setup_progress(&app, "model", "done", "主模型已下载", 100);
     }
 
@@ -86,7 +80,7 @@ pub async fn setup_environment(app: AppHandle) -> Result<SetupEnvironmentResult,
     let mlx = cache.resolve_mlx(Some(refreshed.mlx_model_id.as_str()));
     let active = resolve_active_backend(refreshed.inference_backend, &app).ok();
 
-    emit_setup_progress(&app, "done", "done", "环境配置完成", 100);
+    emit_setup_progress(&app, "done", "done", "准备完成", 100);
 
     let runtime_ready = match refreshed.inference_backend {
         InferenceBackend::Mlx => mlx_runtime_ready(&app),

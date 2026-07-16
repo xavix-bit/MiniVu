@@ -118,7 +118,7 @@ describe("ModelPreferencesPanel", () => {
       await settingsLoad.promise;
     });
 
-    expect(await screen.findByRole("textbox", { name: "实验模型" })).toHaveValue(
+    expect(await screen.findByRole("textbox", { name: "模型名称" })).toHaveValue(
       "local/Persisted-Model",
     );
     expect(saveButton).toBeEnabled();
@@ -172,7 +172,7 @@ describe("ModelPreferencesPanel", () => {
 
     render(<ModelPreferencesPanel />);
 
-    const modelId = await screen.findByRole("textbox", { name: "实验模型" });
+    const modelId = await screen.findByRole("textbox", { name: "模型名称" });
     fireEvent.change(modelId, { target: { value: "mlx-community/MiniCPM-V-4.6-8bit" } });
     fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
 
@@ -196,7 +196,7 @@ describe("ModelPreferencesPanel", () => {
 
     render(<ModelPreferencesPanel />);
 
-    const modelId = await screen.findByRole("textbox", { name: "实验模型" });
+    const modelId = await screen.findByRole("textbox", { name: "模型名称" });
     fireEvent.change(modelId, {
       target: { value: "mlx-community/MiniCPM-V-4.6-8bit" },
     });
@@ -255,7 +255,7 @@ describe("ModelPreferencesPanel", () => {
     );
 
     render(<ModelPreferencesPanel />);
-    await screen.findByRole("textbox", { name: "实验模型" });
+    await screen.findByRole("textbox", { name: "模型名称" });
     fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
 
     expect(await screen.findByText("无法保存模型设置，请重试。")).toBeVisible();
@@ -285,7 +285,7 @@ describe("ModelPreferencesPanel", () => {
     expect(backend).toHaveValue("llama");
     expect(backend).toBeDisabled();
     expect(screen.getByRole("combobox", { name: "下载来源" })).toBeInTheDocument();
-    expect(screen.queryByRole("textbox", { name: "实验模型" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "模型名称" })).not.toBeInTheDocument();
     expect(onSaved).not.toHaveBeenCalled();
 
     await act(async () => {
@@ -296,7 +296,7 @@ describe("ModelPreferencesPanel", () => {
     await waitFor(() => expect(backend).toHaveValue("mlx"));
     expect(backend).toBeEnabled();
     expect(screen.queryByRole("combobox", { name: "下载来源" })).not.toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "实验模型" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "模型名称" })).toBeInTheDocument();
     expect(onSaved).toHaveBeenCalledWith(committed);
   });
 
@@ -379,7 +379,7 @@ describe("ModelPreferencesPanel", () => {
     expect(backend).toHaveValue("mlx");
     expect(backend).toBeDisabled();
     expect(screen.getByRole("option", { name: "实验加速" })).toBeDisabled();
-    expect(screen.getByRole("textbox", { name: "实验模型" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "模型名称" })).toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: "下载来源" })).not.toBeInTheDocument();
 
     await act(async () => {
@@ -403,12 +403,12 @@ describe("ModelPreferencesPanel", () => {
     const onSaved = vi.fn();
 
     render(<ModelPreferencesPanel onSaved={onSaved} />);
-    fireEvent.click(await screen.findByRole("button", { name: "安装加速组件" }));
+    fireEvent.click(await screen.findByRole("button", { name: "安装问图加速" }));
 
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith("install_mlx_runtime_command"),
     );
-    expect(await screen.findByText("加速组件已安装")).toBeVisible();
+    expect(await screen.findByText("问图加速已安装")).toBeVisible();
     expect(onSaved).toHaveBeenCalledWith();
     expect(invoke).not.toHaveBeenCalledWith("download_mlx_model", expect.anything());
     expect(listen).not.toHaveBeenCalled();
@@ -431,9 +431,9 @@ describe("ModelPreferencesPanel", () => {
     });
 
     render(<ModelPreferencesPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: "安装加速组件" }));
+    fireEvent.click(await screen.findByRole("button", { name: "安装问图加速" }));
 
-    expect(await screen.findByText("无法安装加速组件，请重试。")).toBeVisible();
+    expect(await screen.findByText("无法安装问图加速，请重试。")).toBeVisible();
     expect(screen.queryByText(/subprocess|127|private\/tmp/)).not.toBeInTheDocument();
   });
 
@@ -612,7 +612,7 @@ describe("ModelPreferencesPanel", () => {
     const onSaved = vi.fn();
 
     const { unmount } = render(<ModelPreferencesPanel onSaved={onSaved} />);
-    fireEvent.click(await screen.findByRole("button", { name: "安装加速组件" }));
+    fireEvent.click(await screen.findByRole("button", { name: "安装问图加速" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("install_mlx_runtime_command"));
     unmount();
 
@@ -660,7 +660,7 @@ describe("ModelPreferencesPanel", () => {
     expect(backend).toHaveValue("llama");
     expect(backend).toBeDisabled();
     expect(screen.getByRole("button", { name: "下载 / 更新模型" })).toBeVisible();
-    expect(screen.queryByRole("button", { name: "下载实验模型" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "下载加速模型" })).not.toBeInTheDocument();
 
     await act(async () => {
       save.resolve(committed);
@@ -670,7 +670,7 @@ describe("ModelPreferencesPanel", () => {
     await waitFor(() => expect(backend).toHaveValue("mlx"));
     await waitFor(() => expect(getModelStatus).toHaveBeenCalledTimes(2));
     expect(screen.getByRole("button", { name: "下载 / 更新模型" })).toBeDisabled();
-    expect(screen.queryByRole("button", { name: "下载实验模型" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "下载加速模型" })).not.toBeInTheDocument();
 
     await act(async () => {
       modelRefresh.resolve(
@@ -682,7 +682,7 @@ describe("ModelPreferencesPanel", () => {
       await modelRefresh.promise;
     });
 
-    expect(await screen.findByRole("button", { name: "下载实验模型" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "下载加速模型" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "下载 / 更新模型" })).not.toBeInTheDocument();
     expect(getModelStatus).toHaveBeenCalledTimes(2);
     expect(listen).toHaveBeenCalledTimes(1);

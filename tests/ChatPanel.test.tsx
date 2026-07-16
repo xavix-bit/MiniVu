@@ -80,6 +80,28 @@ describe("ChatPanel", () => {
     expect(screen.queryAllByRole("button", { name: "问图" })).toHaveLength(0);
   });
 
+  it("keeps the question and defers asking when model setup is required", async () => {
+    const ask = vi.fn();
+    const onRequireModel = vi.fn().mockResolvedValue(false);
+    useImageSessionMock.mockReturnValue(session({
+      state: {
+        image: { name: "screen.png", dataUrl: "data:image/png;base64,abc" },
+        ocrText: "识别文字",
+        messages: [],
+      },
+      ask,
+    }));
+
+    render(<ChatPanel onRequireModel={onRequireModel} />);
+    const composer = screen.getByPlaceholderText("问这张图…");
+    fireEvent.change(composer, { target: { value: "解释这个错误" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => expect(onRequireModel).toHaveBeenCalledWith("解释这个错误"));
+    expect(ask).not.toHaveBeenCalled();
+    expect(composer).toHaveValue("解释这个错误");
+  });
+
   it("shows a concise capture notice without exposing backend details", async () => {
     vi.mocked(captureScreenRegion).mockRejectedValue(
       new Error("Metal sidecar failed at /private/tmp/model.gguf"),

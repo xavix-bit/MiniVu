@@ -15,6 +15,7 @@ import { loadSettings, updateSettings } from "../src/settings/settingsStore";
 const tokensCss = readFileSync(`${process.cwd()}/src/styles/tokens.css`, "utf8");
 const settingsCss = readFileSync(`${process.cwd()}/src/styles/settings.css`, "utf8");
 const workbenchCss = readFileSync(`${process.cwd()}/src/styles/workbench.css`, "utf8");
+const stylesEntry = readFileSync(`${process.cwd()}/src/styles.css`, "utf8");
 
 function cssRuleBody(css: string, selector: string) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -49,9 +50,10 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-const { shellState, settingsPanelState, getEnvironmentStatus } = vi.hoisted(() => ({
+const { shellState, settingsPanelState, getEnvironmentStatus, mainEventHandlers } = vi.hoisted(() => ({
   shellState: { mounts: 0, renders: 0 },
   settingsPanelState: { mounts: 0 },
+  mainEventHandlers: new Map<string, (event: { payload: unknown }) => void>(),
   getEnvironmentStatus: vi.fn(async () => ({
     onboardingComplete: true,
     inferenceBackend: "llama" as const,
@@ -63,7 +65,10 @@ const { shellState, settingsPanelState, getEnvironmentStatus } = vi.hoisted(() =
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => {}),
+  listen: vi.fn(async (name: string, callback: (event: { payload: unknown }) => void) => {
+    mainEventHandlers.set(name, callback);
+    return () => mainEventHandlers.delete(name);
+  }),
 }));
 vi.mock("../src/model/modelClient", () => ({
   modelClient: {
@@ -212,6 +217,7 @@ vi.mock("../src/workbench/WorkbenchShell", async () => {
   const MockWorkbenchShell = React.memo(({
     scope,
     requestedRecordId,
+    requestedDraft,
     onCapture,
     modelReady,
     onRequireModel,
@@ -220,6 +226,7 @@ vi.mock("../src/workbench/WorkbenchShell", async () => {
   }: {
     scope: "recent" | "pinned";
     requestedRecordId?: string | null;
+    requestedDraft?: { recordId: string; prompt: string } | null;
     onCapture?: () => void;
     modelReady?: boolean;
     onRequireModel?: (context: { recordId: string; prompt: string }) => void | Promise<boolean>;
@@ -231,6 +238,9 @@ vi.mock("../src/workbench/WorkbenchShell", async () => {
     React.useEffect(() => {
       shellState.mounts += 1;
     }, []);
+    React.useEffect(() => {
+      if (requestedDraft) setDraft(requestedDraft.prompt);
+    }, [requestedDraft]);
     return (
       <div
         data-testid="workbench-instance"
@@ -265,6 +275,7 @@ vi.mock("../src/workbench/WorkbenchShell", async () => {
 describe("MainWindowShell navigation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mainEventHandlers.clear();
     shellState.mounts = 0;
     shellState.renders = 0;
     settingsPanelState.mounts = 0;
@@ -309,6 +320,26 @@ describe("MainWindowShell navigation", () => {
     expect(screen.getByLabelText("快捷键 Control+Option+Space")).toHaveTextContent("⌃⌥Space");
     expect(screen.queryByTestId("model-panel")).not.toBeInTheDocument();
     expect(getEnvironmentStatus).not.toHaveBeenCalled();
+  });
+
+  it("shows the startup surface before enabling navigation motion", async () => {
+    const settingsLoad = deferred<Awaited<ReturnType<typeof loadSettings>>>();
+    vi.mocked(loadSettings).mockReturnValue(settingsLoad.promise);
+
+    const { container } = render(<MainWindowShell />);
+    const surfaceStack = container.querySelector(".main-surface-stack");
+
+    expect(surfaceStack).not.toHaveClass("is-motion-ready");
+
+    await act(async () => settingsLoad.resolve({
+      onboardingComplete: true,
+      shortcut: "Control+Option+Space",
+    } as Awaited<ReturnType<typeof loadSettings>>));
+
+    await waitFor(() => expect(surfaceStack).toHaveClass("is-motion-ready"));
+    expect(screen.getByTestId("workbench-instance").closest(".main-surface")).toHaveClass(
+      "is-active",
+    );
   });
 
   it("cleans up an event subscription that finishes registering after unmount", async () => {
@@ -527,6 +558,167 @@ describe("MainWindowShell navigation", () => {
       );
     });
     expect(draft).toHaveValue("解释这个错误");
+  });
+
+  it("does not restore an older draft after a delayed model check", async () => {
+    const missing = {
+      onboardingComplete: true,
+      inferenceBackend: "llama" as const,
+      runtimeReady: true,
+      modelReady: false,
+      environmentReady: false,
+    };
+    const readiness = deferred<typeof missing>();
+    getEnvironmentStatus
+      .mockResolvedValueOnce(missing)
+      .mockReturnValueOnce(readiness.promise);
+
+    render(<MainWindowShell />);
+    const draft = await screen.findByRole("textbox", { name: "模拟问题" });
+    await waitFor(() => expect(getEnvironmentStatus).toHaveBeenCalledOnce());
+    fireEvent.change(draft, { target: { value: "原来的问题" } });
+    fireEvent.click(screen.getByRole("button", { name: "模拟需要模型" }));
+    await waitFor(() => expect(getEnvironmentStatus).toHaveBeenCalledTimes(2));
+    fireEvent.change(draft, { target: { value: "我后来改的问题" } });
+
+    await act(async () => readiness.resolve(missing));
+
+    const settingsNav = await screen.findByRole("navigation", { name: "设置导航" });
+    await waitFor(() => {
+      expect(within(settingsNav).getByRole("button", { name: "模型" })).toHaveAttribute(
+        "aria-current",
+        "page",
+      );
+    });
+    expect(draft).toHaveValue("我后来改的问题");
+  });
+
+  it("opens model setup for a quick-panel question and restores its draft", async () => {
+    getEnvironmentStatus.mockResolvedValue({
+      onboardingComplete: true,
+      inferenceBackend: "llama",
+      runtimeReady: true,
+      modelReady: false,
+      environmentReady: false,
+    });
+
+    render(<MainWindowShell />);
+    await waitFor(() => expect(mainEventHandlers.has("model-required")).toBe(true));
+    act(() => {
+      mainEventHandlers.get("model-required")?.({
+        payload: { recordId: "panel-record", prompt: "解释这个错误" },
+      });
+    });
+
+    const settingsNav = await screen.findByRole("navigation", { name: "设置导航" });
+    expect(within(settingsNav).getByRole("button", { name: "模型" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "模拟模型就绪" }));
+
+    const workbench = screen.getByTestId("workbench-instance");
+    await waitFor(() => {
+      expect(workbench.closest(".main-surface")).not.toHaveAttribute("inert");
+      expect(workbench).toHaveAttribute("data-requested-record-id", "panel-record");
+      expect(screen.getByRole("textbox", { name: "模拟问题" })).toHaveValue("解释这个错误");
+    });
+  });
+
+  it("keeps a newer draft when model setup finishes", async () => {
+    getEnvironmentStatus.mockResolvedValue({
+      onboardingComplete: true,
+      inferenceBackend: "llama",
+      runtimeReady: true,
+      modelReady: false,
+      environmentReady: false,
+    });
+
+    render(<MainWindowShell />);
+    await waitFor(() => expect(mainEventHandlers.has("model-required")).toBe(true));
+    act(() => {
+      mainEventHandlers.get("model-required")?.({
+        payload: { recordId: "panel-record", prompt: "原来的问题" },
+      });
+    });
+
+    const draft = screen.getByLabelText("模拟问题");
+    await waitFor(() => expect(draft).toHaveValue("原来的问题"));
+    fireEvent.click(screen.getByRole("button", { name: "最近" }));
+    fireEvent.change(draft, { target: { value: "我后来改的问题" } });
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    fireEvent.click(screen.getByRole("button", { name: "模型" }));
+    fireEvent.click(screen.getByRole("button", { name: "模拟模型就绪" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("workbench-instance").closest(".main-surface")).not.toHaveAttribute("inert");
+    });
+    expect(draft).toHaveValue("我后来改的问题");
+  });
+
+  it("returns to a quick-panel question when a preference action completes setup", async () => {
+    getEnvironmentStatus.mockResolvedValue({
+      onboardingComplete: true,
+      inferenceBackend: "mlx",
+      runtimeReady: false,
+      modelReady: false,
+      environmentReady: false,
+    });
+
+    render(<MainWindowShell />);
+    await waitFor(() => expect(mainEventHandlers.has("model-required")).toBe(true));
+    act(() => {
+      mainEventHandlers.get("model-required")?.({
+        payload: { recordId: "panel-runtime-record", prompt: "这是什么界面" },
+      });
+    });
+    await screen.findByTestId("model-preferences-panel");
+
+    getEnvironmentStatus.mockResolvedValue({
+      onboardingComplete: true,
+      inferenceBackend: "mlx",
+      runtimeReady: true,
+      modelReady: true,
+      environmentReady: true,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "模拟保存模型偏好" }));
+
+    const workbench = screen.getByTestId("workbench-instance");
+    await waitFor(() => {
+      expect(workbench.closest(".main-surface")).not.toHaveAttribute("inert");
+      expect(workbench).toHaveAttribute("data-requested-record-id", "panel-runtime-record");
+      expect(screen.getByRole("textbox", { name: "模拟问题" })).toHaveValue("这是什么界面");
+    });
+  });
+
+  it("refreshes readiness after model preferences change", async () => {
+    getEnvironmentStatus
+      .mockResolvedValueOnce({
+        onboardingComplete: true,
+        inferenceBackend: "llama",
+        runtimeReady: true,
+        modelReady: true,
+        environmentReady: true,
+      })
+      .mockResolvedValueOnce({
+        onboardingComplete: true,
+        inferenceBackend: "mlx",
+        runtimeReady: false,
+        modelReady: false,
+        environmentReady: false,
+      });
+
+    render(<MainWindowShell />);
+    const workbench = await screen.findByTestId("workbench-instance");
+    await waitFor(() => expect(workbench).toHaveAttribute("data-model-ready", "true"));
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    fireEvent.click(screen.getByRole("button", { name: "模型" }));
+    fireEvent.click(screen.getByRole("button", { name: "模拟保存模型偏好" }));
+
+    await waitFor(() => {
+      expect(getEnvironmentStatus).toHaveBeenCalledTimes(2);
+      expect(workbench).toHaveAttribute("data-model-ready", "false");
+    });
   });
 
   it("captures, stores, processes, saves, and selects the first screenshot in order", async () => {
@@ -1007,7 +1199,7 @@ describe("MainWindowShell navigation", () => {
       expect(within(modelView).queryByTestId("environment-setup")).not.toBeInTheDocument(),
     );
     expect(model).toHaveAttribute("data-refresh-token", "2");
-    expect(getEnvironmentStatus).toHaveBeenCalledTimes(initialStatusChecks + 1);
+    expect(getEnvironmentStatus).toHaveBeenCalledTimes(initialStatusChecks + 2);
   });
 
   it("disables every model action as soon as inline repair opens", async () => {
@@ -1197,6 +1389,17 @@ describe("MainWindowShell navigation", () => {
     );
     expect(settingsCss).toMatch(
       /\.unified-settings-detail :is\(\.settings-btn, \.shortcut-recorder__btn, \.callout__action\)\s*{[^}]*min-height:\s*44px/,
+    );
+  });
+
+  it("keeps active product typography and primary controls comfortably sized", () => {
+    expect(`${settingsCss}\n${workbenchCss}`).not.toMatch(/letter-spacing:\s*-/);
+    expect(stylesEntry).not.toContain('styles/home.css');
+    expect(cssRuleBody(workbenchCss, ".app-rail button,\n.capture-canvas__toolbar button,\n.workbench-detail__actions button")).toMatch(
+      /width:\s*44px[\s\S]*height:\s*44px/,
+    );
+    expect(cssRuleBody(settingsCss, ".settings-navigation-pane__nav button")).toMatch(
+      /min-height:\s*44px/,
     );
   });
 

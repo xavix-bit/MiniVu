@@ -1,34 +1,36 @@
-# MiniVu Desktop
+# MiniVu
 
-MiniVu is a macOS-first screenshot workbench built with Tauri, React, TypeScript, and Rust. Capture is the primary workflow; local OCR and optional local AI operate on durable screenshot records after capture.
+MiniVu is a screenshot workbench for macOS. Capture part of the screen, copy its text, keep useful shots, or ask a question without leaving the app you are using.
 
-[Download MiniVu v0.2.0 for Apple Silicon](https://github.com/xavix-bit/MiniVu/releases/download/v0.2.0/MiniVu_0.2.0_aarch64.dmg)
+[Download MiniVu v0.3.0 for Apple Silicon](https://github.com/xavix-bit/MiniVu/releases/download/v0.3.0/MiniVu_0.3.0_aarch64.dmg)
 
 Open the DMG and drag MiniVu into Applications. On first launch, Control-click MiniVu, choose **Open**, then confirm once. macOS 13 or later is recommended.
 
-## Product Flow
+## Start With A Screenshot
 
-- Press the global shortcut to start macOS region capture immediately.
-- Click the draggable floating launcher to open `截图`, `粘贴`, and `最近` actions.
-- Each successful capture creates an independent local record with its own image, OCR text, title, pin state, and conversation.
-- OCR starts automatically. AI preparation may run in the background but never blocks capture or OCR.
-- The main window is a three-column workbench: navigation, searchable screenshot list, and screenshot detail with AI/text inspector.
-- Records are retained for 24 hours by default. Users may choose no history, 24 hours, 7 days, or permanent retention; pinned records never expire.
+1. Open MiniVu and choose **开始截图**. macOS may ask for screen-recording permission once.
+2. Frame any part of the screen. The screenshot is saved to the workbench and its text is recognized automatically.
+3. Copy the recognized text or ask a question about the image.
+4. The first question opens the model page only when a model is missing. After installation, MiniVu returns to the same screenshot and keeps the question you typed.
+
+The floating launcher stays out of the way and provides three quick actions: `截图`, `粘贴`, and `最近`. The same global shortcut can start a capture from any app.
+
+## Workbench
+
+- Search recent screenshots or pin the ones you want to keep.
+- Zoom, fit, view at 1:1, and drag large screenshots around the canvas.
+- Switch between image questions and recognized text without losing the current draft.
+- Choose a MiniCPM-V model by exact model name, download size, and memory estimate.
+- Keep records for 24 hours by default, or choose no history, 7 days, or permanent retention. Pinned screenshots do not expire.
 
 ## Privacy
 
 - Screenshots, OCR text, prompts, and answers stay on this Mac.
 - Capture records live under the application data directory and are cleaned according to the selected retention policy.
-- Network access is used only for explicit model download, update, optional acceleration setup, or mirror testing.
+- Network access is used only when you choose to download or update a model, install optional acceleration, or test a download source.
 - There is no cloud inference fallback or account sync.
 
 See [local-first-policy.md](docs/privacy/local-first-policy.md) for the detailed policy.
-
-## App Surfaces
-
-- `quick-panel`: one physical Tauri window with `hidden`, `pet`, `launcher`, and `expanded` modes. Pet is 56 x 56; launcher is a compact horizontal toolbar; expanded mode shows the latest capture result.
-- `main`: onboarding/settings until setup is complete, then the screenshot workbench.
-- Capture store: `<app-data>/captures/<record-id>/image.png`, `thumbnail.jpg`, and atomically written `metadata.json`.
 
 ## Development
 
@@ -60,4 +62,4 @@ npm run tauri build -- --debug
 
 ## Current Scope
 
-MiniVu v0.2.0 targets Apple Silicon macOS. It includes local screenshot history, OCR, isolated per-screenshot conversations, pinning, search, and optional local image Q&A. It does not include accounts, sync, cloud inference, annotation editing, multi-image comparison, or cross-screenshot AI memory.
+MiniVu v0.3.0 targets Apple Silicon macOS. It includes screenshot history, text recognition, per-screenshot conversations, pinning, search, and optional local image questions. It does not include accounts, sync, cloud inference, annotation editing, or multi-image comparison.

@@ -120,7 +120,7 @@ describe("model operation coordination", () => {
     fireEvent.click(within(settingsNav).getByRole("button", { name: "模型" }));
 
     const source = await screen.findByRole("combobox", { name: "下载来源" });
-    const repair = await screen.findByRole("button", { name: "修复模型组件" });
+    const repair = await screen.findByRole("button", { name: "修复下载功能" });
     const variant = screen.getByRole("button", { name: /高质量/ });
     expect(repair).toBeEnabled();
     expect(variant).toBeEnabled();

@@ -80,7 +80,7 @@ export function CaptureInspector({
             }
           }}
         >
-          AI
+          问图
         </button>
         <button
           ref={(node) => { tabRefs.current.text = node; }}

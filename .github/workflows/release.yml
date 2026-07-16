@@ -21,6 +21,8 @@ jobs:
           cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
 
       - uses: swatinem/rust-cache@v2
         with:
@@ -29,8 +31,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Test
+      - name: Test frontend
         run: npm test
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - name: Test Rust
+        run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Build Tauri app
         env:
@@ -81,5 +89,6 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+          name: MiniVu ${{ github.ref_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

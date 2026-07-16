@@ -34,9 +34,9 @@ type EnvironmentSetupPanelProps = {
 
 const PHASE_LABELS: Record<string, string> = {
   device: "设备检测",
-  runtime: "基础组件",
+  runtime: "问图支持",
   model: "问图模型",
-  mmproj: "配套文件",
+  mmproj: "图片理解支持",
   shortcut: "快捷键",
   done: "完成",
 };
@@ -235,7 +235,7 @@ export function EnvironmentSetupPanel({
           return mergeProgress(current, {
             phase: "model",
             status: "running",
-            message: `正在下载实验模型 ${resolvedPercent}%${sourceHint}`,
+            message: `正在下载 MiniCPM-V 加速版 ${resolvedPercent}%${sourceHint}`,
             percent: resolvedPercent,
             speedMbps: speed,
           });
@@ -244,7 +244,7 @@ export function EnvironmentSetupPanel({
       }
 
       const phaseKey = file === "mmproj" ? "mmproj" : "model";
-      const label = file === "mmproj" ? "配套文件" : "主模型";
+      const label = file === "mmproj" ? "图片理解支持" : "主模型";
 
       if (downloadStatus === "waiting") {
         setProgress((current) =>
@@ -493,7 +493,7 @@ export function EnvironmentSetupPanel({
 
   const statusItems = [
     {
-      label: status?.inferenceBackend === "mlx" ? "加速组件" : "基础组件",
+      label: status?.inferenceBackend === "mlx" ? "问图加速" : "问图支持",
       value:
         status?.inferenceBackend === "mlx"
           ? status?.mlxRuntimeAvailable
@@ -510,7 +510,7 @@ export function EnvironmentSetupPanel({
     ...(status?.inferenceBackend === "mlx"
       ? [
           {
-            label: "实验模型",
+            label: "MiniCPM-V 加速版",
             value: status?.mlxModelReady ? "已下载" : "未下载",
             ok: status?.mlxModelReady,
           },
@@ -522,12 +522,12 @@ export function EnvironmentSetupPanel({
             ok: status?.modelDownloaded,
           },
           {
-            label: "配套文件",
+            label: "图片理解支持",
             value: status?.mmprojDownloaded ? "已下载" : "未下载",
             ok: status?.mmprojDownloaded,
           },
         ]),
-    { label: "整体状态", value: status?.modelReady ? "可用" : "未完成", ok: status?.modelReady },
+    { label: "可以问图", value: status?.modelReady ? "是" : "还不行", ok: status?.modelReady },
   ];
 
   return (
@@ -552,7 +552,7 @@ export function EnvironmentSetupPanel({
           <p className="setup-panel__success-lead">配置完成</p>
           <ul className="onboarding-checklist">
             <li className={result?.runtimeReady ? "is-done" : ""}>
-              基础组件 {result?.runtimeReady ? "已安装" : "未完成"}
+              问图支持 {result?.runtimeReady ? "已完成" : "未完成"}
             </li>
             <li className={result?.modelReady ? "is-done" : ""}>
               问图模型 {result?.modelReady ? "已下载" : "未完成"}

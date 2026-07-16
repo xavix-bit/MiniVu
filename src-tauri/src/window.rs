@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewWindow};
 
 const QUICK_PANEL_LABEL: &str = "quick-panel";
-const MAIN_WINDOW_LABEL: &str = "main";
+pub(crate) const MAIN_WINDOW_LABEL: &str = "main";
 const PANEL_WIDTH: f64 = 380.0;
 const PANEL_HEIGHT: f64 = 620.0;
 const PET_SIZE: f64 = 56.0;

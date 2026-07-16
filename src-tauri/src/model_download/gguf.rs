@@ -98,7 +98,7 @@ pub async fn download_model(app: AppHandle, force: Option<bool>) -> Result<Strin
         serde_json::json!({
             "file": "mmproj",
             "status": "running",
-            "message": "主模型已完成，开始下载视觉投影器…",
+            "message": "主模型已完成，开始下载图片理解支持…",
             "downloaded": 0,
             "total": null,
             "percent": 0,
@@ -108,7 +108,7 @@ pub async fn download_model(app: AppHandle, force: Option<bool>) -> Result<Strin
         &app,
         "mmproj",
         "running",
-        "主模型已完成，开始下载视觉投影器…",
+        "主模型已完成，开始下载图片理解支持…",
         0,
     );
 
