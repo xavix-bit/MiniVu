@@ -51,7 +51,11 @@ export function MainWindowShell() {
   const [warmupNotice, setWarmupNotice] = useState("");
   const [runtimeRepairOpen, setRuntimeRepairOpen] = useState(false);
   const [repairBusy, setRepairBusy] = useState(false);
+  const [modelPreferencesBusy, setModelPreferencesBusy] = useState(false);
+  const [modelPanelBusy, setModelPanelBusy] = useState(false);
   const [modelRefreshToken, setModelRefreshToken] = useState(0);
+  const modelOperationBusy = modelPreferencesBusy || modelPanelBusy;
+  const modelControlsDisabled = repairBusy || modelOperationBusy;
 
   useEffect(() => {
     document.documentElement.classList.add("main-window");
@@ -153,8 +157,11 @@ export function MainWindowShell() {
   }, []);
 
   const handleRepairRuntime = useCallback(() => {
+    if (modelOperationBusy || repairBusy) {
+      return;
+    }
     setRuntimeRepairOpen(true);
-  }, []);
+  }, [modelOperationBusy, repairBusy]);
 
   const handleRuntimeRepairSucceeded = useCallback(() => {
     setRepairBusy(false);
@@ -251,11 +258,13 @@ export function MainWindowShell() {
                       {activeSection !== "setup" ? (
                         <div className="unified-settings-surface">
                           <ModelPreferencesPanel
-                            disabled={repairBusy}
+                            disabled={modelControlsDisabled}
+                            onBusyChange={setModelPreferencesBusy}
                             onSaved={handleModelPreferencesSaved}
                           />
                           <ModelPanel
-                            disabled={repairBusy}
+                            disabled={modelControlsDisabled}
+                            onBusyChange={setModelPanelBusy}
                             onRepairRuntime={handleRepairRuntime}
                             onStatusChange={() => void refreshEnvironmentStatus()}
                             refreshToken={modelRefreshToken}

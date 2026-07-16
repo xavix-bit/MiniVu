@@ -19,6 +19,7 @@ type DeviceInfo = {
 
 type ModelPreferencesPanelProps = {
   disabled?: boolean;
+  onBusyChange?: (busy: boolean) => void;
   onSaved?: (settings?: AppSettings) => void;
 };
 
@@ -38,11 +39,19 @@ function formatSourceName(source: MirrorId | null | undefined) {
   return "—";
 }
 
-export function ModelPreferencesPanel({ disabled = false, onSaved }: ModelPreferencesPanelProps) {
+export function ModelPreferencesPanel({
+  disabled = false,
+  onBusyChange,
+  onSaved,
+}: ModelPreferencesPanelProps) {
+  const settingsLoadGenerationRef = useRef(0);
   const modelIdRevisionRef = useRef(0);
   const mountedRef = useRef(false);
   const unsupportedFallbackAttemptedRef = useRef(false);
   const [settings, setSettings] = useState<AppSettings>(createDefaultSettings());
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [settingsLoadError, setSettingsLoadError] = useState("");
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
   const [deviceInfoLoading, setDeviceInfoLoading] = useState(true);
   const [deviceInfoError, setDeviceInfoError] = useState("");
@@ -59,35 +68,74 @@ export function ModelPreferencesPanel({ disabled = false, onSaved }: ModelPrefer
   const [savingSource, setSavingSource] = useState(false);
   const [sourceError, setSourceError] = useState("");
 
-  useEffect(() => {
-    mountedRef.current = true;
+  const settingsUnavailable = !settingsLoaded || settingsLoading;
+  const operationBusy =
+    savingModelId || savingBackend || installingMlx || benchmarking || savingSource;
 
-    void Promise.allSettled([
-      loadSettings(),
-      invoke<DeviceInfo>("get_device_info"),
-    ]).then(([loadedResult, deviceResult]) => {
-      if (!mountedRef.current) {
+  async function loadPersistedSettings() {
+    const generation = ++settingsLoadGenerationRef.current;
+    setSettingsLoading(true);
+    setSettingsLoaded(false);
+    setSettingsLoadError("");
+    try {
+      const loaded = await loadSettings();
+      if (!mountedRef.current || generation !== settingsLoadGenerationRef.current) {
         return;
       }
-      if (loadedResult.status === "fulfilled") {
-        setSettings(loadedResult.value);
+      modelIdRevisionRef.current = 0;
+      setSettings(loaded);
+      setSettingsLoaded(true);
+    } catch {
+      if (mountedRef.current && generation === settingsLoadGenerationRef.current) {
+        setSettingsLoadError("无法读取模型设置，请重试。");
       }
-      if (deviceResult.status === "fulfilled") {
-        setDeviceInfo(deviceResult.value);
-      } else {
-        setDeviceInfoError("暂时无法检测设备，仍可使用默认方式。");
+    } finally {
+      if (mountedRef.current && generation === settingsLoadGenerationRef.current) {
+        setSettingsLoading(false);
       }
-      setDeviceInfoLoading(false);
-    });
+    }
+  }
+
+  useEffect(() => {
+    mountedRef.current = true;
+    void loadPersistedSettings();
+    void invoke<DeviceInfo>("get_device_info")
+      .then((device) => {
+        if (mountedRef.current) {
+          setDeviceInfo(device);
+        }
+      })
+      .catch(() => {
+        if (mountedRef.current) {
+          setDeviceInfoError("暂时无法检测设备，仍可使用默认方式。");
+        }
+      })
+      .finally(() => {
+        if (mountedRef.current) {
+          setDeviceInfoLoading(false);
+        }
+      });
 
     return () => {
       mountedRef.current = false;
+      settingsLoadGenerationRef.current += 1;
     };
   }, []);
 
+  useEffect(() => {
+    onBusyChange?.(operationBusy);
+  }, [onBusyChange, operationBusy]);
+
+  useEffect(
+    () => () => {
+      onBusyChange?.(false);
+    },
+    [onBusyChange],
+  );
+
   async function handleSave(event: FormEvent) {
     event.preventDefault();
-    if (disabled || savingModelId) {
+    if (disabled || settingsUnavailable || savingModelId) {
       return;
     }
     const submittedRevision = modelIdRevisionRef.current;
@@ -116,7 +164,7 @@ export function ModelPreferencesPanel({ disabled = false, onSaved }: ModelPrefer
   }
 
   async function installMlxRuntime() {
-    if (disabled) {
+    if (disabled || settingsUnavailable) {
       return;
     }
     setInstallingMlx(true);
@@ -140,7 +188,7 @@ export function ModelPreferencesPanel({ disabled = false, onSaved }: ModelPrefer
   }
 
   async function changeBackend(inferenceBackend: AppSettings["inferenceBackend"]) {
-    if (disabled || inferenceBackend === settings.inferenceBackend) {
+    if (disabled || settingsUnavailable || inferenceBackend === settings.inferenceBackend) {
       return;
     }
     setSavingBackend(true);
@@ -171,6 +219,7 @@ export function ModelPreferencesPanel({ disabled = false, onSaved }: ModelPrefer
     if (
       deviceInfo?.isAppleSilicon !== false ||
       disabled ||
+      settingsUnavailable ||
       settings.inferenceBackend !== "mlx" ||
       unsupportedFallbackAttemptedRef.current
     ) {
@@ -178,10 +227,10 @@ export function ModelPreferencesPanel({ disabled = false, onSaved }: ModelPrefer
     }
     unsupportedFallbackAttemptedRef.current = true;
     void changeBackend("llama");
-  }, [deviceInfo, disabled, settings.inferenceBackend]);
+  }, [deviceInfo, disabled, settings.inferenceBackend, settingsUnavailable]);
 
   async function changeDownloadSource(downloadMirror: AppSettings["downloadMirror"]) {
-    if (disabled) {
+    if (disabled || settingsUnavailable) {
       return;
     }
     setSavingSource(true);
@@ -206,7 +255,7 @@ export function ModelPreferencesPanel({ disabled = false, onSaved }: ModelPrefer
   }
 
   async function runBenchmark() {
-    if (disabled) {
+    if (disabled || settingsUnavailable) {
       return;
     }
     setBenchmarking(true);
@@ -243,21 +292,36 @@ export function ModelPreferencesPanel({ disabled = false, onSaved }: ModelPrefer
   const backend = settings.inferenceBackend;
   const isMlx = backend === "mlx";
   const showMlxOption = supportsMlx || isMlx;
+  const settingsControlsDisabled = disabled || settingsUnavailable;
 
   return (
     <form
       className="settings-form settings-form--stack model-preferences-panel"
       aria-label="模型偏好"
-      aria-busy={savingModelId}
+      aria-busy={settingsLoading || savingModelId}
       onSubmit={(event) => void handleSave(event)}
     >
+      {settingsLoadError ? (
+        <div className="callout callout--attention" role="alert">
+          <p>{settingsLoadError}</p>
+          <button
+            type="button"
+            className="callout__action"
+            disabled={disabled || settingsLoading}
+            onClick={() => void loadPersistedSettings()}
+          >
+            重试
+          </button>
+        </div>
+      ) : null}
+
       <section className="settings-section">
         <h2 className="settings-section__title">问图方式</h2>
         <label className="settings-field">
           <span>问图方式</span>
           <select
             value={backend}
-            disabled={disabled || deviceInfoLoading || savingBackend}
+            disabled={settingsControlsDisabled || deviceInfoLoading || savingBackend}
             onChange={(event) => {
               const inferenceBackend = event.target.value as AppSettings["inferenceBackend"];
               void changeBackend(inferenceBackend);
@@ -280,7 +344,7 @@ export function ModelPreferencesPanel({ disabled = false, onSaved }: ModelPrefer
               <span>实验模型</span>
               <input
                 value={settings.mlxModelId}
-                disabled={disabled}
+                disabled={settingsControlsDisabled}
                 onChange={(event) => {
                   modelIdRevisionRef.current += 1;
                   setSettings((current) => ({ ...current, mlxModelId: event.target.value }));
@@ -296,7 +360,7 @@ export function ModelPreferencesPanel({ disabled = false, onSaved }: ModelPrefer
                 <button
                   type="button"
                   className="settings-btn settings-btn--secondary"
-                  disabled={disabled || installingMlx}
+                  disabled={settingsControlsDisabled || installingMlx}
                   onClick={() => void installMlxRuntime()}
                 >
                   {installingMlx ? "正在安装…" : "安装加速组件"}
@@ -311,7 +375,7 @@ export function ModelPreferencesPanel({ disabled = false, onSaved }: ModelPrefer
             <select
               id="model-download-source"
               value={settings.downloadMirror}
-              disabled={disabled || savingSource}
+              disabled={settingsControlsDisabled || savingSource}
               onChange={(event) =>
                 void changeDownloadSource(event.target.value as AppSettings["downloadMirror"])
               }
@@ -329,7 +393,7 @@ export function ModelPreferencesPanel({ disabled = false, onSaved }: ModelPrefer
               <button
                 type="button"
                 className="settings-btn settings-btn--secondary"
-                disabled={disabled || benchmarking}
+                disabled={settingsControlsDisabled || benchmarking}
                 onClick={() => void runBenchmark()}
               >
                 {benchmarking ? "正在测试…" : "测试下载速度"}
@@ -369,7 +433,7 @@ export function ModelPreferencesPanel({ disabled = false, onSaved }: ModelPrefer
         <button
           type="submit"
           className="settings-btn settings-btn--primary"
-          disabled={disabled || savingModelId}
+          disabled={settingsControlsDisabled || savingModelId}
         >
           {savingModelId ? "保存中…" : "保存设置"}
         </button>

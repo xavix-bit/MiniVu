@@ -44,6 +44,8 @@ export function EnvironmentSetupPanel({ showWelcome = false, onBusyChange, onCom
   const busyRef = useRef(false);
   const mountedRef = useRef(false);
   const onBusyChangeRef = useRef(onBusyChange);
+  const finishGenerationRef = useRef(0);
+  const finishingRef = useRef(false);
   const refreshGenerationRef = useRef(0);
   const setupGenerationRef = useRef(0);
   const [phase, setPhase] = useState<"idle" | "running" | "success" | "error">("idle");
@@ -53,6 +55,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onBusyChange, onCom
   const [result, setResult] = useState<SetupResult | null>(null);
   const [status, setStatus] = useState<ModelStatus | null>(null);
   const [activeSpeedMbps, setActiveSpeedMbps] = useState<number | null>(null);
+  const [finishing, setFinishing] = useState(false);
 
   const overallPercent = useMemo(
     () => computeOverallPercent(progress, downloadBytes),
@@ -73,6 +76,8 @@ export function EnvironmentSetupPanel({ showWelcome = false, onBusyChange, onCom
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      finishGenerationRef.current += 1;
+      finishingRef.current = false;
       refreshGenerationRef.current += 1;
       setupGenerationRef.current += 1;
       reportBusy(false);
@@ -81,26 +86,32 @@ export function EnvironmentSetupPanel({ showWelcome = false, onBusyChange, onCom
 
   async function refreshStatus(markReady = false) {
     const generation = ++refreshGenerationRef.current;
-    const next = await modelClient.getModelStatus();
-    if (!mountedRef.current || generation !== refreshGenerationRef.current) {
-      return;
-    }
-    setStatus(next);
-    const runtimeReady =
-      next.inferenceBackend === "mlx"
-        ? !!next.mlxRuntimeAvailable
-        : next.llamaServerAvailable;
-    if (markReady && runtimeReady && next.modelReady) {
-      const settings = await loadSettings();
+    try {
+      const next = await modelClient.getModelStatus();
       if (!mountedRef.current || generation !== refreshGenerationRef.current) {
         return;
       }
-      setPhase("success");
-      setResult({
-        runtimeReady,
-        modelReady: next.modelReady,
-        shortcut: settings.shortcut,
-      });
+      setStatus(next);
+      const runtimeReady =
+        next.inferenceBackend === "mlx"
+          ? !!next.mlxRuntimeAvailable
+          : next.llamaServerAvailable;
+      if (markReady && runtimeReady && next.modelReady) {
+        const settings = await loadSettings();
+        if (!mountedRef.current || generation !== refreshGenerationRef.current) {
+          return;
+        }
+        setPhase("success");
+        setResult({
+          runtimeReady,
+          modelReady: next.modelReady,
+          shortcut: settings.shortcut,
+        });
+      }
+    } catch {
+      if (mountedRef.current && generation === refreshGenerationRef.current) {
+        setInstallError("暂时无法读取模型状态，请重试。");
+      }
     }
   }
 
@@ -370,18 +381,52 @@ export function EnvironmentSetupPanel({ showWelcome = false, onBusyChange, onCom
   }
 
   async function finishAndContinue(openPanel: boolean) {
-    const env = await modelClient.getEnvironmentStatus();
-    const next = await modelClient.getModelStatus();
-    setStatus(next);
-    if (!env.modelReady) {
-      setInstallError("模型还在下载。");
-      setPhase("error");
+    if (finishingRef.current) {
       return;
     }
-    await updateSettings({ onboardingComplete: true });
-    onComplete?.();
-    if (openPanel) {
-      await invoke("show_entry");
+    finishingRef.current = true;
+    const generation = ++finishGenerationRef.current;
+    setFinishing(true);
+    setInstallError("");
+
+    try {
+      const [env, next] = await Promise.all([
+        modelClient.getEnvironmentStatus(),
+        modelClient.getModelStatus(),
+      ]);
+      if (!mountedRef.current || generation !== finishGenerationRef.current) {
+        return;
+      }
+      setStatus(next);
+      const runtimeReady =
+        next.inferenceBackend === "mlx"
+          ? !!next.mlxRuntimeAvailable
+          : next.llamaServerAvailable;
+      if (!env.runtimeReady || !env.modelReady || !runtimeReady || !next.modelReady) {
+        setInstallError("模型还未准备好，请稍后重试。");
+        return;
+      }
+
+      await updateSettings({ onboardingComplete: true });
+      if (!mountedRef.current || generation !== finishGenerationRef.current) {
+        return;
+      }
+      if (openPanel) {
+        await invoke("show_entry");
+        if (!mountedRef.current || generation !== finishGenerationRef.current) {
+          return;
+        }
+      }
+      onComplete?.();
+    } catch {
+      if (mountedRef.current && generation === finishGenerationRef.current) {
+        setInstallError("暂时无法完成设置，请重试。");
+      }
+    } finally {
+      if (mountedRef.current && generation === finishGenerationRef.current) {
+        finishingRef.current = false;
+        setFinishing(false);
+      }
     }
   }
 
@@ -479,7 +524,7 @@ export function EnvironmentSetupPanel({ showWelcome = false, onBusyChange, onCom
   ];
 
   return (
-    <section className="surface setup-panel">
+    <section className="surface setup-panel" aria-busy={phase === "running" || finishing}>
       {phase === "idle" || phase === "error" ? (
         <>
           <ul className="setup-panel__metrics" aria-label="当前状态">
@@ -529,10 +574,10 @@ export function EnvironmentSetupPanel({ showWelcome = false, onBusyChange, onCom
 
         {phase === "success" && showWelcome ? (
           <>
-            <button type="button" className="settings-btn settings-btn--primary" onClick={() => void finishAndContinue(true)}>
+            <button type="button" className="settings-btn settings-btn--primary" disabled={finishing} onClick={() => void finishAndContinue(true)}>
               开始使用
             </button>
-            <button type="button" className="settings-btn settings-btn--secondary" onClick={() => void finishAndContinue(false)}>
+            <button type="button" className="settings-btn settings-btn--secondary" disabled={finishing} onClick={() => void finishAndContinue(false)}>
               打开工作台
             </button>
           </>

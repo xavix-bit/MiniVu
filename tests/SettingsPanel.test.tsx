@@ -43,6 +43,53 @@ describe("SettingsPanel", () => {
     }));
   });
 
+  it("keeps defaults read-only until persisted settings load", async () => {
+    const load = createDeferred<ReturnType<typeof createDefaultSettings>>();
+    vi.mocked(loadSettings).mockReturnValue(load.promise);
+
+    render(<SettingsPanel view="general" />);
+
+    const theme = screen.getByRole("combobox", { name: "外观主题" });
+    expect(theme).toBeDisabled();
+    expect(screen.getByRole("button", { name: "保存设置" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+    expect(updateSettings).not.toHaveBeenCalled();
+
+    load.resolve({
+      ...createDefaultSettings(),
+      onboardingComplete: true,
+      theme: "dark",
+    });
+
+    await waitFor(() => expect(theme).toBeEnabled());
+    expect(theme).toHaveValue("dark");
+  });
+
+  it("recovers from a settings load failure through retry", async () => {
+    vi.mocked(loadSettings)
+      .mockRejectedValueOnce(new Error("load_app_settings: corrupt file path"))
+      .mockResolvedValueOnce({
+        ...createDefaultSettings(),
+        onboardingComplete: true,
+        captureRetention: "7d",
+      });
+
+    render(<SettingsPanel view="general" />);
+
+    expect(await screen.findByText("无法读取设置，请重试。")).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "外观主题" })).toBeDisabled();
+    expect(screen.queryByText(/load_app_settings|corrupt|path/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+
+    await waitFor(() => expect(loadSettings).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: /自动保留/ })).toBeEnabled(),
+    );
+    expect(screen.getByRole("combobox", { name: /自动保留/ })).toHaveValue("7d");
+    expect(screen.queryByText("无法读取设置，请重试。")).not.toBeInTheDocument();
+  });
+
   it("keeps one loaded form and its edits while switching between general and shortcut", async () => {
     const { rerender } = render(<SettingsPanel view="general" />);
 
@@ -60,7 +107,7 @@ describe("SettingsPanel", () => {
     expect(loadSettings).toHaveBeenCalledTimes(1);
   });
 
-  it("saves only its owned fields through the serialized settings API", async () => {
+  it("saves only the general view fields through the serialized settings API", async () => {
     const initial = {
       ...createDefaultSettings(),
       onboardingComplete: true,
@@ -76,13 +123,33 @@ describe("SettingsPanel", () => {
     await waitFor(() =>
       expect(updateSettings).toHaveBeenCalledWith({
         theme: "dark",
-        shortcut: initial.shortcut,
         captureRetention: initial.captureRetention,
         backgroundWarmup: initial.backgroundWarmup,
       }),
     );
     expect(loadSettings).toHaveBeenCalledTimes(1);
     expect(listen).not.toHaveBeenCalled();
+  });
+
+  it("saves only the shortcut view field through the serialized settings API", async () => {
+    const initial = {
+      ...createDefaultSettings(),
+      onboardingComplete: true,
+      shortcut: "CommandOrControl+Shift+8",
+    };
+    vi.mocked(loadSettings).mockResolvedValue(initial);
+
+    render(<SettingsPanel view="shortcut" />);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "重新录制" })).toBeEnabled(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+
+    await waitFor(() =>
+      expect(updateSettings).toHaveBeenCalledWith({
+        shortcut: initial.shortcut,
+      }),
+    );
   });
 
   it("shows pending and product error states while saving", async () => {

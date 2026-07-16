@@ -370,6 +370,27 @@ describe("ModelPanel", () => {
     await waitFor(() => expect(onStatusChange).toHaveBeenCalledWith(refreshed));
   });
 
+  it("reports a pending variant operation until its write settles", async () => {
+    const save = createDeferred<void>();
+    const onBusyChange = vi.fn();
+    vi.mocked(updateSettings).mockImplementation(async () => {
+      await save.promise;
+      return {} as Awaited<ReturnType<typeof updateSettings>>;
+    });
+
+    render(<ModelPanel onBusyChange={onBusyChange} />);
+    fireEvent.click(await screen.findByRole("button", { name: /高质量/ }));
+
+    await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith(true));
+
+    await act(async () => {
+      save.resolve(undefined);
+      await save.promise;
+    });
+
+    await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith(false));
+  });
+
   it("owns the experimental model download and reports its fresh status", async () => {
     const initial = createStatus({
       inferenceBackend: "mlx",

@@ -26,10 +26,12 @@ vi.mock("../src/settings/settingsStore", () => ({
 
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((resolvePromise) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
+    reject = rejectPromise;
   });
-  return { promise, resolve };
+  return { promise, reject, resolve };
 }
 
 describe("EnvironmentSetupPanel", () => {
@@ -188,6 +190,19 @@ describe("EnvironmentSetupPanel", () => {
     expect(loadSettings).not.toHaveBeenCalled();
   });
 
+  it("shows concise feedback when the initial status refresh fails", async () => {
+    vi.mocked(listen).mockResolvedValue(vi.fn());
+    getModelStatus.mockRejectedValueOnce(
+      new Error("get_model_status IPC rejected at /private/tmp/model.sock"),
+    );
+
+    render(<EnvironmentSetupPanel />);
+
+    expect(await screen.findByText("暂时无法读取模型状态，请重试。")).toBeVisible();
+    expect(screen.getByRole("button", { name: "下载模型并完成配置" })).toBeEnabled();
+    expect(screen.queryByText(/get_model_status|IPC|private\/tmp/)).not.toBeInTheDocument();
+  });
+
   it("marks onboarding complete with an owned settings patch", async () => {
     vi.mocked(listen).mockResolvedValue(vi.fn());
     vi.mocked(invoke).mockResolvedValueOnce({
@@ -232,6 +247,172 @@ describe("EnvironmentSetupPanel", () => {
       expect(updateSettings).toHaveBeenCalledWith({ onboardingComplete: true }),
     );
     expect(saveSettings).not.toHaveBeenCalled();
+  });
+
+  it("guards duplicate welcome completion while its checks and write are pending", async () => {
+    const environment = createDeferred<{
+      onboardingComplete: boolean;
+      inferenceBackend: "llama";
+      runtimeReady: boolean;
+      modelReady: boolean;
+      environmentReady: boolean;
+    }>();
+    const completionSave = createDeferred<{ onboardingComplete: boolean }>();
+    const onComplete = vi.fn();
+    const readyStatus = {
+      modelReady: true,
+      modelDownloaded: true,
+      mmprojDownloaded: true,
+      modelPath: "",
+      mmprojPath: "",
+      modelSize: "1.5 GB",
+      sidecarRunning: false,
+      llamaServerAvailable: true,
+      inferenceBackend: "llama" as const,
+      ggufModelVariant: "q4_k_m" as const,
+      activeBackend: "llama",
+      mlxRuntimeAvailable: false,
+      mlxModelId: "",
+      mlxModelReady: false,
+      mlxRequiresNetwork: false,
+    };
+    vi.mocked(listen).mockResolvedValue(vi.fn());
+    getModelStatus.mockResolvedValue(readyStatus);
+    getEnvironmentStatus.mockReturnValue(environment.promise);
+    loadSettings.mockResolvedValue({
+      onboardingComplete: false,
+      shortcut: "Control+Option+Space",
+    });
+    updateSettings
+      .mockResolvedValueOnce({ onboardingComplete: true })
+      .mockReturnValueOnce(completionSave.promise);
+
+    render(<EnvironmentSetupPanel showWelcome onComplete={onComplete} />);
+
+    expect(await screen.findByText("配置完成")).toBeVisible();
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+    const start = screen.getByRole("button", { name: "开始使用" });
+    const workbench = screen.getByRole("button", { name: "打开工作台" });
+
+    fireEvent.click(start);
+
+    expect(start).toBeDisabled();
+    expect(workbench).toBeDisabled();
+    fireEvent.click(workbench);
+    expect(getEnvironmentStatus).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      environment.resolve({
+        onboardingComplete: true,
+        inferenceBackend: "llama",
+        runtimeReady: true,
+        modelReady: true,
+        environmentReady: true,
+      });
+      await environment.promise;
+    });
+
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(2));
+    expect(start).toBeDisabled();
+    expect(workbench).toBeDisabled();
+
+    await act(async () => {
+      completionSave.resolve({ onboardingComplete: true });
+      await completionSave.promise;
+    });
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(invoke).toHaveBeenCalledWith("show_entry");
+    expect(getEnvironmentStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps welcome completion retryable after a status failure", async () => {
+    const onComplete = vi.fn();
+    vi.mocked(listen).mockResolvedValue(vi.fn());
+    getModelStatus.mockResolvedValue({
+      modelReady: true,
+      modelDownloaded: true,
+      mmprojDownloaded: true,
+      modelPath: "",
+      mmprojPath: "",
+      modelSize: "1.5 GB",
+      sidecarRunning: false,
+      llamaServerAvailable: true,
+      inferenceBackend: "llama",
+      ggufModelVariant: "q4_k_m",
+      activeBackend: "llama",
+      mlxRuntimeAvailable: false,
+      mlxModelId: "",
+      mlxModelReady: false,
+      mlxRequiresNetwork: false,
+    });
+    getEnvironmentStatus.mockRejectedValue(
+      new Error("environment_status failed at /private/tmp/runtime.sock"),
+    );
+    loadSettings.mockResolvedValue({
+      onboardingComplete: false,
+      shortcut: "Control+Option+Space",
+    });
+    updateSettings.mockResolvedValue({ onboardingComplete: true });
+
+    render(<EnvironmentSetupPanel showWelcome onComplete={onComplete} />);
+    fireEvent.click(await screen.findByRole("button", { name: "开始使用" }));
+
+    expect(await screen.findByText("暂时无法完成设置，请重试。")).toBeVisible();
+    expect(screen.getByRole("button", { name: "开始使用" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "打开工作台" })).toBeEnabled();
+    expect(screen.queryByText(/environment_status|private\/tmp|runtime.sock/)).not.toBeInTheDocument();
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it("ignores a deferred welcome completion after unmount", async () => {
+    const environment = createDeferred<{
+      runtimeReady: boolean;
+      modelReady: boolean;
+    }>();
+    const onComplete = vi.fn();
+    vi.mocked(listen).mockResolvedValue(vi.fn());
+    getModelStatus.mockResolvedValue({
+      modelReady: true,
+      modelDownloaded: true,
+      mmprojDownloaded: true,
+      modelPath: "",
+      mmprojPath: "",
+      modelSize: "1.5 GB",
+      sidecarRunning: false,
+      llamaServerAvailable: true,
+      inferenceBackend: "llama",
+      ggufModelVariant: "q4_k_m",
+      activeBackend: "llama",
+      mlxRuntimeAvailable: false,
+      mlxModelId: "",
+      mlxModelReady: false,
+      mlxRequiresNetwork: false,
+    });
+    getEnvironmentStatus.mockReturnValue(environment.promise);
+    loadSettings.mockResolvedValue({
+      onboardingComplete: false,
+      shortcut: "Control+Option+Space",
+    });
+    updateSettings.mockResolvedValue({ onboardingComplete: true });
+
+    const { unmount } = render(
+      <EnvironmentSetupPanel showWelcome onComplete={onComplete} />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "开始使用" }));
+    await waitFor(() => expect(getEnvironmentStatus).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+    unmount();
+
+    await act(async () => {
+      environment.resolve({ runtimeReady: true, modelReady: true });
+      await environment.promise;
+      await Promise.resolve();
+    });
+
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+    expect(invoke).not.toHaveBeenCalledWith("show_entry");
+    expect(onComplete).not.toHaveBeenCalled();
   });
 
   it("reports busy only while a repair attempt is running", async () => {

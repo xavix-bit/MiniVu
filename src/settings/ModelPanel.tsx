@@ -11,6 +11,7 @@ type ModelStatus = ModelStatusResponse;
 
 type ModelPanelProps = {
   disabled?: boolean;
+  onBusyChange?: (busy: boolean) => void;
   onRepairRuntime?: () => void;
   onStatusChange?: (status: ModelStatusResponse) => void;
   refreshToken?: number;
@@ -44,7 +45,13 @@ function createIdleProgress(): Record<"model" | "mmproj", FileProgressState> {
   };
 }
 
-export function ModelPanel({ disabled = false, onRepairRuntime, onStatusChange, refreshToken }: ModelPanelProps) {
+export function ModelPanel({
+  disabled = false,
+  onBusyChange,
+  onRepairRuntime,
+  onStatusChange,
+  refreshToken,
+}: ModelPanelProps) {
   const mountedRef = useRef(false);
   const previousRefreshTokenRef = useRef(refreshToken);
   const refreshGenerationRef = useRef(0);
@@ -61,6 +68,7 @@ export function ModelPanel({ disabled = false, onRepairRuntime, onStatusChange, 
     percent: 0,
     detail: "",
   });
+  const operationBusy = downloading || savingVariant !== null;
 
   async function refresh() {
     const generation = ++refreshGenerationRef.current;
@@ -191,6 +199,17 @@ export function ModelPanel({ disabled = false, onRepairRuntime, onStatusChange, 
       unlisten?.();
     };
   }, []);
+
+  useEffect(() => {
+    onBusyChange?.(operationBusy);
+  }, [onBusyChange, operationBusy]);
+
+  useEffect(
+    () => () => {
+      onBusyChange?.(false);
+    },
+    [onBusyChange],
+  );
 
   useEffect(() => {
     if (previousRefreshTokenRef.current === refreshToken) {

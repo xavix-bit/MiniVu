@@ -87,10 +87,12 @@ vi.mock("../src/app-shell/EnvironmentSetupPanel", () => ({
 vi.mock("../src/settings/ModelPanel", () => ({
   ModelPanel: ({
     onRepairRuntime,
+    onBusyChange,
     refreshToken,
     disabled,
   }: {
     onRepairRuntime?: () => void;
+    onBusyChange?: (busy: boolean) => void;
     refreshToken?: number;
     disabled?: boolean;
   }) => (
@@ -100,18 +102,38 @@ vi.mock("../src/settings/ModelPanel", () => ({
       data-disabled={String(Boolean(disabled))}
     >
       <span>模型内容</span>
-      <button type="button" onClick={onRepairRuntime}>
+      <button type="button" disabled={disabled} onClick={onRepairRuntime}>
         模拟修复模型组件
+      </button>
+      <button type="button" onClick={() => onBusyChange?.(true)}>
+        模拟开始模型下载
+      </button>
+      <button type="button" onClick={() => onBusyChange?.(false)}>
+        模拟结束模型下载
       </button>
     </div>
   ),
 }));
 vi.mock("../src/settings/ModelPreferencesPanel", () => ({
-  ModelPreferencesPanel: ({ onSaved, disabled }: { onSaved?: () => void; disabled?: boolean }) => (
+  ModelPreferencesPanel: ({
+    onSaved,
+    onBusyChange,
+    disabled,
+  }: {
+    onSaved?: () => void;
+    onBusyChange?: (busy: boolean) => void;
+    disabled?: boolean;
+  }) => (
     <div data-testid="model-preferences-panel" data-disabled={String(Boolean(disabled))}>
       <span>模型偏好内容</span>
       <button type="button" onClick={onSaved}>
         模拟保存模型偏好
+      </button>
+      <button type="button" onClick={() => onBusyChange?.(true)}>
+        模拟开始偏好保存
+      </button>
+      <button type="button" onClick={() => onBusyChange?.(false)}>
+        模拟结束偏好保存
       </button>
     </div>
   ),
@@ -317,6 +339,35 @@ describe("MainWindowShell navigation", () => {
     fireEvent.click(within(repair).getByRole("button", { name: "模拟结束修复" }));
     expect(preferences).toHaveAttribute("data-disabled", "false");
     expect(model).toHaveAttribute("data-disabled", "false");
+  });
+
+  it("blocks repair and both model surfaces while a sibling model operation is pending", async () => {
+    render(<MainWindowShell />);
+    await screen.findByTestId("workbench-instance");
+
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    const settingsNav = screen.getByRole("navigation", { name: "设置导航" });
+    fireEvent.click(within(settingsNav).getByRole("button", { name: "模型" }));
+
+    const preferences = await screen.findByTestId("model-preferences-panel");
+    const model = screen.getByTestId("model-panel");
+    const repairButton = within(model).getByRole("button", { name: "模拟修复模型组件" });
+
+    fireEvent.click(within(preferences).getByRole("button", { name: "模拟开始偏好保存" }));
+
+    await waitFor(() => expect(preferences).toHaveAttribute("data-disabled", "true"));
+    expect(model).toHaveAttribute("data-disabled", "true");
+    expect(repairButton).toBeDisabled();
+    fireEvent.click(repairButton);
+    expect(screen.queryByTestId("environment-setup")).not.toBeInTheDocument();
+
+    fireEvent.click(within(preferences).getByRole("button", { name: "模拟结束偏好保存" }));
+
+    await waitFor(() => expect(repairButton).toBeEnabled());
+    expect(preferences).toHaveAttribute("data-disabled", "false");
+    expect(model).toHaveAttribute("data-disabled", "false");
+    fireEvent.click(repairButton);
+    expect(await screen.findByTestId("environment-setup")).toBeVisible();
   });
 
   it("restores each settings section scroll position across mode changes", async () => {

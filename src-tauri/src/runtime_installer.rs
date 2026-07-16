@@ -5,6 +5,42 @@ use tauri::{AppHandle, Emitter, Manager};
 
 const LLAMA_RELEASE_TAG: &str = "b9264";
 
+struct RuntimeInstallGate {
+    lock: tokio::sync::Mutex<()>,
+}
+
+impl RuntimeInstallGate {
+    const fn new() -> Self {
+        Self {
+            lock: tokio::sync::Mutex::const_new(()),
+        }
+    }
+
+    async fn run<Ready, Install, InstallFuture>(
+        &self,
+        is_ready: Ready,
+        install: Install,
+    ) -> Result<(), String>
+    where
+        Ready: Fn() -> bool,
+        Install: FnOnce() -> InstallFuture,
+        InstallFuture: std::future::Future<Output = Result<(), String>>,
+    {
+        if is_ready() {
+            return Ok(());
+        }
+
+        let _guard = self.lock.lock().await;
+        if is_ready() {
+            return Ok(());
+        }
+
+        install().await
+    }
+}
+
+static RUNTIME_INSTALL_GATE: RuntimeInstallGate = RuntimeInstallGate::new();
+
 pub fn runtime_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
@@ -149,11 +185,21 @@ pub fn emit_setup_progress(app: &AppHandle, phase: &str, status: &str, message: 
 }
 
 pub async fn install_llama_runtime(app: &AppHandle) -> Result<(), String> {
-    if resolve_llama_server(app).is_some() {
-        emit_setup_progress(app, "runtime", "done", "内置推理引擎已安装", 100);
-        return Ok(());
-    }
+    RUNTIME_INSTALL_GATE
+        .run(
+            || {
+                let ready = resolve_llama_server(app).is_some();
+                if ready {
+                    emit_setup_progress(app, "runtime", "done", "内置推理引擎已安装", 100);
+                }
+                ready
+            },
+            || install_llama_runtime_unlocked(app),
+        )
+        .await
+}
 
+async fn install_llama_runtime_unlocked(app: &AppHandle) -> Result<(), String> {
     emit_setup_progress(app, "runtime", "running", "正在下载推理引擎…", 5);
 
     let runtime = runtime_dir(app)?;
@@ -414,11 +460,21 @@ fn resolve_system_python3() -> Option<PathBuf> {
 }
 
 pub async fn install_mlx_runtime(app: &AppHandle) -> Result<(), String> {
-    if resolve_mlx_python(app).is_some() {
-        emit_setup_progress(app, "runtime", "done", "MLX 推理引擎已安装", 100);
-        return Ok(());
-    }
+    RUNTIME_INSTALL_GATE
+        .run(
+            || {
+                let ready = resolve_mlx_python(app).is_some();
+                if ready {
+                    emit_setup_progress(app, "runtime", "done", "MLX 推理引擎已安装", 100);
+                }
+                ready
+            },
+            || install_mlx_runtime_unlocked(app),
+        )
+        .await
+}
 
+async fn install_mlx_runtime_unlocked(app: &AppHandle) -> Result<(), String> {
     emit_setup_progress(app, "runtime", "running", "正在准备 MLX…", 5);
 
     let venv_dir = mlx_venv_dir(app)?;
@@ -491,4 +547,70 @@ fn make_executable(path: &Path) -> Result<(), String> {
         fs::set_permissions(path, permissions).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RuntimeInstallGate;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn concurrent_install_waits_then_rechecks_readiness() {
+        let gate = Arc::new(RuntimeInstallGate::new());
+        let ready = Arc::new(AtomicBool::new(false));
+        let install_count = Arc::new(AtomicUsize::new(0));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+
+        let first = tokio::spawn({
+            let gate = Arc::clone(&gate);
+            let ready_for_check = Arc::clone(&ready);
+            let ready_for_install = Arc::clone(&ready);
+            let install_count = Arc::clone(&install_count);
+            async move {
+                gate.run(
+                    move || ready_for_check.load(Ordering::SeqCst),
+                    move || async move {
+                        install_count.fetch_add(1, Ordering::SeqCst);
+                        let _ = started_tx.send(());
+                        let _ = release_rx.await;
+                        ready_for_install.store(true, Ordering::SeqCst);
+                        Ok(())
+                    },
+                )
+                .await
+            }
+        });
+
+        started_rx.await.expect("first install should start");
+
+        let second = tokio::spawn({
+            let gate = Arc::clone(&gate);
+            let ready = Arc::clone(&ready);
+            let install_count = Arc::clone(&install_count);
+            async move {
+                gate.run(
+                    move || ready.load(Ordering::SeqCst),
+                    move || async move {
+                        install_count.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    },
+                )
+                .await
+            }
+        });
+
+        tokio::task::yield_now().await;
+        assert!(!second.is_finished());
+        assert_eq!(install_count.load(Ordering::SeqCst), 1);
+
+        release_tx
+            .send(())
+            .expect("first install should still wait");
+        first.await.expect("first task should join").unwrap();
+        second.await.expect("second task should join").unwrap();
+
+        assert_eq!(install_count.load(Ordering::SeqCst), 1);
+    }
 }

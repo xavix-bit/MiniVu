@@ -89,6 +89,75 @@ describe("ModelPreferencesPanel", () => {
     });
   });
 
+  it("keeps defaults read-only and applies persisted settings before device detection finishes", async () => {
+    const settingsLoad = createDeferred<AppSettings>();
+    const deviceLoad = createDeferred<typeof appleDevice>();
+    const persisted = {
+      ...createDefaultSettings(),
+      onboardingComplete: true,
+      inferenceBackend: "mlx" as const,
+      mlxModelId: "local/Persisted-Model",
+    };
+    vi.mocked(loadSettings).mockReturnValue(settingsLoad.promise);
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "get_device_info") {
+        return deviceLoad.promise;
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(<ModelPreferencesPanel />);
+
+    const saveButton = screen.getByRole("button", { name: "保存设置" });
+    expect(saveButton).toBeDisabled();
+    fireEvent.click(saveButton);
+    expect(updateSettings).not.toHaveBeenCalled();
+
+    await act(async () => {
+      settingsLoad.resolve(persisted);
+      await settingsLoad.promise;
+    });
+
+    expect(await screen.findByRole("textbox", { name: "实验模型" })).toHaveValue(
+      "local/Persisted-Model",
+    );
+    expect(saveButton).toBeEnabled();
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("keeps model settings disabled after load failure and recovers through retry", async () => {
+    const retryLoad = createDeferred<AppSettings>();
+    vi.mocked(loadSettings)
+      .mockRejectedValueOnce(new Error("load_app_settings: invalid path /Users/test"))
+      .mockReturnValueOnce(retryLoad.promise);
+
+    render(<ModelPreferencesPanel />);
+
+    expect(await screen.findByText("无法读取模型设置，请重试。")).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "问图方式" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "保存设置" })).toBeDisabled();
+    expect(screen.queryByText(/load_app_settings|invalid path|Users\/test/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    expect(screen.getByRole("combobox", { name: "问图方式" })).toBeDisabled();
+
+    await act(async () => {
+      retryLoad.resolve({
+        ...createDefaultSettings(),
+        onboardingComplete: true,
+        downloadMirror: "modelscope",
+      });
+      await retryLoad.promise;
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "下载来源" })).toBeEnabled(),
+    );
+    expect(screen.getByRole("combobox", { name: "下载来源" })).toHaveValue("modelscope");
+    expect(screen.queryByText("无法读取模型设置，请重试。")).not.toBeInTheDocument();
+    expect(loadSettings).toHaveBeenCalledTimes(2);
+  });
+
   it("saves only the experimental model ID on explicit save", async () => {
     const initial = {
       ...createDefaultSettings(),
@@ -162,6 +231,17 @@ describe("ModelPreferencesPanel", () => {
     expect(screen.getByRole("combobox", { name: "下载来源" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "测试下载速度" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "保存设置" })).toBeDisabled();
+  });
+
+  it("keeps settings retry disabled during external repair", async () => {
+    vi.mocked(loadSettings).mockRejectedValue(new Error("load failed"));
+
+    render(<ModelPreferencesPanel disabled />);
+
+    const retry = await screen.findByRole("button", { name: "重试" });
+    expect(retry).toBeDisabled();
+    fireEvent.click(retry);
+    expect(loadSettings).toHaveBeenCalledTimes(1);
   });
 
   it("maps model preference save failures to a product message", async () => {
@@ -384,6 +464,30 @@ describe("ModelPreferencesPanel", () => {
     expect(source).toHaveValue("modelscope");
     expect(loadSettings).toHaveBeenCalledTimes(1);
     expect(saveSettings).not.toHaveBeenCalled();
+  });
+
+  it("reports a pending preference operation until its write settles", async () => {
+    const initial = {
+      ...createDefaultSettings(),
+      onboardingComplete: true,
+    };
+    const save = createDeferred<AppSettings>();
+    const onBusyChange = vi.fn();
+    vi.mocked(loadSettings).mockResolvedValue(initial);
+    vi.mocked(updateSettings).mockReturnValue(save.promise);
+
+    render(<ModelPreferencesPanel onBusyChange={onBusyChange} />);
+    const source = await screen.findByRole("combobox", { name: "下载来源" });
+    fireEvent.change(source, { target: { value: "modelscope" } });
+
+    await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith(true));
+
+    await act(async () => {
+      save.resolve({ ...initial, downloadMirror: "modelscope" });
+      await save.promise;
+    });
+
+    await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith(false));
   });
 
   it("persists benchmark results as an owned patch", async () => {

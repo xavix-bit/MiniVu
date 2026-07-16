@@ -16,27 +16,54 @@ type SettingsPanelProps = {
 
 export function SettingsPanel({ view, onSaved }: SettingsPanelProps) {
   const draftRevisionRef = useRef(0);
+  const loadGenerationRef = useRef(0);
   const mountedRef = useRef(false);
   const [settings, setSettings] = useState<AppSettings>(createDefaultSettings());
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [settingsLoadError, setSettingsLoadError] = useState("");
   const [savedMessage, setSavedMessage] = useState("");
   const [saveError, setSaveError] = useState("");
   const [saving, setSaving] = useState(false);
 
+  async function loadPersistedSettings() {
+    const generation = ++loadGenerationRef.current;
+    setSettingsLoading(true);
+    setSettingsLoaded(false);
+    setSettingsLoadError("");
+    try {
+      const loaded = await loadSettings();
+      if (!mountedRef.current || generation !== loadGenerationRef.current) {
+        return;
+      }
+      draftRevisionRef.current = 0;
+      setSettings(loaded);
+      setSettingsLoaded(true);
+    } catch {
+      if (mountedRef.current && generation === loadGenerationRef.current) {
+        setSettingsLoadError("无法读取设置，请重试。");
+      }
+    } finally {
+      if (mountedRef.current && generation === loadGenerationRef.current) {
+        setSettingsLoading(false);
+      }
+    }
+  }
+
   useEffect(() => {
     mountedRef.current = true;
-
-    void loadSettings().then((loaded) => {
-      if (mountedRef.current && draftRevisionRef.current === 0) {
-        setSettings(loaded);
-      }
-    });
+    void loadPersistedSettings();
 
     return () => {
       mountedRef.current = false;
+      loadGenerationRef.current += 1;
     };
   }, []);
 
   function updateDraft(update: (current: AppSettings) => AppSettings) {
+    if (!settingsLoaded || settingsLoading) {
+      return;
+    }
     draftRevisionRef.current += 1;
     setSettings(update);
     setSavedMessage("");
@@ -45,31 +72,38 @@ export function SettingsPanel({ view, onSaved }: SettingsPanelProps) {
 
   async function handleSave(event: React.FormEvent) {
     event.preventDefault();
-    if (saving) {
+    if (!settingsLoaded || settingsLoading || saving) {
       return;
     }
     setSaving(true);
     setSavedMessage("");
     setSaveError("");
     const submittedRevision = draftRevisionRef.current;
+    const submittedView = view;
     try {
-      const next = await updateSettings({
-        shortcut: settings.shortcut,
-        theme: settings.theme,
-        captureRetention: settings.captureRetention,
-        backgroundWarmup: settings.backgroundWarmup,
-      });
+      const next = await updateSettings(
+        submittedView === "general"
+          ? {
+              theme: settings.theme,
+              captureRetention: settings.captureRetention,
+              backgroundWarmup: settings.backgroundWarmup,
+            }
+          : { shortcut: settings.shortcut },
+      );
       if (!mountedRef.current) {
         return;
       }
       if (draftRevisionRef.current === submittedRevision) {
-        setSettings((current) => ({
-          ...current,
-          shortcut: next.shortcut,
-          theme: next.theme,
-          captureRetention: next.captureRetention,
-          backgroundWarmup: next.backgroundWarmup,
-        }));
+        setSettings((current) =>
+          submittedView === "general"
+            ? {
+                ...current,
+                theme: next.theme,
+                captureRetention: next.captureRetention,
+                backgroundWarmup: next.backgroundWarmup,
+              }
+            : { ...current, shortcut: next.shortcut },
+        );
         setSavedMessage("设置已保存");
       }
       onSaved?.();
@@ -84,13 +118,29 @@ export function SettingsPanel({ view, onSaved }: SettingsPanelProps) {
     }
   }
 
+  const controlsDisabled = !settingsLoaded || settingsLoading;
+
   return (
     <form
       className="settings-form settings-form--stack settings-preferences-panel"
       aria-label={view === "general" ? "通用设置" : "快捷键设置"}
-      aria-busy={saving}
+      aria-busy={saving || settingsLoading}
       onSubmit={(event) => void handleSave(event)}
     >
+      {settingsLoadError ? (
+        <div className="callout callout--attention" role="alert">
+          <p>{settingsLoadError}</p>
+          <button
+            type="button"
+            className="callout__action"
+            disabled={settingsLoading}
+            onClick={() => void loadPersistedSettings()}
+          >
+            重试
+          </button>
+        </div>
+      ) : null}
+
       {view === "general" ? (
         <section className="settings-section">
           <h2 className="settings-section__title">通用</h2>
@@ -98,6 +148,7 @@ export function SettingsPanel({ view, onSaved }: SettingsPanelProps) {
             <span>外观主题</span>
             <select
               value={settings.theme ?? "system"}
+              disabled={controlsDisabled}
               onChange={(event) => {
                 const theme = event.target.value as AppSettings["theme"];
                 updateDraft((current) => ({ ...current, theme }));
@@ -114,6 +165,7 @@ export function SettingsPanel({ view, onSaved }: SettingsPanelProps) {
             <span>自动保留</span>
             <select
               value={settings.captureRetention ?? "24h"}
+              disabled={controlsDisabled}
               onChange={(event) =>
                 updateDraft((current) => ({
                   ...current,
@@ -133,6 +185,7 @@ export function SettingsPanel({ view, onSaved }: SettingsPanelProps) {
             <input
               type="checkbox"
               checked={settings.backgroundWarmup ?? false}
+              disabled={controlsDisabled}
               onChange={(event) =>
                 updateDraft((current) => ({
                   ...current,
@@ -151,6 +204,7 @@ export function SettingsPanel({ view, onSaved }: SettingsPanelProps) {
             <span>全局快捷键</span>
             <ShortcutRecorder
               value={settings.shortcut}
+              disabled={controlsDisabled}
               onChange={(shortcut) => updateDraft((current) => ({ ...current, shortcut }))}
             />
           </div>
@@ -158,7 +212,11 @@ export function SettingsPanel({ view, onSaved }: SettingsPanelProps) {
       )}
 
       <div className="settings-form__footer">
-        <button type="submit" className="settings-btn settings-btn--primary" disabled={saving}>
+        <button
+          type="submit"
+          className="settings-btn settings-btn--primary"
+          disabled={controlsDisabled || saving}
+        >
           {saving ? "保存中…" : "保存设置"}
         </button>
         {savedMessage ? <p className="saved-message">{savedMessage}</p> : null}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 type ShortcutRecorderProps = {
+  disabled?: boolean;
   value: string;
   onChange: (value: string) => void;
 };
@@ -14,12 +15,12 @@ function formatKeyLabel(part: string) {
     .replace("Space", "Space");
 }
 
-export function ShortcutRecorder({ value, onChange }: ShortcutRecorderProps) {
+export function ShortcutRecorder({ disabled = false, value, onChange }: ShortcutRecorderProps) {
   const [recording, setRecording] = useState(false);
   const parts = value.split("+").filter(Boolean);
 
   useEffect(() => {
-    if (!recording) {
+    if (disabled || !recording) {
       return;
     }
 
@@ -46,7 +47,13 @@ export function ShortcutRecorder({ value, onChange }: ShortcutRecorderProps) {
 
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [onChange, recording]);
+  }, [disabled, onChange, recording]);
+
+  useEffect(() => {
+    if (disabled) {
+      setRecording(false);
+    }
+  }, [disabled]);
 
   return (
     <div className="shortcut-recorder">
@@ -57,7 +64,12 @@ export function ShortcutRecorder({ value, onChange }: ShortcutRecorderProps) {
           </span>
         ))}
       </div>
-      <button type="button" className="shortcut-recorder__btn" onClick={() => setRecording(true)}>
+      <button
+        type="button"
+        className="shortcut-recorder__btn"
+        disabled={disabled}
+        onClick={() => setRecording(true)}
+      >
         {recording ? "请按下快捷键…" : "重新录制"}
       </button>
     </div>
