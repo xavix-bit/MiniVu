@@ -13,18 +13,23 @@ type ComposerProps = {
 
 const MIN_INPUT_HEIGHT = 44;
 const MAX_INPUT_RATIO = 0.38;
-/** 仅拦截 IME 确认词与 Enter 同一按键泄漏，不挡用户第二次 intentional Enter */
-const IME_ENTER_LEAK_MS = 40;
+const IME_CONFIRMATION_GUARD_MS = 250;
 
 function maxInputHeight() {
   return Math.max(120, Math.round(window.innerHeight * MAX_INPUT_RATIO));
 }
 
-function isImeEnterLeak(event: React.KeyboardEvent<HTMLTextAreaElement>, compositionEndedAt: number) {
-  if (event.nativeEvent.isComposing || event.keyCode === 229) {
-    return true;
-  }
-  return performance.now() - compositionEndedAt < IME_ENTER_LEAK_MS;
+function isPhysicalEnter(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+  return event.code === "Enter" || event.code === "NumpadEnter";
+}
+
+function isImeConfirmation(
+  event: React.KeyboardEvent<HTMLTextAreaElement>,
+  compositionEndedAt: number,
+) {
+  return event.nativeEvent.isComposing
+    || event.keyCode === 229
+    || performance.now() - compositionEndedAt < IME_CONFIRMATION_GUARD_MS;
 }
 
 export function Composer({
@@ -39,7 +44,7 @@ export function Composer({
 }: ComposerProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
-  const compositionEndedAtRef = useRef(0);
+  const compositionEndedAtRef = useRef(Number.NEGATIVE_INFINITY);
 
   function autoSizeInput() {
     const el = inputRef.current;
@@ -99,11 +104,15 @@ export function Composer({
       return;
     }
 
-    if (composingRef.current || isImeEnterLeak(event, compositionEndedAtRef.current)) {
+    if (!isPhysicalEnter(event)) {
       return;
     }
 
     event.preventDefault();
+    if (composingRef.current || isImeConfirmation(event, compositionEndedAtRef.current)) {
+      return;
+    }
+
     trySubmit();
   }
 
