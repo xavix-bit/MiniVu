@@ -376,6 +376,20 @@ export function ChatPanel({
     );
   }
 
+  function handleSummarizeImage() {
+    handleQuickAction(
+      "请简洁概括这张截图的主要内容，按重要性列出不超过 5 点，不要复述无关细节。",
+      "总结截图",
+    );
+  }
+
+  function handleExplainImage() {
+    handleQuickAction(
+      "请解释这张截图。若包含错误或警告，优先说明原因、影响和下一步；否则说明最值得关注的内容。",
+      "解释截图",
+    );
+  }
+
   function triggerReplaceImage() {
     fileInputRef.current?.click();
   }
@@ -536,6 +550,8 @@ export function ChatPanel({
                 <QuickActions
                   onCopyText={() => void handleCopyText()}
                   onTranslate={handleTranslateImage}
+                  onSummarize={handleSummarizeImage}
+                  onExplain={handleExplainImage}
                   textReady={Boolean(state.ocrText.trim())}
                   disabled={isAnswering || checkingModel || ocrLoading}
                 />

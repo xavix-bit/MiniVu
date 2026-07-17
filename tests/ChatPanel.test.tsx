@@ -50,6 +50,7 @@ function session(overrides: Record<string, unknown> = {}) {
 describe("ChatPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.HTMLElement.prototype.scrollIntoView = vi.fn();
     useImageSessionMock.mockReturnValue(session());
   });
 
@@ -64,20 +65,66 @@ describe("ChatPanel", () => {
     expect(screen.queryByLabelText("识别模式")).not.toBeInTheDocument();
   });
 
-  it("shows only contextual copy and translate actions after an image is ready", () => {
+  it("offers four contextual actions and sends summary and explanation prompts", () => {
+    const ask = vi.fn();
     useImageSessionMock.mockReturnValue(session({
       state: {
         image: { name: "screen.png", dataUrl: "data:image/png;base64,abc" },
         ocrText: "识别文字",
         messages: [],
       },
+      ask,
     }));
 
     render(<ChatPanel />);
 
     expect(screen.getByRole("button", { name: "复制文字" })).toBeEnabled();
     expect(screen.getAllByRole("button", { name: "翻译" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "总结" }));
+    expect(ask).toHaveBeenCalledWith(
+      expect.stringContaining("概括这张截图"),
+      "总结截图",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "解释" }));
+    expect(ask).toHaveBeenCalledWith(
+      expect.stringContaining("错误或警告"),
+      "解释截图",
+    );
     expect(screen.queryAllByRole("button", { name: "问图" })).toHaveLength(0);
+  });
+
+  it("keeps only copy text disabled until OCR text is available", () => {
+    useImageSessionMock.mockReturnValue(session({
+      state: {
+        image: { name: "screen.png", dataUrl: "data:image/png;base64,abc" },
+        ocrText: "",
+        messages: [],
+      },
+    }));
+
+    render(<ChatPanel />);
+
+    expect(screen.getByRole("button", { name: "复制文字" })).toBeDisabled();
+    for (const name of ["翻译", "总结", "解释"]) {
+      expect(screen.getByRole("button", { name })).toBeEnabled();
+    }
+  });
+
+  it("hides all four quick actions after a conversation begins", () => {
+    useImageSessionMock.mockReturnValue(session({
+      state: {
+        image: { name: "screen.png", dataUrl: "data:image/png;base64,abc" },
+        ocrText: "识别文字",
+        messages: [{ role: "user", content: "解释这个错误" }],
+      },
+    }));
+
+    render(<ChatPanel />);
+
+    for (const name of ["复制文字", "翻译", "总结", "解释"]) {
+      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+    }
   });
 
   it("keeps the question and defers asking when model setup is required", async () => {
