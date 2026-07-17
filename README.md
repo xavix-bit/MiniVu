@@ -2,7 +2,7 @@
 
 MiniVu is a screenshot workbench for macOS. Capture part of the screen, copy its text, keep useful shots, or ask a question without leaving the app you are using.
 
-[Download MiniVu v0.3.0 for Apple Silicon](https://github.com/xavix-bit/MiniVu/releases/download/v0.3.0/MiniVu_0.3.0_aarch64.dmg)
+[Download MiniVu v0.4.0 for Apple Silicon](https://github.com/xavix-bit/MiniVu/releases/download/v0.4.0/MiniVu_0.4.0_aarch64.dmg)
 
 Open the DMG and drag MiniVu into Applications. On first launch, Control-click MiniVu, choose **Open**, then confirm once. macOS 13 or later is recommended.
 
@@ -64,4 +64,4 @@ npm run tauri build -- --debug
 
 ## Current Scope
 
-MiniVu v0.3.0 targets Apple Silicon macOS. It includes screenshot history, text recognition, per-screenshot conversations, pinning, search, and optional local image questions. It does not include accounts, sync, cloud inference, annotation editing, or multi-image comparison.
+MiniVu v0.4.0 targets Apple Silicon macOS. It includes screenshot history, text recognition, per-screenshot conversations, a draggable floating launcher, pinning, search, and optional local image questions. It does not include accounts, sync, cloud inference, annotation editing, or multi-image comparison.

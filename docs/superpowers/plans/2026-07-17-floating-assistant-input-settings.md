@@ -699,15 +699,18 @@ git commit -m "fix: finish floating assistant regression coverage"
 
 **Files:**
 - Modify: `package.json`
+- Modify: `package-lock.json`
+- Modify: `README.md`
 - Modify: `src-tauri/tauri.conf.json`
 - Modify: `src-tauri/Cargo.toml`
+- Modify: `src-tauri/Cargo.lock`
 - Modify: `.github/workflows/release.yml` only if verification finds a missing signing or artifact step.
 
-- [ ] **Step 1: Choose the next version and update all manifests together**
+- [x] **Step 1: Choose the next version and update all manifests together**
 
 Use the next unreleased product version, expected `0.4.0`, in `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`. Do not add Codex or automation names to product metadata, commits, tags, or artifacts.
 
-- [ ] **Step 2: Verify signing prerequisites before tagging**
+- [x] **Step 2: Verify signing prerequisites before tagging**
 
 Run locally:
 
@@ -717,7 +720,11 @@ security find-identity -v -p codesigning
 
 Confirm GitHub Actions has the existing Developer ID and notarization secrets expected by `.github/workflows/release.yml`. If stable signing credentials are unavailable, do not claim the screen-recording permission flow is release-stable and do not replace it with a weak custom designated requirement.
 
-- [ ] **Step 3: Build and verify the release app**
+The local keychain has no Developer ID identity. The exact GitHub Actions artifact for
+v0.3.0 is also ad-hoc signed with no Team ID, so v0.4.0 must be reported as unsigned
+unless the new workflow artifact proves that signing credentials were added later.
+
+- [x] **Step 3: Build and verify the release app**
 
 Run: `npm run tauri build`
 
@@ -726,6 +733,10 @@ Run: `codesign --verify --deep --strict --verbose=2 src-tauri/target/release/bun
 Run: `hdiutil verify src-tauri/target/release/bundle/dmg/MiniVu_0.4.0_aarch64.dmg`
 
 Expected: app signature and DMG checksum are valid.
+
+The local release app passes strict code-signature verification after the existing
+ad-hoc packaging script reseals all bundled Mach-O files. The DMG checksum is valid;
+Gatekeeper rejects the app because Developer ID signing and notarization are unavailable.
 
 - [ ] **Step 4: Commit version metadata**
 
