@@ -26,10 +26,12 @@ export function QuickLauncher({
   onCapture,
   onPaste,
   onRecent,
+  notice,
 }: {
   onCapture: () => void;
   onPaste: () => void;
   onRecent: () => void;
+  notice?: string | null;
 }) {
   return (
     <div className="quick-launcher" aria-label="快捷操作">
@@ -45,18 +47,46 @@ export function QuickLauncher({
         <History size={18} aria-hidden="true" />
         <span>最近</span>
       </button>
+      {notice ? (
+        <div className="quick-launcher__notice" role="status" aria-live="polite">
+          {notice}
+        </div>
+      ) : null}
     </div>
   );
 }
 
 export function QuickPanelShell() {
   const [mode, setMode] = useState<PanelMode>("expanded");
+  const [notice, setNotice] = useState<string | null>(null);
   const [activeCapture, setActiveCapture] = useState<{
     recordId: string;
     image: AcceptedImage;
   } | null>(null);
   const petDragStartRef = useRef<{ x: number; y: number } | null>(null);
   const suppressPetClickRef = useRef(false);
+  const mountedRef = useRef(false);
+  const modeRef = useRef<PanelMode>(mode);
+  const pasteRequestIdRef = useRef(0);
+
+  const invalidatePasteRequest = useCallback(() => {
+    pasteRequestIdRef.current += 1;
+    if (mountedRef.current) setNotice(null);
+  }, []);
+
+  const isCurrentPaste = useCallback((requestId: number) => (
+    mountedRef.current &&
+    modeRef.current === "launcher" &&
+    pasteRequestIdRef.current === requestId
+  ), []);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      pasteRequestIdRef.current += 1;
+    };
+  }, []);
 
   useLayoutEffect(() => {
     document.documentElement.classList.add("quick-panel-window");
@@ -108,18 +138,28 @@ export function QuickPanelShell() {
     void invoke("show_quick_launcher_command");
   }
 
-  const showResult = useCallback(async (image: AcceptedImage, source: CaptureSource) => {
+  const showResult = useCallback(async (
+    image: AcceptedImage,
+    source: CaptureSource,
+    isCurrent: () => boolean = () => true,
+  ) => {
+    if (!isCurrent()) return;
     const settings = await loadSettings();
+    if (!isCurrent()) return;
     const record = await captureClient.create({
       dataUrl: image.dataUrl,
       source,
       retention: settings.captureRetention ?? "24h",
     });
+    if (!isCurrent()) return;
     setActiveCapture({ recordId: record.id, image });
+    setNotice(null);
+    if (!isCurrent()) return;
     await invoke("expand_quick_panel_command");
   }, []);
 
   const handleCapture = useCallback(async () => {
+    invalidatePasteRequest();
     try {
       const image = await captureScreenRegion();
       await showResult(image, "capture");
@@ -133,14 +173,23 @@ export function QuickPanelShell() {
         console.warn("无法打开截图恢复页面");
       }
     }
-  }, [showResult]);
+  }, [invalidatePasteRequest, showResult]);
 
   const handlePaste = useCallback(async () => {
-    const image = await readClipboardImage();
-    if (image) {
-      await showResult(image, "paste");
+    invalidatePasteRequest();
+    const requestId = pasteRequestIdRef.current;
+    try {
+      const image = await readClipboardImage();
+      if (!isCurrentPaste(requestId)) return;
+      if (image) {
+        await showResult(image, "paste", () => isCurrentPaste(requestId));
+        return;
+      }
+      if (isCurrentPaste(requestId)) setNotice("剪贴板里没有图片");
+    } catch {
+      if (isCurrentPaste(requestId)) setNotice("无法读取剪贴板");
     }
-  }, [showResult]);
+  }, [invalidatePasteRequest, isCurrentPaste, showResult]);
 
   const handleRequireModel = useCallback(async (prompt: string) => {
     if (!activeCapture) return false;
@@ -167,7 +216,9 @@ export function QuickPanelShell() {
     }
 
     void listen<PanelMode>("quick-panel-mode", (event) => {
+      modeRef.current = event.payload;
       setMode(event.payload);
+      invalidatePasteRequest();
     }).then((cleanup) => {
       if (active) unlisteners.push(cleanup);
       else cleanup();
@@ -188,16 +239,19 @@ export function QuickPanelShell() {
       active = false;
       for (const cleanup of unlisteners) cleanup();
     };
-  }, [handleCapture]);
+  }, [handleCapture, invalidatePasteRequest]);
 
   useEffect(() => {
     if (mode !== "launcher") return;
     function handleEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") void invoke("close_quick_panel_command");
+      if (event.key === "Escape") {
+        invalidatePasteRequest();
+        void invoke("close_quick_panel_command");
+      }
     }
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
-  }, [mode]);
+  }, [invalidatePasteRequest, mode]);
 
   if (mode === "pet") {
     return (
@@ -225,7 +279,11 @@ export function QuickPanelShell() {
         <QuickLauncher
           onCapture={() => void handleCapture()}
           onPaste={() => void handlePaste()}
-          onRecent={() => void invoke("show_main")}
+          onRecent={() => {
+            invalidatePasteRequest();
+            void invoke("show_main");
+          }}
+          notice={notice}
         />
       </main>
     );

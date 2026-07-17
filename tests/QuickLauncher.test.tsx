@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QuickLauncher, QuickPanelShell } from "../src/app-shell/QuickPanelShell";
 import { CaptureError, captureScreenRegion } from "../src/image/captureScreen";
+import { readClipboardImage } from "../src/image/imageIntake";
 import { captureClient } from "../src/captures/captureClient";
 
 const { invokeMock, emitToMock, eventHandlers, chatPanelProps, getEnvironmentStatus } = vi.hoisted(() => ({
@@ -11,6 +12,14 @@ const { invokeMock, emitToMock, eventHandlers, chatPanelProps, getEnvironmentSta
   chatPanelProps: { current: null as Record<string, unknown> | null },
   getEnvironmentStatus: vi.fn(),
 }));
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invokeMock(...args) }));
 vi.mock("@tauri-apps/api/event", () => ({
@@ -51,6 +60,7 @@ describe("QuickLauncher", () => {
     emitToMock.mockReset();
     getEnvironmentStatus.mockReset();
     vi.mocked(captureScreenRegion).mockReset();
+    vi.mocked(readClipboardImage).mockReset();
     vi.mocked(captureClient.create).mockReset();
     eventHandlers.clear();
     chatPanelProps.current = null;
@@ -98,6 +108,122 @@ describe("QuickLauncher", () => {
         name === "take_pending_capture_request")).toHaveLength(2);
     });
     expect(captureScreenRegion).toHaveBeenCalledOnce();
+  });
+
+  it("shows a status notice when launcher paste finds no image", async () => {
+    vi.mocked(readClipboardImage).mockResolvedValue(null);
+    render(<QuickPanelShell />);
+
+    await act(async () => {
+      eventHandlers.get("quick-panel-mode")?.({ payload: "launcher" as never });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "粘贴" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("剪贴板里没有图片");
+    expect(invokeMock).not.toHaveBeenCalledWith("expand_quick_panel_command");
+  });
+
+  it("clears launcher feedback and Escape handling after leaving launcher mode", async () => {
+    vi.mocked(readClipboardImage).mockResolvedValue(null);
+    render(<QuickPanelShell />);
+
+    await act(async () => {
+      eventHandlers.get("quick-panel-mode")?.({ payload: "launcher" as never });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "粘贴" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("剪贴板里没有图片");
+
+    await act(async () => {
+      eventHandlers.get("quick-panel-mode")?.({ payload: "expanded" as never });
+    });
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(invokeMock).not.toHaveBeenCalledWith("close_quick_panel_command");
+  });
+
+  it("closes the launcher when Escape is pressed", async () => {
+    render(<QuickPanelShell />);
+
+    await act(async () => {
+      eventHandlers.get("quick-panel-mode")?.({ payload: "launcher" as never });
+    });
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(invokeMock).toHaveBeenCalledWith("close_quick_panel_command");
+  });
+
+  it("ignores a paste result that arrives after leaving launcher mode", async () => {
+    const pending = deferred<null>();
+    vi.mocked(readClipboardImage).mockReturnValueOnce(pending.promise);
+    render(<QuickPanelShell />);
+
+    await act(async () => {
+      eventHandlers.get("quick-panel-mode")?.({ payload: "launcher" as never });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "粘贴" }));
+    await waitFor(() => expect(readClipboardImage).toHaveBeenCalledOnce());
+
+    await act(async () => {
+      eventHandlers.get("quick-panel-mode")?.({ payload: "expanded" as never });
+      pending.resolve(null);
+      await pending.promise;
+    });
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(invokeMock).not.toHaveBeenCalledWith("expand_quick_panel_command");
+  });
+
+  it("keeps a newer paste result from being overwritten by an older one", async () => {
+    const first = deferred<{ name: string; dataUrl: string } | null>();
+    const second = deferred<{ name: string; dataUrl: string } | null>();
+    vi.mocked(readClipboardImage)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    render(<QuickPanelShell />);
+
+    await act(async () => {
+      eventHandlers.get("quick-panel-mode")?.({ payload: "launcher" as never });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "粘贴" }));
+    fireEvent.click(screen.getByRole("button", { name: "粘贴" }));
+    await waitFor(() => expect(readClipboardImage).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      second.resolve(null);
+      await second.promise;
+    });
+    expect(await screen.findByRole("status")).toHaveTextContent("剪贴板里没有图片");
+
+    await act(async () => {
+      first.resolve({ name: "late.png", dataUrl: "data:image/png;base64,LATE" });
+      await first.promise;
+    });
+
+    expect(screen.getByRole("status")).toHaveTextContent("剪贴板里没有图片");
+    expect(captureClient.create).not.toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalledWith("expand_quick_panel_command");
+  });
+
+  it("does not create or expand after the launcher unmounts", async () => {
+    const pending = deferred<{ name: string; dataUrl: string } | null>();
+    vi.mocked(readClipboardImage).mockReturnValueOnce(pending.promise);
+    const view = render(<QuickPanelShell />);
+
+    await act(async () => {
+      eventHandlers.get("quick-panel-mode")?.({ payload: "launcher" as never });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "粘贴" }));
+    await waitFor(() => expect(readClipboardImage).toHaveBeenCalledOnce());
+    view.unmount();
+
+    await act(async () => {
+      pending.resolve({ name: "late.png", dataUrl: "data:image/png;base64,LATE" });
+      await pending.promise;
+    });
+
+    expect(captureClient.create).not.toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalledWith("expand_quick_panel_command");
   });
 
   it("keeps a typed screenshot cancellation silent", async () => {

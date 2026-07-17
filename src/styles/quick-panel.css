@@ -58,21 +58,30 @@ html.quick-panel-window[data-panel-mode="launcher"] #root {
 .quick-panel-shell--launcher {
   display: grid;
   place-items: center;
-  padding: 5px;
+  box-sizing: border-box;
+  width: 252px;
+  height: 64px;
+  padding: 4px;
 }
 
 .quick-launcher {
+  position: relative;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 4px;
+  grid-template-rows: 36px 10px;
+  gap: 2px;
+  box-sizing: border-box;
   width: 100%;
   height: 100%;
-  padding: 4px;
+  padding: 3px;
   border: 1px solid rgba(23, 32, 42, 0.1);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.96);
   box-shadow: 0 10px 30px rgba(23, 32, 42, 0.18), 0 2px 6px rgba(23, 32, 42, 0.08);
   backdrop-filter: blur(16px);
+  opacity: 1;
+  transform: translateY(0);
+  animation: quick-launcher-enter 160ms ease both;
   -webkit-app-region: drag;
 }
 
@@ -82,7 +91,7 @@ html.quick-panel-window[data-panel-mode="launcher"] #root {
   justify-content: center;
   gap: 6px;
   min-width: 0;
-  height: 44px;
+  height: 36px;
   padding: 0 9px;
   border: 1px solid transparent;
   border-radius: 8px;
@@ -103,6 +112,41 @@ html.quick-panel-window[data-panel-mode="launcher"] #root {
 .quick-launcher button:first-child {
   background: #edf3ff;
   color: #285fd6;
+}
+
+.quick-launcher__notice {
+  grid-column: 1 / -1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-subtle);
+  font-size: 10px;
+  line-height: 10px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+@keyframes quick-launcher-enter {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .quick-launcher,
+  .quick-launcher__notice {
+    transition: none;
+    animation: none;
+    transform: none;
+  }
 }
 
 /* ── Quick panel ── */
