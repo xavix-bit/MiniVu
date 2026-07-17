@@ -39,7 +39,7 @@
 - Create: `tests/Composer.test.tsx`
 - Modify: `src/chat/Composer.tsx`
 
-- [ ] **Step 1: Write the failing IME regression tests**
+- [x] **Step 1: Write the failing IME regression tests**
 
 Add direct component tests that control `performance.now()` and reproduce both leaked and deliberate Enter presses:
 
@@ -78,13 +78,13 @@ it("sends once on a later physical Enter and keeps Shift-Enter as a newline", ()
 
 Use a `renderComposer` helper with `disabled={false}`, `canSubmit`, `isAnswering={false}`, and no-op change/stop callbacks.
 
-- [ ] **Step 2: Run the focused test and verify the leak test fails**
+- [x] **Step 2: Run the focused test and verify the leak test fails**
 
 Run: `npm test -- tests/Composer.test.tsx`
 
 Expected: FAIL because the existing 40 ms guard allows the delayed Enter at 120 ms.
 
-- [ ] **Step 3: Implement the conservative physical-Enter guard**
+- [x] **Step 3: Implement the conservative physical-Enter guard**
 
 Replace the 40 ms constant and helper with:
 
@@ -107,13 +107,13 @@ function isImeConfirmation(
 
 In `handleKeyDown`, return for non-Enter and Shift-Enter, require `isPhysicalEnter`, then call `event.preventDefault()` and return when the event is composing or inside the confirmation guard. Call `trySubmit()` only for the unambiguous final branch.
 
-- [ ] **Step 4: Run focused and chat tests**
+- [x] **Step 4: Run focused and chat tests**
 
 Run: `npm test -- tests/Composer.test.tsx tests/ChatPanel.test.tsx tests/ChatPanel.integration.test.tsx`
 
 Expected: all tests pass with no accidental submit.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/chat/Composer.tsx tests/Composer.test.tsx
@@ -128,7 +128,7 @@ git commit -m "fix: prevent IME confirmation from sending"
 - Modify: `tests/ChatPanel.test.tsx`
 - Modify: `src/styles/quick-panel.css`
 
-- [ ] **Step 1: Add failing integration assertions for Summary and Explain**
+- [x] **Step 1: Add failing integration assertions for Summary and Explain**
 
 Extend the ChatPanel test harness to click the new commands and assert the existing `ask` mock receives task-specific prompts:
 
@@ -148,13 +148,13 @@ expect(ask).toHaveBeenCalledWith(
 
 Also assert Copy Text remains disabled until OCR text is ready and all four actions disappear after a conversation begins.
 
-- [ ] **Step 2: Run the focused test and verify the controls are missing**
+- [x] **Step 2: Run the focused test and verify the controls are missing**
 
 Run: `npm test -- tests/ChatPanel.test.tsx`
 
 Expected: FAIL because `总结` and `解释` are not rendered.
 
-- [ ] **Step 3: Extend QuickActions without adding modes**
+- [x] **Step 3: Extend QuickActions without adding modes**
 
 Add `onSummarize` and `onExplain` props and render four icon-and-text buttons using `Copy`, `Languages`, `ListCollapse`, and `CircleHelp`. Keep a single `quick-actions` grid and the existing disabled contract.
 
@@ -178,17 +178,17 @@ function handleExplainImage() {
 
 Pass both handlers to `QuickActions`. Preserve the existing model-readiness route through `handleQuickAction`.
 
-- [ ] **Step 4: Stabilize the two-by-two layout**
+- [x] **Step 4: Stabilize the two-by-two layout**
 
 Set `.quick-actions` and the quick-window override to `grid-template-columns: repeat(2, minmax(0, 1fr))`, give each button a stable minimum height, and ensure long labels cannot resize the panel.
 
-- [ ] **Step 5: Run ChatPanel and quick-panel tests**
+- [x] **Step 5: Run ChatPanel and quick-panel tests**
 
 Run: `npm test -- tests/ChatPanel.test.tsx tests/ChatPanel.integration.test.tsx tests/QuickLauncher.test.tsx`
 
 Expected: all tests pass; no old task tabs return.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/chat/QuickActions.tsx src/chat/ChatPanel.tsx src/styles/quick-panel.css tests/ChatPanel.test.tsx
