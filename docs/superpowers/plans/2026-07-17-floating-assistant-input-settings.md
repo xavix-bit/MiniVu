@@ -283,7 +283,7 @@ git commit -m "feat: persist floating assistant preferences"
 - Modify: `src-tauri/src/commands.rs`
 - Modify: `src-tauri/src/lib.rs`
 
-- [ ] **Step 1: Write pure failing geometry and policy tests**
+- [x] **Step 1: Write pure failing geometry and policy tests**
 
 Create `window_geometry.rs` with tests specified before implementation:
 
@@ -325,7 +325,7 @@ fn main_close_target(onboarding_complete: bool, floating_enabled: bool) -> MainC
 
 Assert all four boolean combinations, with only `(true, true)` returning `Pet`.
 
-- [ ] **Step 2: Run focused Rust tests and verify missing symbols**
+- [x] **Step 2: Run focused Rust tests and verify missing symbols**
 
 Run: `cargo test window_geometry --manifest-path src-tauri/Cargo.toml`
 
@@ -333,7 +333,7 @@ Run: `cargo test window::tests --manifest-path src-tauri/Cargo.toml`
 
 Expected: FAIL because the new module and policy do not exist.
 
-- [ ] **Step 3: Implement pure geometry**
+- [x] **Step 3: Implement pure geometry**
 
 Expose:
 
@@ -357,7 +357,7 @@ pub fn clamp_floating_position(
 
 Clamp each axis to `[inset, screen - window - inset]`, using `inset` when the display is smaller than the requested window.
 
-- [ ] **Step 4: Reuse the serialized settings lock for internal position writes**
+- [x] **Step 4: Reuse the serialized settings lock for internal position writes**
 
 Extract from `commands.rs`:
 
@@ -372,7 +372,7 @@ pub(crate) fn update_settings_patch(
 
 Make the Tauri `update_app_settings` command delegate to it so window position and React changes cannot race on disk.
 
-- [ ] **Step 5: Extend QuickPanelState and mode positioning**
+- [x] **Step 5: Extend QuickPanelState and mode positioning**
 
 Add `anchor_position: Option<FloatingAssistantPosition>` to `QuickPanelState`. When entering pet mode:
 
@@ -382,7 +382,7 @@ Add `anchor_position: Option<FloatingAssistantPosition>` to `QuickPanelState`. W
 
 Before expanding launcher or full panel, store the pet's current logical position. Launcher expansion keeps the anchor visible and shifts left only when its width would leave the screen.
 
-- [ ] **Step 6: Add app event handlers**
+- [x] **Step 6: Add app event handlers**
 
 Add `window::handle_window_event(window, event)` and wire it through `.on_window_event(...)` in `lib.rs`:
 
@@ -406,13 +406,13 @@ match event {
 
 On `RunEvent::Exit`, persist the latest anchor with `update_settings_patch` before stopping the sidecar.
 
-- [ ] **Step 7: Run Rust tests**
+- [x] **Step 7: Run Rust tests**
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml`
 
 Expected: all Rust tests pass, including geometry, policy, settings migration, and existing capture restoration tests.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src-tauri/src/window_geometry.rs src-tauri/src/window.rs src-tauri/src/commands.rs src-tauri/src/lib.rs
