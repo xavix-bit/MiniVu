@@ -76,6 +76,13 @@ impl Default for GgufModelVariant {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FloatingAssistantPosition {
+    pub x: f64,
+    pub y: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -87,6 +94,10 @@ pub struct AppSettings {
     pub onboarding_complete: bool,
     #[serde(default)]
     pub workbench_tips_complete: bool,
+    #[serde(default = "default_floating_assistant_enabled")]
+    pub floating_assistant_enabled: bool,
+    #[serde(default)]
+    pub floating_assistant_position: Option<FloatingAssistantPosition>,
     #[serde(default)]
     pub gguf_model_variant: GgufModelVariant,
     #[serde(default)]
@@ -111,6 +122,10 @@ fn default_preload_model() -> bool {
     false
 }
 
+fn default_floating_assistant_enabled() -> bool {
+    true
+}
+
 impl AppSettings {
     pub fn default_for_device() -> Self {
         let mut settings = Self::default();
@@ -129,6 +144,8 @@ impl Default for AppSettings {
             allow_cloud_fallback: false,
             onboarding_complete: false,
             workbench_tips_complete: false,
+            floating_assistant_enabled: default_floating_assistant_enabled(),
+            floating_assistant_position: None,
             gguf_model_variant: GgufModelVariant::default(),
             download_mirror: DownloadMirror::Auto,
             preferred_mirror: None,
@@ -181,5 +198,18 @@ mod tests {
         let settings: AppSettings = serde_json::from_value(legacy).unwrap();
 
         assert!(!settings.workbench_tips_complete);
+    }
+
+    #[test]
+    fn legacy_settings_default_floating_assistant_preferences() {
+        let mut legacy = serde_json::to_value(AppSettings::default()).unwrap();
+        let fields = legacy.as_object_mut().unwrap();
+        fields.remove("floatingAssistantEnabled");
+        fields.remove("floatingAssistantPosition");
+
+        let settings: AppSettings = serde_json::from_value(legacy).unwrap();
+
+        assert!(settings.floating_assistant_enabled);
+        assert_eq!(settings.floating_assistant_position, None);
     }
 }

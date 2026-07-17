@@ -39,6 +39,8 @@ describe("settingsStore", () => {
     expect(settings.allowCloudFallback).toBe(false);
     expect(settings.onboardingComplete).toBe(false);
     expect(settings.workbenchTipsComplete).toBe(false);
+    expect(settings.floatingAssistantEnabled).toBe(true);
+    expect(settings.floatingAssistantPosition).toBeNull();
     expect(settings.downloadMirror).toBe("auto");
     expect(settings.preferredMirror).toBeNull();
     expect(settings.lastSpeedTestAt).toBeNull();
@@ -56,6 +58,23 @@ describe("settingsStore", () => {
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke).toHaveBeenCalledWith("update_app_settings", {
       patch: { theme: "dark" },
+    });
+  });
+
+  it("sends only the floating assistant enabled patch", async () => {
+    const committed = {
+      ...createDefaultSettings(),
+      floatingAssistantEnabled: false,
+    };
+    vi.mocked(invoke).mockResolvedValueOnce(committed);
+
+    await expect(
+      updateSettings({ floatingAssistantEnabled: false }),
+    ).resolves.toEqual(committed);
+
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith("update_app_settings", {
+      patch: { floatingAssistantEnabled: false },
     });
   });
 

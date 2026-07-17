@@ -7,6 +7,11 @@ export type InferenceBackend = "llama" | "mlx";
 export type GgufModelVariant = "q4_k_m" | "q5_k_m" | "q6_k";
 export type CaptureRetentionSetting = "none" | "24h" | "7d" | "forever";
 
+export type FloatingAssistantPosition = {
+  x: number;
+  y: number;
+};
+
 export type AppSettings = {
   shortcut: string;
   modelWarmMinutes: 5 | 10 | 15 | 30 | -1;
@@ -15,6 +20,8 @@ export type AppSettings = {
   allowCloudFallback: boolean;
   onboardingComplete: boolean;
   workbenchTipsComplete: boolean;
+  floatingAssistantEnabled: boolean;
+  floatingAssistantPosition: FloatingAssistantPosition | null;
   ggufModelVariant: GgufModelVariant;
   downloadMirror: DownloadMirror;
   preferredMirror: MirrorId | null;
@@ -51,6 +58,8 @@ export function createDefaultSettings(): AppSettings {
     allowCloudFallback: false,
     onboardingComplete: false,
     workbenchTipsComplete: false,
+    floatingAssistantEnabled: true,
+    floatingAssistantPosition: null,
     ggufModelVariant: "q4_k_m",
     downloadMirror: "auto",
     preferredMirror: null,
