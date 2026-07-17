@@ -430,6 +430,24 @@ describe("MainWindowShell navigation", () => {
     expect(screen.queryByText(/private|tmp|open failed/i)).not.toBeInTheDocument();
   });
 
+  it("shows the same actionable recovery after a quick-panel capture fails", async () => {
+    render(<MainWindowShell />);
+    await screen.findByTestId("workbench-instance");
+    await waitFor(() => expect(mainEventHandlers.has("capture-recovery")).toBe(true));
+
+    act(() => {
+      mainEventHandlers.get("capture-recovery")?.({
+        payload: { code: "permission-denied" },
+      });
+    });
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "需要屏幕录制权限。授权后重新打开 MiniVu。",
+    );
+    expect(screen.getByRole("button", { name: "打开系统设置" })).toBeVisible();
+    expect(screen.getByTestId("workbench-instance")).toHaveAttribute("data-scope", "recent");
+  });
+
   it("keeps a cancelled workbench capture silent", async () => {
     vi.mocked(captureScreenRegion).mockRejectedValue(new CaptureError("cancelled"));
 

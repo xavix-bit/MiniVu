@@ -346,7 +346,7 @@ describe("ModelPreferencesPanel", () => {
     const backend = await screen.findByRole("combobox", { name: "问图方式" });
     await waitFor(() => expect(backend).toBeEnabled());
     expect(backend).toHaveValue("llama");
-    expect(screen.queryByRole("option", { name: "实验加速" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "MiniCPM-V 加速版" })).not.toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "下载来源" })).toBeEnabled();
     expect(screen.getByText("暂时无法检测设备，仍可使用默认方式。")).toBeVisible();
     expect(screen.queryByText(/IOKit|code 17/)).not.toBeInTheDocument();
@@ -378,7 +378,7 @@ describe("ModelPreferencesPanel", () => {
     const backend = screen.getByRole("combobox", { name: "问图方式" });
     expect(backend).toHaveValue("mlx");
     expect(backend).toBeDisabled();
-    expect(screen.getByRole("option", { name: "实验加速" })).toBeDisabled();
+    expect(screen.getByRole("option", { name: "MiniCPM-V 加速版" })).toBeDisabled();
     expect(screen.getByRole("textbox", { name: "模型名称" })).toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: "下载来源" })).not.toBeInTheDocument();
 
@@ -389,7 +389,7 @@ describe("ModelPreferencesPanel", () => {
 
     await waitFor(() => expect(backend).toHaveValue("llama"));
     expect(backend).toBeEnabled();
-    expect(screen.queryByRole("option", { name: "实验加速" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "MiniCPM-V 加速版" })).not.toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "下载来源" })).toBeEnabled();
     expect(onSaved).toHaveBeenCalledWith(committed);
   });

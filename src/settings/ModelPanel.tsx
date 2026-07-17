@@ -330,10 +330,10 @@ export function ModelPanel({
     ? isMlx
       ? [
           {
-            label: "问图加速",
-            value: status.mlxRuntimeAvailable ? "可用" : "需要安装",
+            label: "加速支持",
+            value: status.mlxRuntimeAvailable ? "已安装" : "需要安装",
             ok: status.mlxRuntimeAvailable,
-            meta: "实验加速",
+            meta: "用于 MiniCPM-V 加速版",
           },
           {
             label: "MiniCPM-V 加速版",
@@ -434,7 +434,7 @@ export function ModelPanel({
       <section className="surface model-panel__actions-card">
         <p className="setup-panel__lead">
           {isMlx
-            ? "下载后即可使用实验加速。"
+            ? "下载后即可使用 MiniCPM-V 加速版。"
             : "下载或更新所选模型。"}
         </p>
         <div className="model-actions">

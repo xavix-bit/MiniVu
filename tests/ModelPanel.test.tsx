@@ -60,7 +60,7 @@ function createDeferred<T>() {
 
 describe("ModelPanel", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     getModelStatus.mockResolvedValue(createStatus());
     vi.mocked(invoke).mockResolvedValue(undefined);
     vi.mocked(listen).mockResolvedValue(vi.fn());

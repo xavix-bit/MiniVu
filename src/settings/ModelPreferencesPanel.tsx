@@ -330,7 +330,7 @@ export function ModelPreferencesPanel({
             <option value="llama">默认</option>
             {showMlxOption ? (
               <option value="mlx" disabled={!supportsMlx}>
-                实验加速
+                MiniCPM-V 加速版
               </option>
             ) : null}
           </select>

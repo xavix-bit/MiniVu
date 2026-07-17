@@ -114,7 +114,7 @@ describe("QuickLauncher", () => {
     warn.mockRestore();
   });
 
-  it("never logs raw capture failures", async () => {
+  it("routes capture failures to the main recovery surface without logging raw errors", async () => {
     const failure = new Error("Metal sidecar failed at /private/tmp/model.gguf");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     invokeMock.mockImplementation((command: string) => (
@@ -125,10 +125,26 @@ describe("QuickLauncher", () => {
     render(<QuickPanelShell />);
 
     await waitFor(() => expect(captureScreenRegion).toHaveBeenCalledOnce());
-    expect(warn).toHaveBeenCalledOnce();
-    expect(warn).toHaveBeenCalledWith("截图失败");
+    expect(emitToMock).toHaveBeenCalledWith("main", "capture-recovery", { code: "unknown" });
+    expect(invokeMock).toHaveBeenCalledWith("show_main");
+    expect(warn).not.toHaveBeenCalled();
     expect(warn).not.toHaveBeenCalledWith(failure);
     warn.mockRestore();
+  });
+
+  it("routes screenshot permission recovery to the main window", async () => {
+    invokeMock.mockImplementation((command: string) => (
+      Promise.resolve(command === "take_pending_capture_request")
+    ));
+    vi.mocked(captureScreenRegion).mockRejectedValue(new CaptureError("permission-denied"));
+
+    render(<QuickPanelShell />);
+
+    await waitFor(() => expect(captureScreenRegion).toHaveBeenCalledOnce());
+    expect(emitToMock).toHaveBeenCalledWith("main", "capture-recovery", {
+      code: "permission-denied",
+    });
+    expect(invokeMock).toHaveBeenCalledWith("show_main");
   });
 
   it("opens model setup from the quick panel and preserves the question", async () => {

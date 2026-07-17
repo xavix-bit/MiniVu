@@ -20,6 +20,7 @@ import {
   CaptureError,
   captureScreenRegion,
   openScreenRecordingSettings,
+  type CaptureErrorCode,
 } from "../image/captureScreen";
 import { captureClient } from "../captures/captureClient";
 import { processCaptureInBackground } from "../captures/processCapture";
@@ -63,6 +64,7 @@ export function MainWindowShell() {
   const modeRef = useRef<AppMode>("settings");
   const settingsSectionRef = useRef<SettingsSection>("setup");
   const mountedRef = useRef(false);
+  const startupStateKindRef = useRef<StartupState["kind"]>("loading");
   const startupGenerationRef = useRef(0);
   const welcomeGenerationRef = useRef(0);
   const welcomePendingRef = useRef(false);
@@ -93,6 +95,42 @@ export function MainWindowShell() {
   useEffect(() => {
     document.documentElement.classList.add("main-window");
     return () => document.documentElement.classList.remove("main-window");
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void listen<{ code: Exclude<CaptureErrorCode, "cancelled"> }>(
+      "capture-recovery",
+      (event) => {
+        if (!active) return;
+        const permissionDenied = event.payload?.code === "permission-denied";
+        if (startupStateKindRef.current !== "ready") {
+          setWelcomeState(permissionDenied
+            ? { kind: "permission-denied" }
+            : { kind: "idle", notice: "capture-failed" });
+          return;
+        }
+        setWorkbenchScope("recent");
+        setMode("workbench");
+        setWorkbenchNotice({
+          message: permissionDenied
+            ? "需要屏幕录制权限。授权后重新打开 MiniVu。"
+            : "截图没有保存，请重试。",
+          permissionRecovery: permissionDenied,
+        });
+      },
+    ).then((cleanup) => {
+      if (active) {
+        unlisten = cleanup;
+      } else {
+        cleanup();
+      }
+    });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -188,6 +226,7 @@ export function MainWindowShell() {
   }, []);
 
   const onboardingDone = startupState.kind === "ready";
+  startupStateKindRef.current = startupState.kind;
   const activeSection = onboardingDone ? settingsSection : "setup";
   const workbenchActive = onboardingDone && mode === "workbench";
   const settingsActive = onboardingDone && mode === "settings";

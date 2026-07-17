@@ -125,7 +125,13 @@ export function QuickPanelShell() {
       await showResult(image, "capture");
     } catch (error) {
       if (error instanceof CaptureError && error.code === "cancelled") return;
-      console.warn("截图失败");
+      const code = error instanceof CaptureError ? error.code : "unknown";
+      try {
+        await emitTo("main", "capture-recovery", { code });
+        await invoke("show_main");
+      } catch {
+        console.warn("无法打开截图恢复页面");
+      }
     }
   }, [showResult]);
 

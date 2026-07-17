@@ -2954,12 +2954,6 @@
   padding: 18px 20px;
 }
 
-.unified-settings-detail .privacy-product__eyebrow {
-  margin: 0 0 6px;
-  color: var(--wb-accent);
-  font-size: 12px;
-}
-
 .unified-settings-detail .privacy-product__hero h2 {
   margin: 0;
   color: var(--wb-text);
