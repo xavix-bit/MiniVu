@@ -426,7 +426,7 @@ git commit -m "feat: hand off the main window to a floating assistant"
 - Modify: `tests/QuickLauncher.test.tsx`
 - Modify: `src/styles/quick-panel.css`
 
-- [ ] **Step 1: Add failing launcher-state tests**
+- [x] **Step 1: Add failing launcher-state tests**
 
 Cover these cases in `QuickLauncher.test.tsx`:
 
@@ -461,23 +461,23 @@ it("collapses the launcher on Escape", async () => {
 
 Retain existing tests for screenshot cancellation, permission recovery, Paste, Recent, and model routing.
 
-- [ ] **Step 2: Run the focused tests and verify empty clipboard has no feedback**
+- [x] **Step 2: Run the focused tests and verify empty clipboard has no feedback**
 
 Run: `npm test -- tests/QuickLauncher.test.tsx`
 
 Expected: FAIL on the missing status message.
 
-- [ ] **Step 3: Add launcher notice state**
+- [x] **Step 3: Add launcher notice state**
 
 Give `QuickLauncher` an optional `notice` prop rendered as a concise `role="status"` row. In `handlePaste`, clear the notice before reading and set `剪贴板里没有图片` when no image exists. Clear the notice after successful actions and when mode changes away from launcher.
 
 Keep capture cancellation silent and let Rust's mode restoration return to the launcher/pet.
 
-- [ ] **Step 4: Add restrained launcher motion**
+- [x] **Step 4: Add restrained launcher motion**
 
 Use a 160 ms opacity/translate transition on `.quick-launcher`, stable launcher dimensions, and a compact notice row. Disable spatial motion under `prefers-reduced-motion: reduce`. Do not add decorative gradients or additional cards.
 
-- [ ] **Step 5: Run focused tests and frontend build**
+- [x] **Step 5: Run focused tests and frontend build**
 
 Run: `npm test -- tests/QuickLauncher.test.tsx tests/captureScreen.test.ts`
 
@@ -485,7 +485,7 @@ Run: `npm run build`
 
 Expected: tests and production build pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/app-shell/QuickPanelShell.tsx src/styles/quick-panel.css tests/QuickLauncher.test.tsx
