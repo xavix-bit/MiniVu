@@ -1,47 +1,49 @@
 # MiniVu
 
-MiniVu is a screenshot workbench for macOS. Capture part of the screen, copy its text, keep useful shots, or ask a question without leaving the app you are using.
+**简体中文** | [English](README_EN.md)
 
-[Download MiniVu v1.0.0 for Apple Silicon](https://github.com/xavix-bit/MiniVu/releases/download/v1.0.0/MiniVu_1.0.0_aarch64.dmg)
+> 一款面向 macOS 的本地截图工作台。截取屏幕、识别文字、整理记录，也可以直接问图。
 
-Open the DMG and drag MiniVu into Applications. On first launch, Control-click MiniVu, choose **Open**, then confirm once. macOS 13 or later is recommended.
+[下载 MiniVu v1.0.0（Apple Silicon）](https://github.com/xavix-bit/MiniVu/releases/download/v1.0.0/MiniVu_1.0.0_aarch64.dmg)
 
-![MiniVu screenshot workbench](docs/images/minivu-workbench.png)
+打开 DMG，将 MiniVu 拖入“应用程序”文件夹。首次启动时，按住 Control 点击 MiniVu，选择“打开”并确认。建议使用 macOS 13 或更高版本。
 
-## Start With A Screenshot
+![MiniVu 截图工作台](docs/images/minivu-workbench.png)
 
-1. Open MiniVu and choose **开始截图**. macOS may ask for screen-recording permission once.
-2. Frame any part of the screen. The screenshot is saved to the workbench and its text is recognized automatically.
-3. Copy the recognized text or ask a question about the image.
-4. The first question opens the model page only when a model is missing. After installation, MiniVu returns to the same screenshot and keeps the question you typed.
+## 从一张截图开始
 
-The floating launcher stays out of the way and provides three quick actions: `截图`, `粘贴`, and `最近`. The same global shortcut can start a capture from any app.
+1. 打开 MiniVu，点击“开始截图”。macOS 可能会在第一次截图时请求屏幕录制权限。
+2. 框选需要的屏幕区域。截图会自动保存到工作台，并识别其中的文字。
+3. 复制识别结果，或者直接对图片提问。
+4. 如果还没有安装问图模型，第一次提问会带你前往模型页面。安装完成后，MiniVu 会回到原截图，并保留刚才输入的问题。
 
-## Workbench
+关闭主窗口后，可以保留一个悬浮入口。展开后可快速截图、粘贴图片或打开最近记录；全局快捷键也能从任意应用直接开始截图。
 
-- Search recent screenshots or pin the ones you want to keep.
-- Zoom, fit, view at 1:1, and drag large screenshots around the canvas.
-- Switch between image questions and recognized text without losing the current draft.
-- Choose a MiniCPM-V model by exact model name, download size, and memory estimate.
-- Keep records for 24 hours by default, or choose no history, 7 days, or permanent retention. Pinned screenshots do not expire.
+## 工作台
 
-## Privacy
+- 搜索最近截图，或固定需要长期保留的内容。
+- 放大、缩小、适应窗口、按 1:1 查看，也可以拖动大图浏览细节。
+- 在识别文字和图片问答之间切换，未发送的问题不会丢失。
+- 安装模型时可查看具体名称、下载大小和内存占用，再选择适合当前 Mac 的版本。
+- 截图默认保留 24 小时，也可设为不保留、7 天或永久。固定的截图不会自动删除。
 
-- Screenshots, OCR text, prompts, and answers stay on this Mac.
-- Capture records live under the application data directory and are cleaned according to the selected retention policy.
-- Network access is used only when you choose to download or update a model, install optional acceleration, or test a download source.
-- There is no cloud inference fallback or account sync.
+## 隐私
 
-See [local-first-policy.md](docs/privacy/local-first-policy.md) for the detailed policy.
+- 截图、识别文字、问题和回答都保存在当前 Mac 上。
+- 截图记录存放在应用数据目录，并按所选保留时间自动清理。
+- 只有在下载或更新模型、安装可选组件、测试下载源时才会访问网络。
+- MiniVu 不会把图片交给云端处理，也没有账号或同步功能。
 
-## Development
+详细说明见 [本地优先策略](docs/privacy/local-first-policy.md)。
+
+## 开发
 
 ```bash
 npm install
 npm run tauri dev
 ```
 
-Useful checks:
+常用检查命令：
 
 ```bash
 npm test
@@ -50,18 +52,18 @@ cargo test --manifest-path src-tauri/Cargo.toml
 npm run tauri build -- --debug
 ```
 
-## Important Paths
+## 主要目录
 
-- Workbench: `src/workbench/`
-- Capture repository: `src/captures/`
-- Quick panel and launcher: `src/app-shell/QuickPanelShell.tsx`
-- Local capture store: `src-tauri/src/capture_store.rs`
-- macOS region capture: `src-tauri/src/screenshot.rs`
-- OCR/session runtime: `src/chat/useImageSession.ts`
-- Model IPC client: `src/model/modelClient.ts`
-- Inference orchestration: `src-tauri/src/inference/`
-- Sidecar lifecycle: `src-tauri/src/sidecar/`
+- 工作台：`src/workbench/`
+- 截图库：`src/captures/`
+- 悬浮面板：`src/app-shell/QuickPanelShell.tsx`
+- 本地截图存储：`src-tauri/src/capture_store.rs`
+- macOS 区域截图：`src-tauri/src/screenshot.rs`
+- 文字识别与会话：`src/chat/useImageSession.ts`
+- 模型客户端：`src/model/modelClient.ts`
+- 问图流程：`src-tauri/src/inference/`
+- 本地服务生命周期：`src-tauri/src/sidecar/`
 
-## Current Scope
+## 当前版本
 
-MiniVu v1.0.0 targets Apple Silicon macOS. It includes screenshot history, text recognition, per-screenshot conversations, a draggable floating launcher, pinning, search, and optional local image questions. It does not include accounts, sync, cloud inference, annotation editing, or multi-image comparison.
+MiniVu v1.0.0 面向 Apple Silicon Mac，包含截图历史、文字识别、单张图片对话、可拖动悬浮入口、固定和搜索等功能。目前不包含账号、同步、云端处理、截图标注或多图对比。
