@@ -686,7 +686,7 @@ Run: `git diff --check`
 
 Expected: zero failures and no whitespace errors.
 
-- [ ] **Step 9: Commit verification fixes if any**
+- [x] **Step 9: Commit verification fixes if any**
 
 If `git status --short` is empty, skip this step. Otherwise inspect `git diff`, confirm every remaining path is a verification fix within this plan, then run:
 
