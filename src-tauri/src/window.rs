@@ -1,7 +1,14 @@
-use crate::settings::load_settings;
+use crate::settings::{load_settings, FloatingAssistantPosition};
+use crate::window_geometry::{
+    clamp_position_to_bounds, default_floating_position, expanded_floating_position,
+    launcher_floating_position, monitor_bounds_containing_position, LogicalScreenBounds,
+};
 use serde::Serialize;
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewWindow};
+use tauri::{
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Monitor, PhysicalPosition,
+    WebviewWindow, Window, WindowEvent,
+};
 
 const QUICK_PANEL_LABEL: &str = "quick-panel";
 pub(crate) const MAIN_WINDOW_LABEL: &str = "main";
@@ -12,6 +19,21 @@ const LAUNCHER_WIDTH: f64 = 252.0;
 const LAUNCHER_HEIGHT: f64 = 64.0;
 const MAIN_WIDTH: f64 = 1200.0;
 const MAIN_HEIGHT: f64 = 800.0;
+const FLOATING_INSET: f64 = 16.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MainCloseTarget {
+    Pet,
+    Hidden,
+}
+
+fn main_close_target(onboarding_complete: bool, floating_enabled: bool) -> MainCloseTarget {
+    if onboarding_complete && floating_enabled {
+        MainCloseTarget::Pet
+    } else {
+        MainCloseTarget::Hidden
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -22,14 +44,19 @@ pub enum QuickPanelMode {
     Hidden,
 }
 
+fn should_remember_expanded_size(mode: QuickPanelMode) -> bool {
+    mode == QuickPanelMode::Expanded
+}
+
 pub fn current_quick_panel_mode(app: &AppHandle) -> QuickPanelMode {
-    read_panel_state(app, |state| state.mode)
+    read_panel_state(app, |state| state.mode).unwrap_or(QuickPanelMode::Hidden)
 }
 
 pub struct QuickPanelState {
     pub expanded_size: LogicalSize<f64>,
     pub mode: QuickPanelMode,
     pub capture_pending: bool,
+    pub anchor_position: Option<FloatingAssistantPosition>,
 }
 
 impl Default for QuickPanelState {
@@ -38,14 +65,18 @@ impl Default for QuickPanelState {
             expanded_size: LogicalSize::new(PANEL_WIDTH, PANEL_HEIGHT),
             mode: QuickPanelMode::Hidden,
             capture_pending: false,
+            anchor_position: None,
         }
     }
 }
 
-fn read_panel_state<R>(app: &AppHandle, read: impl FnOnce(&QuickPanelState) -> R) -> R {
+fn read_panel_state<R>(
+    app: &AppHandle,
+    read: impl FnOnce(&QuickPanelState) -> R,
+) -> Result<R, String> {
     let state = app.state::<Mutex<QuickPanelState>>();
-    let guard = state.lock().expect("窗口状态锁失败");
-    read(&guard)
+    let guard = state.lock().map_err(|_| "窗口状态锁失败".to_string())?;
+    Ok(read(&guard))
 }
 
 fn with_panel_state<R>(
@@ -57,19 +88,186 @@ fn with_panel_state<R>(
     update(&mut guard)
 }
 
+#[derive(Clone, Copy)]
+struct LogicalMonitorBounds {
+    origin: LogicalPosition<f64>,
+    size: LogicalSize<f64>,
+    scale_factor: f64,
+}
+
+impl LogicalMonitorBounds {
+    fn screen(self) -> LogicalScreenBounds {
+        LogicalScreenBounds {
+            x: self.origin.x,
+            y: self.origin.y,
+            width: self.size.width,
+            height: self.size.height,
+        }
+    }
+}
+
+fn logical_monitor_bounds_from_monitor(monitor: &Monitor) -> Result<LogicalMonitorBounds, String> {
+    let scale_factor = monitor.scale_factor();
+    if !scale_factor.is_finite() || scale_factor <= 0.0 {
+        return Err("invalid monitor scale factor".to_string());
+    }
+
+    Ok(LogicalMonitorBounds {
+        origin: monitor.position().to_logical::<f64>(scale_factor),
+        size: monitor.size().to_logical::<f64>(scale_factor),
+        scale_factor,
+    })
+}
+
+fn logical_monitor_bounds(window: &WebviewWindow) -> Result<LogicalMonitorBounds, String> {
+    let monitor = match window.current_monitor() {
+        Ok(Some(monitor)) => monitor,
+        Ok(None) | Err(_) => window
+            .primary_monitor()
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "monitor not found".to_string())?,
+    };
+    logical_monitor_bounds_from_monitor(&monitor)
+}
+
+fn logical_monitor_containing_position(
+    window: &WebviewWindow,
+    position: FloatingAssistantPosition,
+) -> Result<Option<LogicalMonitorBounds>, String> {
+    let monitors = window
+        .available_monitors()
+        .map_err(|error| error.to_string())?
+        .iter()
+        .map(logical_monitor_bounds_from_monitor)
+        .collect::<Result<Vec<_>, _>>()?;
+    let screens = monitors
+        .iter()
+        .map(|monitor| monitor.screen())
+        .collect::<Vec<_>>();
+    let selected = monitor_bounds_containing_position(position, &screens);
+    Ok(selected.and_then(|selected| {
+        monitors
+            .into_iter()
+            .find(|monitor| monitor.screen() == selected)
+    }))
+}
+
+fn clamp_position_to_monitor(
+    position: FloatingAssistantPosition,
+    monitor: LogicalMonitorBounds,
+    window_width: f64,
+    window_height: f64,
+) -> FloatingAssistantPosition {
+    clamp_position_to_bounds(
+        position,
+        monitor.screen(),
+        window_width,
+        window_height,
+        FLOATING_INSET,
+    )
+}
+
+fn default_position_for_monitor(monitor: LogicalMonitorBounds) -> FloatingAssistantPosition {
+    let local = default_floating_position(
+        monitor.size.width,
+        monitor.size.height,
+        PET_SIZE,
+        FLOATING_INSET,
+    );
+    FloatingAssistantPosition {
+        x: local.x + monitor.origin.x,
+        y: local.y + monitor.origin.y,
+    }
+}
+
+fn resolve_pet_anchor(
+    app: &AppHandle,
+    window: &WebviewWindow,
+) -> Result<(FloatingAssistantPosition, LogicalMonitorBounds), String> {
+    let in_memory = read_panel_state(app, |state| state.anchor_position)?;
+    let position = match in_memory {
+        Some(position) => Some(position),
+        None => load_settings(app)?.floating_assistant_position,
+    };
+    match position {
+        Some(position) => {
+            let monitor = match logical_monitor_containing_position(window, position)? {
+                Some(monitor) => monitor,
+                None => logical_monitor_bounds(window)?,
+            };
+            Ok((
+                clamp_position_to_monitor(position, monitor, PET_SIZE, PET_SIZE),
+                monitor,
+            ))
+        }
+        None => {
+            let monitor = logical_monitor_bounds(window)?;
+            Ok((default_position_for_monitor(monitor), monitor))
+        }
+    }
+}
+
+fn logical_position(
+    position: PhysicalPosition<i32>,
+    monitor: LogicalMonitorBounds,
+) -> FloatingAssistantPosition {
+    let position = position.to_logical::<f64>(monitor.scale_factor);
+    FloatingAssistantPosition {
+        x: position.x,
+        y: position.y,
+    }
+}
+
+fn record_pet_anchor(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    position: PhysicalPosition<i32>,
+) -> Result<(), String> {
+    if read_panel_state(app, |state| state.mode)? != QuickPanelMode::Pet {
+        return Ok(());
+    }
+    let monitor = logical_monitor_bounds(window)?;
+    let position = logical_position(position, monitor);
+    with_panel_state(app, |state| {
+        if state.mode == QuickPanelMode::Pet {
+            state.anchor_position = Some(position);
+        }
+        Ok(())
+    })
+}
+
+fn remember_pet_anchor(app: &AppHandle, window: &WebviewWindow) -> Result<(), String> {
+    if read_panel_state(app, |state| state.mode)? != QuickPanelMode::Pet {
+        return Ok(());
+    }
+    let position = window.outer_position().map_err(|error| error.to_string())?;
+    record_pet_anchor(app, window, position)
+}
+
+pub(crate) fn latest_anchor_position(
+    app: &AppHandle,
+) -> Result<Option<FloatingAssistantPosition>, String> {
+    read_panel_state(app, |state| state.anchor_position)
+}
+
 fn emit_panel_mode(app: &AppHandle, mode: QuickPanelMode) -> Result<(), String> {
     app.emit_to(QUICK_PANEL_LABEL, "quick-panel-mode", mode)
         .map_err(|error| error.to_string())
 }
 
 fn remember_expanded_size(app: &AppHandle, window: &WebviewWindow) -> Result<(), String> {
-    let scale = window.scale_factor().unwrap_or(1.0);
+    if !should_remember_expanded_size(read_panel_state(app, |state| state.mode)?) {
+        return Ok(());
+    }
+    let scale = logical_monitor_bounds(window)?.scale_factor;
     let size = window.inner_size().map_err(|error| error.to_string())?;
     let width = size.width as f64 / scale;
     let height = size.height as f64 / scale;
     if width > PET_SIZE + 8.0 && height > PET_SIZE + 8.0 {
         with_panel_state(app, |state| {
-            state.expanded_size = LogicalSize::new(width, height);
+            if should_remember_expanded_size(state.mode) {
+                state.expanded_size = LogicalSize::new(width, height);
+            }
             Ok(())
         })?;
     }
@@ -97,19 +295,58 @@ pub fn expand_quick_panel(app: &AppHandle) -> Result<(), String> {
         .get_webview_window(QUICK_PANEL_LABEL)
         .ok_or_else(|| "quick panel window not found".to_string())?;
 
-    let expanded_size = read_panel_state(app, |state| state.expanded_size);
-
-    window
-        .set_size(expanded_size)
-        .map_err(|error| error.to_string())?;
-    let _ = window.set_resizable(true);
-    let _ = window.set_always_on_top(true);
-    present_window(&window, app)?;
-
-    with_panel_state(app, |state| {
+    remember_pet_anchor(app, &window)?;
+    let expanded_size = read_panel_state(app, |state| state.expanded_size)?;
+    let source_mode = read_panel_state(app, |state| state.mode)?;
+    let expanded_position = if matches!(source_mode, QuickPanelMode::Pet | QuickPanelMode::Launcher)
+    {
+        let (anchor, monitor) = resolve_pet_anchor(app, &window)?;
+        Some(expanded_floating_position(
+            anchor,
+            monitor.screen(),
+            expanded_size.width,
+            expanded_size.height,
+            FLOATING_INSET,
+        ))
+    } else {
+        None
+    };
+    let previous_size = window.inner_size().map_err(|error| error.to_string())?;
+    let previous_position = window.outer_position().map_err(|error| error.to_string())?;
+    let previous_resizable = window.is_resizable().map_err(|error| error.to_string())?;
+    let previous_visible = window.is_visible().map_err(|error| error.to_string())?;
+    let previous_mode = with_panel_state(app, |state| {
+        let previous_mode = state.mode;
         state.mode = QuickPanelMode::Expanded;
-        Ok(())
+        Ok(previous_mode)
     })?;
+
+    let transition = (|| {
+        window
+            .set_size(expanded_size)
+            .map_err(|error| error.to_string())?;
+        if let Some(position) = expanded_position {
+            window
+                .set_position(LogicalPosition::new(position.x, position.y))
+                .map_err(|error| error.to_string())?;
+        }
+        let _ = window.set_resizable(true);
+        let _ = window.set_always_on_top(true);
+        present_window(&window, app)
+    })();
+    if let Err(error) = transition {
+        let _ = window.set_size(previous_size);
+        let _ = window.set_position(previous_position);
+        let _ = window.set_resizable(previous_resizable);
+        if !previous_visible {
+            let _ = window.hide();
+        }
+        let _ = with_panel_state(app, |state| {
+            state.mode = previous_mode;
+            Ok(())
+        });
+        return Err(error);
+    }
     emit_panel_mode(app, QuickPanelMode::Expanded)
 }
 
@@ -119,17 +356,32 @@ pub fn collapse_quick_panel_to_pet(app: &AppHandle) -> Result<(), String> {
         .ok_or_else(|| "quick panel window not found".to_string())?;
 
     remember_expanded_size(app, &window)?;
-    window
-        .set_size(LogicalSize::new(PET_SIZE, PET_SIZE))
-        .map_err(|error| error.to_string())?;
-    let _ = window.set_resizable(false);
-    let _ = window.set_always_on_top(true);
-    present_window_passive(&window)?;
-
-    with_panel_state(app, |state| {
+    let (anchor, _) = resolve_pet_anchor(app, &window)?;
+    let previous_mode = with_panel_state(app, |state| {
+        let previous_mode = state.mode;
         state.mode = QuickPanelMode::Pet;
-        Ok(())
+        state.anchor_position = Some(anchor);
+        Ok(previous_mode)
     })?;
+
+    let transition = (|| {
+        window
+            .set_size(LogicalSize::new(PET_SIZE, PET_SIZE))
+            .map_err(|error| error.to_string())?;
+        window
+            .set_position(LogicalPosition::new(anchor.x, anchor.y))
+            .map_err(|error| error.to_string())?;
+        let _ = window.set_resizable(false);
+        let _ = window.set_always_on_top(true);
+        present_window_passive(&window)
+    })();
+    if let Err(error) = transition {
+        let _ = with_panel_state(app, |state| {
+            state.mode = previous_mode;
+            Ok(())
+        });
+        return Err(error);
+    }
     emit_panel_mode(app, QuickPanelMode::Pet)
 }
 
@@ -138,32 +390,40 @@ pub fn show_quick_launcher(app: &AppHandle) -> Result<(), String> {
         .get_webview_window(QUICK_PANEL_LABEL)
         .ok_or_else(|| "quick panel window not found".to_string())?;
 
-    let scale = window.scale_factor().unwrap_or(1.0);
-    let current = window.outer_position().ok();
-    let (screen_w, _) = primary_screen_size()?;
-    let mut x = current
-        .map(|position| position.x as f64 / scale)
-        .unwrap_or(20.0);
-    let y = current
-        .map(|position| position.y as f64 / scale)
-        .unwrap_or(20.0);
-    if x + LAUNCHER_WIDTH > screen_w as f64 {
-        x = (x - (LAUNCHER_WIDTH - PET_SIZE)).max(0.0);
-    }
-
-    window
-        .set_size(LogicalSize::new(LAUNCHER_WIDTH, LAUNCHER_HEIGHT))
-        .map_err(|error| error.to_string())?;
-    window
-        .set_position(LogicalPosition::new(x, y))
-        .map_err(|error| error.to_string())?;
-    let _ = window.set_resizable(false);
-    present_window_passive(&window)?;
-
-    with_panel_state(app, |state| {
+    remember_pet_anchor(app, &window)?;
+    let (anchor, monitor) = resolve_pet_anchor(app, &window)?;
+    let position = launcher_floating_position(
+        anchor,
+        monitor.screen(),
+        LAUNCHER_WIDTH,
+        LAUNCHER_HEIGHT,
+        PET_SIZE,
+        FLOATING_INSET,
+    );
+    let previous_mode = with_panel_state(app, |state| {
+        let previous_mode = state.mode;
         state.mode = QuickPanelMode::Launcher;
-        Ok(())
+        state.anchor_position = Some(anchor);
+        Ok(previous_mode)
     })?;
+
+    let transition = (|| {
+        window
+            .set_size(LogicalSize::new(LAUNCHER_WIDTH, LAUNCHER_HEIGHT))
+            .map_err(|error| error.to_string())?;
+        window
+            .set_position(LogicalPosition::new(position.x, position.y))
+            .map_err(|error| error.to_string())?;
+        let _ = window.set_resizable(false);
+        present_window_passive(&window)
+    })();
+    if let Err(error) = transition {
+        let _ = with_panel_state(app, |state| {
+            state.mode = previous_mode;
+            Ok(())
+        });
+        return Err(error);
+    }
     emit_panel_mode(app, QuickPanelMode::Launcher)
 }
 
@@ -172,14 +432,14 @@ pub fn show_quick_panel_near_cursor(app: &AppHandle) -> Result<(), String> {
         .get_webview_window(QUICK_PANEL_LABEL)
         .ok_or_else(|| "quick panel window not found".to_string())?;
 
-    let mode = read_panel_state(app, |state| state.mode);
+    let mode = read_panel_state(app, |state| state.mode)?;
 
     if mode == QuickPanelMode::Pet {
         expand_quick_panel(app)?;
         return Ok(());
     }
 
-    let expanded_size = read_panel_state(app, |state| state.expanded_size);
+    let expanded_size = read_panel_state(app, |state| state.expanded_size)?;
 
     if !window.is_visible().unwrap_or(false) || mode == QuickPanelMode::Hidden {
         let (cursor_x, cursor_y) = cursor_position()?;
@@ -303,16 +563,15 @@ pub fn hide_quick_panel(app: &AppHandle) -> Result<(), String> {
 }
 
 pub fn hide_quick_panel_silent(app: &AppHandle) -> Result<(), String> {
-    let Some(window) = app.get_webview_window(QUICK_PANEL_LABEL) else {
-        return Ok(());
-    };
-    if window.is_visible().unwrap_or(false) {
-        window.hide().map_err(|error| error.to_string())?;
-    }
-    let _ = with_panel_state(app, |state| {
+    with_panel_state(app, |state| {
         state.mode = QuickPanelMode::Hidden;
         Ok(())
-    });
+    })?;
+    if let Some(window) = app.get_webview_window(QUICK_PANEL_LABEL) {
+        if window.is_visible().unwrap_or(false) {
+            window.hide().map_err(|error| error.to_string())?;
+        }
+    }
     let _ = emit_panel_mode(app, QuickPanelMode::Hidden);
     Ok(())
 }
@@ -333,6 +592,56 @@ pub fn restore_quick_panel_mode(app: &AppHandle, mode: QuickPanelMode) -> Result
         QuickPanelMode::Launcher => show_quick_launcher(app),
         QuickPanelMode::Pet => collapse_quick_panel_to_pet(app),
         QuickPanelMode::Hidden => hide_quick_panel_silent(app),
+    }
+}
+
+fn handle_main_window_close(window: &Window) -> Result<(), String> {
+    window.hide().map_err(|error| error.to_string())?;
+    let app = window.app_handle();
+    let settings = match load_settings(app) {
+        Ok(settings) => settings,
+        Err(error) => {
+            let _ = hide_quick_panel_silent(app);
+            return Err(error);
+        }
+    };
+
+    match main_close_target(
+        settings.onboarding_complete,
+        settings.floating_assistant_enabled,
+    ) {
+        MainCloseTarget::Pet => collapse_quick_panel_to_pet(app),
+        MainCloseTarget::Hidden => hide_quick_panel_silent(app),
+    }
+}
+
+pub(crate) fn handle_window_event(window: &Window, event: &WindowEvent) -> Result<(), String> {
+    match event {
+        WindowEvent::CloseRequested { api, .. } if window.label() == MAIN_WINDOW_LABEL => {
+            api.prevent_close();
+            handle_main_window_close(window)
+        }
+        WindowEvent::Moved(position) if window.label() == QUICK_PANEL_LABEL => {
+            let panel = window
+                .app_handle()
+                .get_webview_window(QUICK_PANEL_LABEL)
+                .ok_or_else(|| "quick panel window not found".to_string())?;
+            record_pet_anchor(window.app_handle(), &panel, *position)
+        }
+        WindowEvent::Focused(false) if window.label() == QUICK_PANEL_LABEL => {
+            let app = window.app_handle();
+            if read_panel_state(app, |state| state.mode)? != QuickPanelMode::Launcher {
+                return Ok(());
+            }
+            let panel = app
+                .get_webview_window(QUICK_PANEL_LABEL)
+                .ok_or_else(|| "quick panel window not found".to_string())?;
+            if panel.is_visible().map_err(|error| error.to_string())? {
+                collapse_quick_panel_to_pet(app)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
     }
 }
 
@@ -420,11 +729,30 @@ pub fn open_screen_recording_settings() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::shortcut_requires_main_window;
+    use super::{
+        main_close_target, shortcut_requires_main_window, should_remember_expanded_size,
+        MainCloseTarget, QuickPanelMode,
+    };
 
     #[test]
     fn shortcut_gate_depends_only_on_onboarding_completion() {
         assert!(shortcut_requires_main_window(false));
         assert!(!shortcut_requires_main_window(true));
+    }
+
+    #[test]
+    fn main_close_hands_off_only_to_an_enabled_floating_assistant() {
+        assert_eq!(main_close_target(false, false), MainCloseTarget::Hidden);
+        assert_eq!(main_close_target(false, true), MainCloseTarget::Hidden);
+        assert_eq!(main_close_target(true, false), MainCloseTarget::Hidden);
+        assert_eq!(main_close_target(true, true), MainCloseTarget::Pet);
+    }
+
+    #[test]
+    fn remembers_expanded_size_only_from_expanded_mode() {
+        assert!(should_remember_expanded_size(QuickPanelMode::Expanded));
+        assert!(!should_remember_expanded_size(QuickPanelMode::Launcher));
+        assert!(!should_remember_expanded_size(QuickPanelMode::Pet));
+        assert!(!should_remember_expanded_size(QuickPanelMode::Hidden));
     }
 }

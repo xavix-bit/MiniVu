@@ -88,7 +88,14 @@ pub fn save_app_settings(app: tauri::AppHandle, settings: AppSettings) -> Result
 
 #[tauri::command]
 pub fn update_app_settings(app: tauri::AppHandle, patch: Value) -> Result<AppSettings, String> {
-    commit_settings_update(&app, false, move |current| {
+    update_settings_patch(&app, patch)
+}
+
+pub(crate) fn update_settings_patch(
+    app: &tauri::AppHandle,
+    patch: Value,
+) -> Result<AppSettings, String> {
+    commit_settings_update(app, false, move |current| {
         merge_settings_patch(current, patch)
     })
 }

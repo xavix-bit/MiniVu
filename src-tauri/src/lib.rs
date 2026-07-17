@@ -21,6 +21,7 @@ mod shortcut;
 mod sidecar;
 mod tray;
 mod window;
+mod window_geometry;
 
 use model_sidecar::{init_generation_registry, init_sidecar_state};
 use sidecar::{lock_sidecar, spawn_idle_unloader};
@@ -43,6 +44,11 @@ pub fn run() {
         .manage(init_sidecar_state())
         .manage(init_generation_registry())
         .manage(Mutex::new(window::QuickPanelState::default()))
+        .on_window_event(|window, event| {
+            if let Err(error) = window::handle_window_event(window, event) {
+                eprintln!("window event handling failed: {error}");
+            }
+        })
         .setup(|app| {
             tray::create_tray(app.handle())?;
 
@@ -116,6 +122,20 @@ pub fn run() {
         .expect("error while running MiniVu")
         .run(|app_handle, event| {
             if let tauri::RunEvent::Exit = event {
+                match window::latest_anchor_position(app_handle) {
+                    Ok(Some(position)) => {
+                        if let Err(error) = commands::update_settings_patch(
+                            app_handle,
+                            serde_json::json!({ "floatingAssistantPosition": position }),
+                        ) {
+                            eprintln!("failed to save floating assistant position: {error}");
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        eprintln!("failed to read floating assistant position: {error}");
+                    }
+                }
                 lock_sidecar(app_handle.state::<crate::sidecar::SidecarState>().inner()).stop();
             }
             #[cfg(target_os = "macos")]
