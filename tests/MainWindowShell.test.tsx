@@ -50,6 +50,13 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+async function openSettings() {
+  const settingsButton = screen.getByRole("button", { name: "设置" });
+  await waitFor(() => expect(settingsButton).toBeEnabled());
+  fireEvent.click(settingsButton);
+  return screen.findByRole("navigation", { name: "设置导航" });
+}
+
 const { shellState, settingsPanelState, getEnvironmentStatus, mainEventHandlers } = vi.hoisted(() => ({
   shellState: { mounts: 0, renders: 0 },
   settingsPanelState: { mounts: 0 },
@@ -410,8 +417,9 @@ describe("MainWindowShell navigation", () => {
   });
 
   it("shows a useful notice when a workbench capture needs screen-recording permission", async () => {
+    const settingsOpen = deferred<void>();
     vi.mocked(captureScreenRegion).mockRejectedValue(new CaptureError("permission-denied"));
-    vi.mocked(openScreenRecordingSettings).mockRejectedValue(new Error("open failed at /private/tmp"));
+    vi.mocked(openScreenRecordingSettings).mockReturnValue(settingsOpen.promise);
 
     render(<MainWindowShell />);
     fireEvent.click(await screen.findByRole("button", { name: "工作台截图" }));
@@ -422,11 +430,15 @@ describe("MainWindowShell navigation", () => {
     expect(captureClient.create).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "打开系统设置" }));
-
-    expect(await screen.findByRole("status")).toHaveTextContent(
-      "系统设置没有打开，请手动打开后重试。",
-    );
     expect(openScreenRecordingSettings).toHaveBeenCalledOnce();
+
+    await act(async () => settingsOpen.reject(new Error("open failed at /private/tmp")));
+
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "系统设置没有打开，请手动打开后重试。",
+      ),
+    );
     expect(screen.queryByText(/private|tmp|open failed/i)).not.toBeInTheDocument();
   });
 
@@ -673,7 +685,7 @@ describe("MainWindowShell navigation", () => {
     await waitFor(() => expect(draft).toHaveValue("原来的问题"));
     fireEvent.click(screen.getByRole("button", { name: "最近" }));
     fireEvent.change(draft, { target: { value: "我后来改的问题" } });
-    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    await openSettings();
     fireEvent.click(screen.getByRole("button", { name: "模型" }));
     fireEvent.click(screen.getByRole("button", { name: "模拟模型就绪" }));
 
@@ -738,7 +750,7 @@ describe("MainWindowShell navigation", () => {
     render(<MainWindowShell />);
     const workbench = await screen.findByTestId("workbench-instance");
     await waitFor(() => expect(workbench).toHaveAttribute("data-model-ready", "true"));
-    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    await openSettings();
     fireEvent.click(screen.getByRole("button", { name: "模型" }));
     fireEvent.click(screen.getByRole("button", { name: "模拟保存模型偏好" }));
 
@@ -1116,8 +1128,7 @@ describe("MainWindowShell navigation", () => {
     render(<MainWindowShell />);
     await screen.findByTestId("workbench-instance");
 
-    fireEvent.click(screen.getByRole("button", { name: "设置" }));
-    const settingsNav = screen.getByRole("navigation", { name: "设置导航" });
+    const settingsNav = await openSettings();
     const panel = await screen.findByTestId("settings-panel");
     const preferencesSurface = panel.closest(".unified-settings-surface");
     expect(panel).toHaveAttribute("data-view", "general");
@@ -1146,7 +1157,7 @@ describe("MainWindowShell navigation", () => {
     const rail = screen.getByRole("navigation", { name: "应用导航" });
     await waitFor(() => expect(shellState.mounts).toBe(1));
 
-    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    await openSettings();
     expect(await screen.findByText("偏好设置内容")).toBeVisible();
     expect(screen.getByRole("navigation", { name: "应用导航" })).toBe(rail);
     expect(screen.getByRole("button", { name: "设置" })).toHaveAttribute("aria-current", "page");
@@ -1171,9 +1182,8 @@ describe("MainWindowShell navigation", () => {
     await waitFor(() => expect(workbench).toHaveAttribute("data-model-ready", "true"));
     const initialRenders = shellState.renders;
 
-    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    const settingsNav = await openSettings();
     const settingsMain = screen.getByRole("main");
-    const settingsNav = screen.getByRole("navigation", { name: "设置导航" });
     expect(settingsMain).toHaveFocus();
     expect(within(settingsNav).queryByRole("button", { name: "初始设置" })).not.toBeInTheDocument();
 
@@ -1205,8 +1215,7 @@ describe("MainWindowShell navigation", () => {
     const initialStatusChecks = getEnvironmentStatus.mock.calls.length;
     expect(screen.queryByTestId("environment-setup")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "设置" }));
-    const settingsNav = screen.getByRole("navigation", { name: "设置导航" });
+    const settingsNav = await openSettings();
     expect(within(settingsNav).queryByRole("button", { name: "初始设置" })).not.toBeInTheDocument();
     fireEvent.click(within(settingsNav).getByRole("button", { name: "模型" }));
 
@@ -1236,8 +1245,7 @@ describe("MainWindowShell navigation", () => {
     render(<MainWindowShell />);
     await screen.findByTestId("workbench-instance");
 
-    fireEvent.click(screen.getByRole("button", { name: "设置" }));
-    const settingsNav = screen.getByRole("navigation", { name: "设置导航" });
+    const settingsNav = await openSettings();
     fireEvent.click(within(settingsNav).getByRole("button", { name: "模型" }));
 
     const preferences = await screen.findByTestId("model-preferences-panel");
@@ -1267,8 +1275,7 @@ describe("MainWindowShell navigation", () => {
     render(<MainWindowShell />);
     await screen.findByTestId("workbench-instance");
 
-    fireEvent.click(screen.getByRole("button", { name: "设置" }));
-    const settingsNav = screen.getByRole("navigation", { name: "设置导航" });
+    const settingsNav = await openSettings();
     fireEvent.click(within(settingsNav).getByRole("button", { name: "模型" }));
 
     const preferences = await screen.findByTestId("model-preferences-panel");
@@ -1289,8 +1296,7 @@ describe("MainWindowShell navigation", () => {
     render(<MainWindowShell />);
     await screen.findByTestId("workbench-instance");
 
-    fireEvent.click(screen.getByRole("button", { name: "设置" }));
-    const settingsNav = screen.getByRole("navigation", { name: "设置导航" });
+    const settingsNav = await openSettings();
     fireEvent.click(within(settingsNav).getByRole("button", { name: "模型" }));
 
     const preferences = await screen.findByTestId("model-preferences-panel");
@@ -1316,8 +1322,7 @@ describe("MainWindowShell navigation", () => {
     render(<MainWindowShell />);
     await screen.findByTestId("workbench-instance");
 
-    fireEvent.click(screen.getByRole("button", { name: "设置" }));
-    const settingsNav = screen.getByRole("navigation", { name: "设置导航" });
+    const settingsNav = await openSettings();
     fireEvent.click(within(settingsNav).getByRole("button", { name: "模型" }));
 
     const preferences = await screen.findByTestId("model-preferences-panel");
@@ -1346,9 +1351,8 @@ describe("MainWindowShell navigation", () => {
     const workbench = await screen.findByTestId("workbench-instance");
     await waitFor(() => expect(workbench).toHaveAttribute("data-model-ready", "true"));
 
-    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    const settingsNav = await openSettings();
     const settingsMain = screen.getByRole("main");
-    const settingsNav = screen.getByRole("navigation", { name: "设置导航" });
     settingsMain.scrollTop = 180;
 
     fireEvent.click(within(settingsNav).getByRole("button", { name: "模型" }));
@@ -1356,7 +1360,7 @@ describe("MainWindowShell navigation", () => {
     settingsMain.scrollTop = 40;
 
     fireEvent.click(screen.getByRole("button", { name: "固定" }));
-    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    await openSettings();
     expect(settingsMain.scrollTop).toBe(180);
 
     fireEvent.click(within(settingsNav).getByRole("button", { name: "模型" }));
