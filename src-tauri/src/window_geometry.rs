@@ -63,6 +63,20 @@ pub fn expanded_floating_position(
     clamp_position_to_bounds(anchor, screen, window_width, window_height, inset)
 }
 
+pub fn fit_window_size_to_bounds(
+    window_width: f64,
+    window_height: f64,
+    screen: LogicalScreenBounds,
+    inset: f64,
+) -> (f64, f64) {
+    let maximum_width = (screen.width - inset * 2.0).max(1.0);
+    let maximum_height = (screen.height - inset * 2.0).max(1.0);
+    (
+        window_width.clamp(1.0, maximum_width),
+        window_height.clamp(1.0, maximum_height),
+    )
+}
+
 pub fn launcher_floating_position(
     anchor: FloatingAssistantPosition,
     screen: LogicalScreenBounds,
@@ -123,7 +137,8 @@ fn clamp_axis(position: f64, screen: f64, window: f64, inset: f64) -> f64 {
 mod tests {
     use super::{
         clamp_floating_position, default_floating_position, expanded_floating_position,
-        launcher_floating_position, monitor_bounds_containing_position, LogicalScreenBounds,
+        fit_window_size_to_bounds, launcher_floating_position, monitor_bounds_containing_position,
+        LogicalScreenBounds,
     };
     use crate::settings::FloatingAssistantPosition;
 
@@ -178,6 +193,42 @@ mod tests {
                 x: 1044.0,
                 y: 264.0,
             },
+        );
+    }
+
+    #[test]
+    fn shrinks_an_oversized_panel_to_the_target_screen() {
+        assert_eq!(
+            fit_window_size_to_bounds(
+                1800.0,
+                1200.0,
+                LogicalScreenBounds {
+                    x: 1920.0,
+                    y: 0.0,
+                    width: 1512.0,
+                    height: 982.0,
+                },
+                16.0,
+            ),
+            (1480.0, 950.0),
+        );
+    }
+
+    #[test]
+    fn preserves_a_panel_that_already_fits_the_target_screen() {
+        assert_eq!(
+            fit_window_size_to_bounds(
+                380.0,
+                620.0,
+                LogicalScreenBounds {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1512.0,
+                    height: 982.0,
+                },
+                16.0,
+            ),
+            (380.0, 620.0),
         );
     }
 

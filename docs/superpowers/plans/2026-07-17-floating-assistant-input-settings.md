@@ -618,25 +618,25 @@ git commit -m "polish: compact and autosave general preferences"
 - Modify only files required by failures found during verification.
 - Update: `docs/superpowers/plans/2026-07-17-floating-assistant-input-settings.md` checkbox state as tasks complete.
 
-- [ ] **Step 1: Run all frontend tests**
+- [x] **Step 1: Run all frontend tests**
 
 Run: `npm test`
 
 Expected: 24 or more test files pass with zero failures, including new Composer, launcher, action, and settings coverage.
 
-- [ ] **Step 2: Run production frontend build**
+- [x] **Step 2: Run production frontend build**
 
 Run: `npm run build`
 
 Expected: TypeScript and Vite complete successfully. Existing dynamic/static import warnings may remain; no new errors are accepted.
 
-- [ ] **Step 3: Run all Rust tests**
+- [x] **Step 3: Run all Rust tests**
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml`
 
 Expected: all tests pass, including settings migration, geometry, main close policy, OCR embedding, capture storage, and sidecar lifecycle.
 
-- [ ] **Step 4: Build the native debug bundle**
+- [x] **Step 4: Build the native debug bundle**
 
 Run: `npm run tauri build -- --debug`
 
@@ -645,7 +645,7 @@ Expected artifacts:
 - `src-tauri/target/debug/bundle/macos/MiniVu.app`
 - `src-tauri/target/debug/bundle/dmg/MiniVu_0.3.0_aarch64.dmg`
 
-- [ ] **Step 5: Verify the debug DMG**
+- [x] **Step 5: Verify the debug DMG**
 
 Run: `hdiutil verify src-tauri/target/debug/bundle/dmg/MiniVu_0.3.0_aarch64.dmg`
 
@@ -664,11 +664,17 @@ Using Computer Use, verify and capture screenshots for:
 7. Four screenshot actions fit without clipping.
 8. General settings are compact at 1200 by 800 and the minimum supported width.
 
-- [ ] **Step 7: Request independent code review**
+Verified in the debug bundle: light/dark main and General settings at 1200 by 800,
+main close to Pet, Pet to launcher, launcher rendering, and permission recovery back to
+the main window. Still pending on the final installed artifact: dual-display anchor
+relaunch, a successful capture expansion, real Pinyin composition, and the minimum-width
+layout check.
+
+- [x] **Step 7: Request independent code review**
 
 Review the commits from `54ba0b9` through the implementation head for lifecycle races, settings data loss, focus behavior, IME regressions, accessibility, and missing native tests. Resolve all Critical and Important findings.
 
-- [ ] **Step 8: Run fresh final verification after review fixes**
+- [x] **Step 8: Run fresh final verification after review fixes**
 
 Run: `npm test`
 

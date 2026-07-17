@@ -1,7 +1,8 @@
 use crate::settings::{load_settings, FloatingAssistantPosition};
 use crate::window_geometry::{
     clamp_position_to_bounds, default_floating_position, expanded_floating_position,
-    launcher_floating_position, monitor_bounds_containing_position, LogicalScreenBounds,
+    fit_window_size_to_bounds, launcher_floating_position, monitor_bounds_containing_position,
+    LogicalScreenBounds,
 };
 use serde::Serialize;
 use std::sync::Mutex;
@@ -58,6 +59,11 @@ fn should_remember_expanded_size(mode: QuickPanelMode) -> bool {
 
 pub fn current_quick_panel_mode(app: &AppHandle) -> QuickPanelMode {
     read_panel_state(app, |state| state.mode).unwrap_or(QuickPanelMode::Hidden)
+}
+
+#[tauri::command]
+pub fn get_quick_panel_mode(app: AppHandle) -> QuickPanelMode {
+    current_quick_panel_mode(&app)
 }
 
 pub struct QuickPanelState {
@@ -304,21 +310,37 @@ pub fn expand_quick_panel(app: &AppHandle) -> Result<(), String> {
         .ok_or_else(|| "quick panel window not found".to_string())?;
 
     remember_pet_anchor(app, &window)?;
-    let expanded_size = read_panel_state(app, |state| state.expanded_size)?;
+    let requested_size = read_panel_state(app, |state| state.expanded_size)?;
     let source_mode = read_panel_state(app, |state| state.mode)?;
-    let expanded_position = if matches!(source_mode, QuickPanelMode::Pet | QuickPanelMode::Launcher)
-    {
-        let (anchor, monitor) = resolve_pet_anchor(app, &window)?;
-        Some(expanded_floating_position(
-            anchor,
-            monitor.screen(),
-            expanded_size.width,
-            expanded_size.height,
-            FLOATING_INSET,
-        ))
-    } else {
-        None
-    };
+    let (expanded_size, expanded_position) =
+        if matches!(source_mode, QuickPanelMode::Pet | QuickPanelMode::Launcher) {
+            let (anchor, monitor) = resolve_pet_anchor(app, &window)?;
+            let (width, height) = fit_window_size_to_bounds(
+                requested_size.width,
+                requested_size.height,
+                monitor.screen(),
+                FLOATING_INSET,
+            );
+            (
+                LogicalSize::new(width, height),
+                Some(expanded_floating_position(
+                    anchor,
+                    monitor.screen(),
+                    width,
+                    height,
+                    FLOATING_INSET,
+                )),
+            )
+        } else {
+            let monitor = logical_monitor_bounds(&window)?;
+            let (width, height) = fit_window_size_to_bounds(
+                requested_size.width,
+                requested_size.height,
+                monitor.screen(),
+                FLOATING_INSET,
+            );
+            (LogicalSize::new(width, height), None)
+        };
     let previous_size = window.inner_size().map_err(|error| error.to_string())?;
     let previous_position = window.outer_position().map_err(|error| error.to_string())?;
     let previous_resizable = window.is_resizable().map_err(|error| error.to_string())?;
@@ -447,13 +469,23 @@ pub fn show_quick_panel_near_cursor(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    let expanded_size = read_panel_state(app, |state| state.expanded_size)?;
+    let requested_size = read_panel_state(app, |state| state.expanded_size)?;
 
     if !window.is_visible().unwrap_or(false) || mode == QuickPanelMode::Hidden {
         let (cursor_x, cursor_y) = cursor_position()?;
         let (screen_w, screen_h) = primary_screen_size()?;
-        let panel_w = expanded_size.width;
-        let panel_h = expanded_size.height;
+        let (panel_w, panel_h) = fit_window_size_to_bounds(
+            requested_size.width,
+            requested_size.height,
+            LogicalScreenBounds {
+                x: 0.0,
+                y: 0.0,
+                width: screen_w as f64,
+                height: screen_h as f64,
+            },
+            FLOATING_INSET,
+        );
+        let expanded_size = LogicalSize::new(panel_w, panel_h);
 
         let mut x = cursor_x as f64 + 16.0;
         let mut y = cursor_y as f64 + 16.0;

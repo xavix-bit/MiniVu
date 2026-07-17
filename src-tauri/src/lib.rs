@@ -110,6 +110,7 @@ pub fn run() {
             window::show_entry,
             window::show_quick_panel,
             window::show_main,
+            window::get_quick_panel_mode,
             window::close_quick_panel_command,
             window::hide_quick_panel_command,
             window::expand_quick_panel_command,

@@ -57,7 +57,7 @@ export function QuickLauncher({
 }
 
 export function QuickPanelShell() {
-  const [mode, setMode] = useState<PanelMode>("expanded");
+  const [mode, setMode] = useState<PanelMode>("hidden");
   const [notice, setNotice] = useState<string | null>(null);
   const [activeCapture, setActiveCapture] = useState<{
     recordId: string;
@@ -79,6 +79,12 @@ export function QuickPanelShell() {
     modeRef.current === "launcher" &&
     pasteRequestIdRef.current === requestId
   ), []);
+
+  const applyPanelMode = useCallback((nextMode: PanelMode) => {
+    modeRef.current = nextMode;
+    setMode(nextMode);
+    invalidatePasteRequest();
+  }, [invalidatePasteRequest]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -151,7 +157,10 @@ export function QuickPanelShell() {
       source,
       retention: settings.captureRetention ?? "24h",
     });
-    if (!isCurrent()) return;
+    if (!isCurrent()) {
+      await captureClient.remove(record.id).catch(() => undefined);
+      return;
+    }
     setActiveCapture({ recordId: record.id, image });
     setNotice(null);
     if (!isCurrent()) return;
@@ -207,6 +216,7 @@ export function QuickPanelShell() {
   useEffect(() => {
     const unlisteners: Array<() => void> = [];
     let active = true;
+    let modeRevision = 0;
 
     async function consumeCaptureRequest() {
       const pending = await invoke<boolean>("take_pending_capture_request");
@@ -215,14 +225,29 @@ export function QuickPanelShell() {
       }
     }
 
-    void listen<PanelMode>("quick-panel-mode", (event) => {
-      modeRef.current = event.payload;
-      setMode(event.payload);
-      invalidatePasteRequest();
-    }).then((cleanup) => {
-      if (active) unlisteners.push(cleanup);
-      else cleanup();
-    });
+    async function subscribeToPanelMode() {
+      const cleanup = await listen<PanelMode>("quick-panel-mode", (event) => {
+        modeRevision += 1;
+        applyPanelMode(event.payload);
+      });
+      if (!active) {
+        cleanup();
+        return;
+      }
+      unlisteners.push(cleanup);
+
+      const revisionAtRequest = modeRevision;
+      try {
+        const currentMode = await invoke<PanelMode>("get_quick_panel_mode");
+        if (active && modeRevision === revisionAtRequest) {
+          applyPanelMode(currentMode);
+        }
+      } catch {
+        // The native window starts hidden, so a failed snapshot is safe to leave blank.
+      }
+    }
+
+    void subscribeToPanelMode();
 
     void listen("capture-requested", () => {
       void consumeCaptureRequest();
@@ -239,7 +264,7 @@ export function QuickPanelShell() {
       active = false;
       for (const cleanup of unlisteners) cleanup();
     };
-  }, [handleCapture, invalidatePasteRequest]);
+  }, [applyPanelMode, handleCapture]);
 
   useEffect(() => {
     if (mode !== "launcher") return;
@@ -287,6 +312,10 @@ export function QuickPanelShell() {
         />
       </main>
     );
+  }
+
+  if (mode === "hidden") {
+    return null;
   }
 
   return (
