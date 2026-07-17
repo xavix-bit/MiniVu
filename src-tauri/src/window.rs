@@ -35,6 +35,14 @@ fn main_close_target(onboarding_complete: bool, floating_enabled: bool) -> MainC
     }
 }
 
+fn quick_panel_close_target(floating_enabled: bool) -> MainCloseTarget {
+    if floating_enabled {
+        MainCloseTarget::Pet
+    } else {
+        MainCloseTarget::Hidden
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum QuickPanelMode {
@@ -554,7 +562,15 @@ fn activate_app(app: &AppHandle) -> Result<(), String> {
 }
 
 pub fn close_quick_panel(app: &AppHandle) -> Result<(), String> {
-    collapse_quick_panel_to_pet(app)
+    let settings = match load_settings(app) {
+        Ok(settings) => settings,
+        Err(_) => return hide_quick_panel_silent(app),
+    };
+
+    match quick_panel_close_target(settings.floating_assistant_enabled) {
+        MainCloseTarget::Pet => collapse_quick_panel_to_pet(app),
+        MainCloseTarget::Hidden => hide_quick_panel_silent(app),
+    }
 }
 
 pub fn hide_quick_panel(app: &AppHandle) -> Result<(), String> {
@@ -637,7 +653,7 @@ pub(crate) fn handle_window_event(window: &Window, event: &WindowEvent) -> Resul
                 .get_webview_window(QUICK_PANEL_LABEL)
                 .ok_or_else(|| "quick panel window not found".to_string())?;
             if panel.is_visible().map_err(|error| error.to_string())? {
-                collapse_quick_panel_to_pet(app)?;
+                close_quick_panel(app)?;
             }
             Ok(())
         }
@@ -730,8 +746,8 @@ pub fn open_screen_recording_settings() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        main_close_target, shortcut_requires_main_window, should_remember_expanded_size,
-        MainCloseTarget, QuickPanelMode,
+        main_close_target, quick_panel_close_target, shortcut_requires_main_window,
+        should_remember_expanded_size, MainCloseTarget, QuickPanelMode,
     };
 
     #[test]
@@ -746,6 +762,12 @@ mod tests {
         assert_eq!(main_close_target(false, true), MainCloseTarget::Hidden);
         assert_eq!(main_close_target(true, false), MainCloseTarget::Hidden);
         assert_eq!(main_close_target(true, true), MainCloseTarget::Pet);
+    }
+
+    #[test]
+    fn quick_panel_close_respects_the_floating_assistant_preference() {
+        assert_eq!(quick_panel_close_target(true), MainCloseTarget::Pet);
+        assert_eq!(quick_panel_close_target(false), MainCloseTarget::Hidden);
     }
 
     #[test]

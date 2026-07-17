@@ -639,7 +639,11 @@ export function MainWindowShell() {
                   >
                     <SubpageLead section={activeSection === "shortcut" ? "shortcut" : "general"} />
                     <div className="settings-page-body unified-settings-detail">
-                      <div className="unified-settings-surface">
+                      <div
+                        className={`unified-settings-surface${
+                          activeSection === "general" ? " unified-settings-surface--plain" : ""
+                        }`}
+                      >
                         <SettingsPanel view={activeSection === "shortcut" ? "shortcut" : "general"} />
                       </div>
                     </div>

@@ -3032,3 +3032,232 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* General preferences use an unframed, autosaving list. */
+.unified-settings-detail .unified-settings-surface--plain {
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.settings-preferences-panel--general {
+  display: grid;
+  gap: 16px;
+  width: 100%;
+  max-width: 760px;
+  color: var(--wb-text);
+}
+
+.general-preferences {
+  display: grid;
+  gap: 22px;
+  min-width: 0;
+}
+
+.preference-group {
+  display: grid;
+  min-width: 0;
+}
+
+.preference-group__title {
+  margin: 0;
+  padding: 0 0 8px;
+  color: var(--wb-muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.4;
+}
+
+.preference-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+  min-height: 60px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--wb-border);
+}
+
+.preference-row__copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.preference-row__label {
+  color: var(--wb-text);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.4;
+}
+
+.preference-row__detail {
+  color: var(--wb-muted);
+  font-size: 12px;
+  letter-spacing: 0;
+  line-height: 1.45;
+}
+
+.preference-segmented {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(64px, 1fr));
+  width: 224px;
+  min-height: 36px;
+  padding: 2px;
+  border: 1px solid var(--wb-border-strong);
+  border-radius: 8px;
+  background: var(--wb-input);
+}
+
+.preference-segmented__item {
+  position: relative;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.preference-segmented__item input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.preference-segmented__item span {
+  display: grid;
+  min-width: 0;
+  height: 30px;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--wb-muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.preference-segmented__item input:checked + span {
+  background: var(--wb-panel);
+  color: var(--wb-text);
+  box-shadow: 0 0 0 1px var(--wb-border);
+}
+
+.preference-segmented__item input:focus-visible + span {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 64%, transparent);
+  outline-offset: 1px;
+}
+
+.preference-segmented__item:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.preference-select {
+  width: 132px;
+  min-height: 36px;
+  padding: 6px 30px 6px 10px;
+  border: 1px solid var(--wb-border-strong);
+  border-radius: 7px;
+  background: var(--wb-input);
+  color: var(--wb-text);
+  font-size: 12px;
+  letter-spacing: 0;
+}
+
+.preference-switch {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  margin: 0;
+  padding: 2px;
+  border: 1px solid var(--wb-border-strong);
+  border-radius: 8px;
+  appearance: none;
+  background: var(--wb-input);
+  cursor: pointer;
+  transition: background 0.16s var(--ease-product), border-color 0.16s var(--ease-product);
+}
+
+.preference-switch::before {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  background: var(--wb-panel);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--wb-text) 18%, transparent);
+  content: "";
+  transition: transform 0.16s var(--ease-product);
+}
+
+.preference-switch:checked {
+  border-color: var(--wb-accent);
+  background: var(--wb-accent);
+}
+
+.preference-switch:checked::before {
+  transform: translateX(16px);
+}
+
+.preference-switch:focus-visible,
+.preference-select:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 64%, transparent);
+  outline-offset: 2px;
+}
+
+.preference-switch:disabled,
+.preference-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.preference-save-error {
+  display: flex;
+  min-height: 52px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--wb-border);
+  color: var(--danger-text);
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+.preference-save-error .callout__action {
+  min-height: 34px;
+  border-radius: 7px;
+}
+
+@media (max-width: 820px) {
+  .preference-row {
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 8px;
+    min-height: 60px;
+    padding: 10px 0;
+  }
+
+  .preference-segmented {
+    width: min(100%, 224px);
+  }
+
+  .preference-select {
+    width: min(100%, 224px);
+  }
+
+  .preference-switch {
+    justify-self: start;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .preference-switch,
+  .preference-switch::before {
+    transition: none;
+  }
+}

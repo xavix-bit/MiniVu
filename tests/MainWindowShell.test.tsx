@@ -1119,13 +1119,16 @@ describe("MainWindowShell navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
     const settingsNav = screen.getByRole("navigation", { name: "设置导航" });
     const panel = await screen.findByTestId("settings-panel");
+    const preferencesSurface = panel.closest(".unified-settings-surface");
     expect(panel).toHaveAttribute("data-view", "general");
+    expect(preferencesSurface).toHaveClass("unified-settings-surface--plain");
     expect(screen.getByText("自动保留")).toBeVisible();
     expect(screen.queryByText("全局快捷键")).not.toBeInTheDocument();
 
     fireEvent.click(within(settingsNav).getByRole("button", { name: "快捷键" }));
     expect(screen.getByTestId("settings-panel")).toBe(panel);
     expect(panel).toHaveAttribute("data-view", "shortcut");
+    expect(preferencesSurface).not.toHaveClass("unified-settings-surface--plain");
     expect(screen.getByText("全局快捷键")).toBeVisible();
     expect(screen.queryByText("自动保留")).not.toBeInTheDocument();
 
@@ -1416,6 +1419,9 @@ describe("MainWindowShell navigation", () => {
     );
     expect(settingsCss).toMatch(
       /\.unified-settings-detail :is\(\.settings-btn, \.shortcut-recorder__btn, \.callout__action\)\s*{[^}]*min-height:\s*44px/,
+    );
+    expect(settingsCss).toMatch(
+      /@media \(prefers-reduced-motion:\s*reduce\)[\s\S]*?\.preference-switch\s*,[\s\S]*?\.preference-switch::before\s*{[^}]*transition:\s*none/,
     );
   });
 

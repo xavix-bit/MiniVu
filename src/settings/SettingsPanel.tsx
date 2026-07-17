@@ -2,6 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { applyTheme } from "../theme/applyTheme";
 import { settingsThemeToMode } from "../theme/useAppTheme";
 import {
+  GeneralPreferences,
+  generalPreferenceLabels,
+  type GeneralPreferenceKey,
+  type GeneralPreferenceSettings,
+} from "./GeneralPreferences";
+import {
   createDefaultSettings,
   loadSettings,
   updateSettings,
@@ -14,17 +20,44 @@ type SettingsPanelProps = {
   onSaved?: () => void;
 };
 
+type GeneralFailure = {
+  patch: Partial<GeneralPreferenceSettings>;
+};
+
+const generalPreferenceKeys: GeneralPreferenceKey[] = [
+  "theme",
+  "captureRetention",
+  "floatingAssistantEnabled",
+  "backgroundWarmup",
+];
+
+function createGeneralRevisions(): Record<GeneralPreferenceKey, number> {
+  return {
+    theme: 0,
+    captureRetention: 0,
+    floatingAssistantEnabled: 0,
+    backgroundWarmup: 0,
+  };
+}
+
 export function SettingsPanel({ view, onSaved }: SettingsPanelProps) {
-  const draftRevisionRef = useRef(0);
+  const shortcutRevisionRef = useRef(0);
+  const generalRevisionsRef = useRef(createGeneralRevisions());
   const loadGenerationRef = useRef(0);
   const mountedRef = useRef(false);
   const [settings, setSettings] = useState<AppSettings>(createDefaultSettings());
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsLoadError, setSettingsLoadError] = useState("");
-  const [savedMessage, setSavedMessage] = useState("");
-  const [saveError, setSaveError] = useState("");
-  const [saving, setSaving] = useState(false);
+  const [shortcutSavedMessage, setShortcutSavedMessage] = useState("");
+  const [shortcutSaveError, setShortcutSaveError] = useState("");
+  const [shortcutSaving, setShortcutSaving] = useState(false);
+  const [generalSaving, setGeneralSaving] = useState<
+    Partial<Record<GeneralPreferenceKey, boolean>>
+  >({});
+  const [generalFailures, setGeneralFailures] = useState<
+    Partial<Record<GeneralPreferenceKey, GeneralFailure>>
+  >({});
 
   async function loadPersistedSettings() {
     const generation = ++loadGenerationRef.current;
@@ -36,7 +69,8 @@ export function SettingsPanel({ view, onSaved }: SettingsPanelProps) {
       if (!mountedRef.current || generation !== loadGenerationRef.current) {
         return;
       }
-      draftRevisionRef.current = 0;
+      shortcutRevisionRef.current = 0;
+      generalRevisionsRef.current = createGeneralRevisions();
       setSettings(loaded);
       setSettingsLoaded(true);
     } catch {
@@ -60,167 +94,168 @@ export function SettingsPanel({ view, onSaved }: SettingsPanelProps) {
     };
   }, []);
 
-  function updateDraft(update: (current: AppSettings) => AppSettings) {
+  function updateShortcutDraft(shortcut: string) {
     if (!settingsLoaded || settingsLoading) {
       return;
     }
-    draftRevisionRef.current += 1;
-    setSettings(update);
-    setSavedMessage("");
-    setSaveError("");
+    shortcutRevisionRef.current += 1;
+    setSettings((current) => ({ ...current, shortcut }));
+    setShortcutSavedMessage("");
+    setShortcutSaveError("");
   }
 
-  async function handleSave(event: React.FormEvent) {
-    event.preventDefault();
-    if (!settingsLoaded || settingsLoading || saving) {
+  async function saveGeneralPatch(
+    key: GeneralPreferenceKey,
+    patch: Partial<GeneralPreferenceSettings>,
+  ) {
+    if (!settingsLoaded || settingsLoading) {
       return;
     }
-    setSaving(true);
-    setSavedMessage("");
-    setSaveError("");
-    const submittedRevision = draftRevisionRef.current;
-    const submittedView = view;
+
+    const revision = ++generalRevisionsRef.current[key];
+    setSettings((current) => ({ ...current, ...patch }));
+    setGeneralSaving((current) => ({ ...current, [key]: true }));
+    setGeneralFailures((current) => {
+      if (!current[key]) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+
+    if (patch.theme) {
+      applyTheme(settingsThemeToMode(patch.theme));
+    }
+
     try {
-      const next = await updateSettings(
-        submittedView === "general"
-          ? {
-              theme: settings.theme,
-              captureRetention: settings.captureRetention,
-              backgroundWarmup: settings.backgroundWarmup,
-            }
-          : { shortcut: settings.shortcut },
-      );
+      await updateSettings(patch);
+      if (!mountedRef.current || generalRevisionsRef.current[key] !== revision) {
+        return;
+      }
+      onSaved?.();
+    } catch {
+      if (mountedRef.current && generalRevisionsRef.current[key] === revision) {
+        setGeneralFailures((current) => ({ ...current, [key]: { patch } }));
+      }
+    } finally {
+      if (mountedRef.current && generalRevisionsRef.current[key] === revision) {
+        setGeneralSaving((current) => ({ ...current, [key]: false }));
+      }
+    }
+  }
+
+  async function handleShortcutSave(event: React.FormEvent) {
+    event.preventDefault();
+    if (!settingsLoaded || settingsLoading || shortcutSaving) {
+      return;
+    }
+    setShortcutSaving(true);
+    setShortcutSavedMessage("");
+    setShortcutSaveError("");
+    const submittedRevision = shortcutRevisionRef.current;
+    const submittedShortcut = settings.shortcut;
+    try {
+      const next = await updateSettings({ shortcut: submittedShortcut });
       if (!mountedRef.current) {
         return;
       }
-      if (draftRevisionRef.current === submittedRevision) {
-        setSettings((current) =>
-          submittedView === "general"
-            ? {
-                ...current,
-                theme: next.theme,
-                captureRetention: next.captureRetention,
-                backgroundWarmup: next.backgroundWarmup,
-              }
-            : { ...current, shortcut: next.shortcut },
-        );
-        setSavedMessage("设置已保存");
+      if (shortcutRevisionRef.current === submittedRevision) {
+        setSettings((current) => ({ ...current, shortcut: next.shortcut }));
+        setShortcutSavedMessage("设置已保存");
       }
       onSaved?.();
     } catch {
       if (mountedRef.current) {
-        setSaveError("无法保存设置，请重试。");
+        setShortcutSaveError("无法保存设置，请重试。");
       }
     } finally {
       if (mountedRef.current) {
-        setSaving(false);
+        setShortcutSaving(false);
       }
     }
   }
 
   const controlsDisabled = !settingsLoaded || settingsLoading;
+  const generalBusy = generalPreferenceKeys.some((key) => generalSaving[key]);
+  const loadErrorCallout = settingsLoadError ? (
+    <div className="callout callout--attention" role="alert">
+      <p>{settingsLoadError}</p>
+      <button
+        type="button"
+        className="callout__action"
+        disabled={settingsLoading}
+        onClick={() => void loadPersistedSettings()}
+      >
+        重试
+      </button>
+    </div>
+  ) : null;
+
+  if (view === "general") {
+    return (
+      <div
+        className="settings-preferences-panel settings-preferences-panel--general"
+        aria-label="通用设置"
+        aria-busy={generalBusy || settingsLoading}
+      >
+        {loadErrorCallout}
+        <GeneralPreferences
+          settings={settings}
+          disabled={controlsDisabled}
+          saving={generalSaving}
+          onPatch={(key, patch) => void saveGeneralPatch(key, patch)}
+        />
+        {generalPreferenceKeys.map((key) => {
+          const failure = generalFailures[key];
+          const label = generalPreferenceLabels[key];
+          return failure ? (
+            <div className="preference-save-error" role="alert" key={key}>
+              <span>{label}未保存，请重试。</span>
+              <button
+                type="button"
+                className="callout__action"
+                aria-label={`重试${label}`}
+                onClick={() => void saveGeneralPatch(key, failure.patch)}
+              >
+                重试
+              </button>
+            </div>
+          ) : null;
+        })}
+      </div>
+    );
+  }
 
   return (
     <form
       className="settings-form settings-form--stack settings-preferences-panel"
-      aria-label={view === "general" ? "通用设置" : "快捷键设置"}
-      aria-busy={saving || settingsLoading}
-      onSubmit={(event) => void handleSave(event)}
+      aria-label="快捷键设置"
+      aria-busy={shortcutSaving || settingsLoading}
+      onSubmit={(event) => void handleShortcutSave(event)}
     >
-      {settingsLoadError ? (
-        <div className="callout callout--attention" role="alert">
-          <p>{settingsLoadError}</p>
-          <button
-            type="button"
-            className="callout__action"
-            disabled={settingsLoading}
-            onClick={() => void loadPersistedSettings()}
-          >
-            重试
-          </button>
+      {loadErrorCallout}
+      <section className="settings-section">
+        <h2 className="settings-section__title">快捷键</h2>
+        <div className="settings-field">
+          <span>全局快捷键</span>
+          <ShortcutRecorder
+            value={settings.shortcut}
+            disabled={controlsDisabled}
+            onChange={updateShortcutDraft}
+          />
         </div>
-      ) : null}
-
-      {view === "general" ? (
-        <section className="settings-section">
-          <h2 className="settings-section__title">通用</h2>
-          <label className="settings-field">
-            <span>外观主题</span>
-            <select
-              value={settings.theme ?? "system"}
-              disabled={controlsDisabled}
-              onChange={(event) => {
-                const theme = event.target.value as AppSettings["theme"];
-                updateDraft((current) => ({ ...current, theme }));
-                applyTheme(settingsThemeToMode(theme));
-              }}
-            >
-              <option value="system">跟随系统</option>
-              <option value="light">浅色</option>
-              <option value="dark">深色</option>
-            </select>
-          </label>
-
-          <label className="settings-field">
-            <span>自动保留</span>
-            <select
-              value={settings.captureRetention ?? "24h"}
-              disabled={controlsDisabled}
-              onChange={(event) =>
-                updateDraft((current) => ({
-                  ...current,
-                  captureRetention: event.target.value as AppSettings["captureRetention"],
-                }))
-              }
-            >
-              <option value="none">不保留</option>
-              <option value="24h">24 小时</option>
-              <option value="7d">7 天</option>
-              <option value="forever">一直保留</option>
-            </select>
-            <span className="field-hint">固定的截图不会自动删除。</span>
-          </label>
-
-          <label className="settings-field settings-field--checkbox">
-            <input
-              type="checkbox"
-              checked={settings.backgroundWarmup ?? false}
-              disabled={controlsDisabled}
-              onChange={(event) =>
-                updateDraft((current) => ({
-                  ...current,
-                  backgroundWarmup: event.target.checked,
-                }))
-              }
-            />
-            <span>截图后提前准备问图</span>
-            <span className="field-hint">打开后，第一次提问会更快。</span>
-          </label>
-        </section>
-      ) : (
-        <section className="settings-section">
-          <h2 className="settings-section__title">快捷键</h2>
-          <div className="settings-field">
-            <span>全局快捷键</span>
-            <ShortcutRecorder
-              value={settings.shortcut}
-              disabled={controlsDisabled}
-              onChange={(shortcut) => updateDraft((current) => ({ ...current, shortcut }))}
-            />
-          </div>
-        </section>
-      )}
-
+      </section>
       <div className="settings-form__footer">
         <button
           type="submit"
           className="settings-btn settings-btn--primary"
-          disabled={controlsDisabled || saving}
+          disabled={controlsDisabled || shortcutSaving}
         >
-          {saving ? "保存中…" : "保存设置"}
+          {shortcutSaving ? "保存中…" : "保存设置"}
         </button>
-        {savedMessage ? <p className="saved-message">{savedMessage}</p> : null}
-        {saveError ? <p className="onboarding-error">{saveError}</p> : null}
+        {shortcutSavedMessage ? <p className="saved-message">{shortcutSavedMessage}</p> : null}
+        {shortcutSaveError ? <p className="onboarding-error">{shortcutSaveError}</p> : null}
       </div>
     </form>
   );
