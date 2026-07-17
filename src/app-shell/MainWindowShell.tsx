@@ -27,6 +27,10 @@ import { processCaptureInBackground } from "../captures/processCapture";
 type AppMode = "workbench" | "settings";
 type WorkbenchScope = "recent" | "pinned";
 type ModelReturnContext = { recordId: string; prompt: string };
+type WorkbenchNotice = {
+  message: string;
+  permissionRecovery?: boolean;
+};
 type StartupState =
   | { kind: "loading" }
   | { kind: "load-error" }
@@ -73,7 +77,7 @@ export function MainWindowShell() {
   const [requestedRecordId, setRequestedRecordId] = useState<string | null>(null);
   const [requestedDraft, setRequestedDraft] = useState<ModelReturnContext | null>(null);
   const [tipsRecordId, setTipsRecordId] = useState<string | null>(null);
-  const [workbenchNotice, setWorkbenchNotice] = useState("");
+  const [workbenchNotice, setWorkbenchNotice] = useState<WorkbenchNotice | null>(null);
   const [modelReady, setModelReady] = useState<boolean | null>(null);
   const [modelReturnContext, setModelReturnContext] = useState<ModelReturnContext | null>(null);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("setup");
@@ -301,7 +305,7 @@ export function MainWindowShell() {
     void updateSettings({ workbenchTipsComplete: true })
       .catch(() => {
         if (mountedRef.current) {
-          setWorkbenchNotice("提示已关闭，但暂时无法记住这个选择。");
+          setWorkbenchNotice({ message: "提示已关闭，但暂时无法记住这个选择。" });
         }
       })
       .finally(() => {
@@ -319,7 +323,7 @@ export function MainWindowShell() {
         retention: settings.captureRetention ?? "24h",
       });
       setRequestedRecordId(record.id);
-      setWorkbenchNotice("");
+      setWorkbenchNotice(null);
       if (!workbenchTipsCompleteRef.current && !(settings.workbenchTipsComplete ?? false)) {
         setTipsRecordId(record.id);
       }
@@ -328,11 +332,26 @@ export function MainWindowShell() {
       });
     } catch (error) {
       if (error instanceof CaptureError && error.code === "cancelled") return;
-      setWorkbenchNotice(
-        error instanceof CaptureError && error.code === "permission-denied"
-          ? "需要屏幕录制权限，请在系统设置中允许后重试。"
+      const permissionDenied = error instanceof CaptureError && error.code === "permission-denied";
+      setWorkbenchNotice({
+        message: permissionDenied
+          ? "需要屏幕录制权限。授权后重新打开 MiniVu。"
           : "截图没有保存，请重试。",
-      );
+        permissionRecovery: permissionDenied,
+      });
+    }
+  }, []);
+
+  const handleOpenWorkbenchPermissionSettings = useCallback(async () => {
+    try {
+      await openScreenRecordingSettings();
+    } catch {
+      if (mountedRef.current) {
+        setWorkbenchNotice({
+          message: "系统设置没有打开，请手动打开后重试。",
+          permissionRecovery: true,
+        });
+      }
     }
   }, []);
 
@@ -341,7 +360,7 @@ export function MainWindowShell() {
   }, [handleWorkbenchCapture]);
 
   const enterWorkbench = useCallback((notice = "") => {
-    setWorkbenchNotice(notice);
+    setWorkbenchNotice(notice ? { message: notice } : null);
     setSettingsSection("general");
     setMode("workbench");
     setStartupState({ kind: "ready" });
@@ -463,6 +482,7 @@ export function MainWindowShell() {
         >
           <WorkbenchShell
             scope={workbenchScope}
+            onScopeChange={setWorkbenchScope}
             onCapture={handleCapture}
             requestedRecordId={requestedRecordId}
             requestedDraft={requestedDraft}
@@ -473,8 +493,22 @@ export function MainWindowShell() {
           />
           {workbenchNotice ? (
             <div className="workbench-onboarding-notice" role="status">
-              <span>{workbenchNotice}</span>
-              <button type="button" aria-label="关闭提示" onClick={() => setWorkbenchNotice("")}>
+              <span>{workbenchNotice.message}</span>
+              {workbenchNotice.permissionRecovery ? (
+                <button
+                  type="button"
+                  className="workbench-onboarding-notice__action"
+                  onClick={() => void handleOpenWorkbenchPermissionSettings()}
+                >
+                  打开系统设置
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="workbench-onboarding-notice__dismiss"
+                aria-label="关闭提示"
+                onClick={() => setWorkbenchNotice(null)}
+              >
                 <X size={14} aria-hidden="true" />
               </button>
             </div>

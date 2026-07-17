@@ -411,14 +411,23 @@ describe("MainWindowShell navigation", () => {
 
   it("shows a useful notice when a workbench capture needs screen-recording permission", async () => {
     vi.mocked(captureScreenRegion).mockRejectedValue(new CaptureError("permission-denied"));
+    vi.mocked(openScreenRecordingSettings).mockRejectedValue(new Error("open failed at /private/tmp"));
 
     render(<MainWindowShell />);
     fireEvent.click(await screen.findByRole("button", { name: "工作台截图" }));
 
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "需要屏幕录制权限，请在系统设置中允许后重试。",
+      "需要屏幕录制权限。授权后重新打开 MiniVu。",
     );
     expect(captureClient.create).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "打开系统设置" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "系统设置没有打开，请手动打开后重试。",
+    );
+    expect(openScreenRecordingSettings).toHaveBeenCalledOnce();
+    expect(screen.queryByText(/private|tmp|open failed/i)).not.toBeInTheDocument();
   });
 
   it("keeps a cancelled workbench capture silent", async () => {

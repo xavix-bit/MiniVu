@@ -264,7 +264,7 @@
   font-size: 12px;
 }
 
-.workbench-onboarding-notice button {
+.workbench-onboarding-notice__dismiss {
   display: grid;
   place-items: center;
   width: 40px;
@@ -274,6 +274,24 @@
   background: transparent;
   color: inherit;
   cursor: pointer;
+}
+
+.workbench-onboarding-notice__action {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 34%, var(--wb-border));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--wb-accent) 10%, var(--wb-panel));
+  color: var(--wb-accent);
+  font: inherit;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.workbench-onboarding-notice button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--wb-accent) 62%, transparent);
+  outline-offset: 2px;
 }
 
 .workbench-shell {

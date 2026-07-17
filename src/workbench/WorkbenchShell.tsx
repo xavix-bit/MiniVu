@@ -10,6 +10,7 @@ import { CaptureList } from "./CaptureList";
 type WorkbenchViewProps = {
   library: CaptureLibraryState;
   scope: "recent" | "pinned";
+  onScopeChange?: (scope: "recent" | "pinned") => void;
   onCapture: () => void;
   modelReady: boolean;
   onRequireModel: (context: {
@@ -54,6 +55,7 @@ async function askModel(
 export function WorkbenchView({
   library,
   scope,
+  onScopeChange = () => {},
   onCapture,
   modelReady,
   onRequireModel,
@@ -89,6 +91,7 @@ export function WorkbenchView({
     ? library.selected
     : null;
   const selectionPending = Boolean(library.selectedId && library.selected?.id !== library.selectedId);
+  const pinnedEmpty = scope === "pinned";
 
   const fallbackId = selected ? null : filtered[0]?.id ?? null;
   useEffect(() => {
@@ -184,6 +187,7 @@ export function WorkbenchView({
   return (
     <div className="workbench-shell">
       <CaptureList
+        scope={scope}
         records={filtered}
         selectedId={library.selectedId}
         query={library.query}
@@ -253,10 +257,15 @@ export function WorkbenchView({
           </div>
         ) : (
           <div className="workbench-empty">
-            <span><Camera size={25} /></span>
-            <h2>还没有截图</h2>
-            <p>截一张图，它会出现在这里。</p>
-            <button type="button" onClick={onCapture}>截图</button>
+            <span>{pinnedEmpty ? <Pin size={25} /> : <Camera size={25} />}</span>
+            <h2>{pinnedEmpty ? "还没有固定截图" : "还没有截图"}</h2>
+            <p>{pinnedEmpty ? "固定的截图会留在这里。" : "截一张图，它会出现在这里。"}</p>
+            <button
+              type="button"
+              onClick={pinnedEmpty ? () => onScopeChange("recent") : onCapture}
+            >
+              {pinnedEmpty ? "查看最近" : "截图"}
+            </button>
           </div>
         )}
       </main>
@@ -267,6 +276,7 @@ export function WorkbenchView({
 type WorkbenchShellProps = Pick<
   WorkbenchViewProps,
   | "scope"
+  | "onScopeChange"
   | "onCapture"
   | "modelReady"
   | "onRequireModel"
@@ -280,6 +290,7 @@ type WorkbenchShellProps = Pick<
 
 export const WorkbenchShell = memo(function WorkbenchShell({
   scope,
+  onScopeChange,
   onCapture,
   modelReady,
   onRequireModel,
@@ -313,6 +324,7 @@ export const WorkbenchShell = memo(function WorkbenchShell({
     <WorkbenchView
       library={library}
       scope={scope}
+      onScopeChange={onScopeChange}
       onCapture={onCapture}
       modelReady={modelReady}
       onRequireModel={onRequireModel}

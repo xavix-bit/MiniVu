@@ -138,6 +138,27 @@ describe("WorkbenchView", () => {
     expect(screen.queryByText(/Metal|运行时|模型就绪/)).not.toBeInTheDocument();
   });
 
+  it("gives the pinned empty state its own label and a useful way back", () => {
+    const onScopeChange = vi.fn();
+    render(
+      <WorkbenchView
+        library={library()}
+        scope="pinned"
+        onScopeChange={onScopeChange}
+        onCapture={vi.fn()}
+        {...modelAvailableProps()}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "还没有固定截图" })).toBeInTheDocument();
+    expect(screen.getByText("固定的截图会留在这里。")).toBeVisible();
+    expect(screen.getByRole("region", { name: "固定截图列表" })).toHaveTextContent("暂无固定截图");
+    expect(screen.queryByRole("button", { name: "截图" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看最近" }));
+    expect(onScopeChange).toHaveBeenCalledWith("recent");
+  });
+
   it("filters pinned records and switches between AI and recognized text", async () => {
     const first = record();
     const pinned = record({ id: "two", title: "固定截图", pinned: true });

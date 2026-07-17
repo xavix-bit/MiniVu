@@ -2,6 +2,7 @@ import { Pin, Search, X } from "lucide-react";
 import type { CaptureRecord } from "../captures/types";
 
 type CaptureListProps = {
+  scope: "recent" | "pinned";
   records: CaptureRecord[];
   selectedId: string | null;
   query: string;
@@ -24,17 +25,25 @@ function relativeTime(timestamp: number) {
 }
 
 export function CaptureList({
+  scope,
   records,
   selectedId,
   query,
   onQueryChange,
   onSelect,
 }: CaptureListProps) {
+  const pinned = scope === "pinned";
+  const emptyLabel = query.trim()
+    ? "没有找到"
+    : pinned
+      ? "暂无固定截图"
+      : "暂无截图";
+
   return (
-    <section className="capture-list-pane" aria-label="截图列表">
+    <section className="capture-list-pane" aria-label={pinned ? "固定截图列表" : "最近截图列表"}>
       <header className="capture-list-pane__header">
         <div>
-          <h1>截图</h1>
+          <h1>{pinned ? "固定" : "截图"}</h1>
           <span>{records.length}</span>
         </div>
         <label className="capture-search">
@@ -81,7 +90,7 @@ export function CaptureList({
           );
         })}
         {!records.length ? (
-          <div className="capture-list__empty">没有符合条件的截图</div>
+          <div className="capture-list__empty">{emptyLabel}</div>
         ) : null}
       </div>
     </section>
