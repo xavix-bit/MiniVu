@@ -202,7 +202,7 @@ git commit -m "feat: add screenshot summary and explanation"
 - Modify: `src/settings/settingsStore.ts`
 - Modify: `tests/settingsStore.test.ts`
 
-- [ ] **Step 1: Add failing Rust migration tests**
+- [x] **Step 1: Add failing Rust migration tests**
 
 Add a serializable position type and test legacy JSON with both new fields removed:
 
@@ -220,13 +220,13 @@ fn legacy_settings_enable_the_floating_assistant_without_a_saved_position() {
 }
 ```
 
-- [ ] **Step 2: Run Rust settings tests and verify deserialization fails**
+- [x] **Step 2: Run Rust settings tests and verify deserialization fails**
 
 Run: `cargo test settings::tests --manifest-path src-tauri/Cargo.toml`
 
 Expected: FAIL because the fields and defaults do not exist.
 
-- [ ] **Step 3: Add the persisted settings contract**
+- [x] **Step 3: Add the persisted settings contract**
 
 In Rust:
 
@@ -254,11 +254,11 @@ Set the same defaults in `AppSettings::default()`.
 
 In TypeScript add `FloatingAssistantPosition`, both fields to `AppSettings`, and `true`/`null` in `createDefaultSettings()`.
 
-- [ ] **Step 4: Extend the frontend settings contract test**
+- [x] **Step 4: Extend the frontend settings contract test**
 
 Assert `createDefaultSettings()` returns `floatingAssistantEnabled: true` and `floatingAssistantPosition: null`, and that `updateSettings({ floatingAssistantEnabled: false })` sends only that patch.
 
-- [ ] **Step 5: Run settings tests and production typecheck**
+- [x] **Step 5: Run settings tests and production typecheck**
 
 Run: `cargo test settings::tests --manifest-path src-tauri/Cargo.toml`
 
@@ -268,7 +268,7 @@ Run: `npm run build`
 
 Expected: all pass; source mocks compile against the expanded AppSettings type.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src-tauri/src/settings.rs src/settings/settingsStore.ts tests/settingsStore.test.ts
