@@ -500,7 +500,7 @@ git commit -m "polish: make the floating launcher self-explanatory"
 - Modify: `tests/SettingsPanel.test.tsx`
 - Modify: `src/styles/settings.css`
 
-- [ ] **Step 1: Replace Save-button expectations with failing autosave tests**
+- [x] **Step 1: Replace Save-button expectations with failing autosave tests**
 
 Add tests for:
 
@@ -519,13 +519,13 @@ Retain explicit `保存设置` assertions only for `view="shortcut"`.
 
 Add a stale-save test with two deferred updates: resolve the older theme save after a newer retention edit and assert both current draft values remain visible. Add a failed-save test that keeps the selected value and exposes a `重试` button without raw error text.
 
-- [ ] **Step 2: Run the focused settings tests and verify they fail**
+- [x] **Step 2: Run the focused settings tests and verify they fail**
 
 Run: `npm test -- tests/SettingsPanel.test.tsx`
 
 Expected: FAIL because General still uses selects plus a permanent Save button.
 
-- [ ] **Step 3: Create the presentation-only GeneralPreferences component**
+- [x] **Step 3: Create the presentation-only GeneralPreferences component**
 
 Use props:
 
@@ -546,7 +546,7 @@ type GeneralPreferencesProps = {
 
 Render `外观` with an accessible radio-group segmented control for 自动/浅色/深色. Render `使用` rows for retention, floating assistant, and early question preparation. Use native checkboxes styled as switches and keep helper text beside the label column.
 
-- [ ] **Step 4: Implement revision-safe per-field autosave**
+- [x] **Step 4: Implement revision-safe per-field autosave**
 
 In `SettingsPanel`, keep initial load handling and explicit shortcut submit. For General, implement:
 
@@ -586,7 +586,7 @@ Do not copy a resolved server snapshot back into the whole draft. The backend's 
 
 Apply theme immediately before saving. Keep ShortcutRecorder and its explicit submit footer unchanged.
 
-- [ ] **Step 5: Replace oversized card styling**
+- [x] **Step 5: Replace oversized card styling**
 
 For `.settings-preferences-panel` in General view:
 
@@ -597,7 +597,7 @@ For `.settings-preferences-panel` in General view:
 - keep one-pixel dividers and theme tokens in both light and dark modes;
 - collapse to one column below 820 px without text/control overlap.
 
-- [ ] **Step 6: Run focused and shell tests**
+- [x] **Step 6: Run focused and shell tests**
 
 Run: `npm test -- tests/SettingsPanel.test.tsx tests/MainWindowShell.test.tsx`
 
@@ -605,7 +605,7 @@ Run: `npm run build`
 
 Expected: all pass; General has no Save button, Shortcut still does, and no stale save replaces a newer draft.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/settings/GeneralPreferences.tsx src/settings/SettingsPanel.tsx src/styles/settings.css tests/SettingsPanel.test.tsx
